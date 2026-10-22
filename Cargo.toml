@@ -1,0 +1,21 @@
+[package]
+name = "self-driving_sim"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.99.1"
+publish = false
+
+[features]
+default = []
+# Compatibility check only; collision systems will be added in a later phase.
+physics = ["dep:bevy_rapier3d"]
+
+[dependencies]
+bevy = { version = "=0.19.1", default-features = false, features = ["3d"] }
+bevy_rapier3d = { version = "=0.36.0", optional = true, default-features = false, features = ["dim3"] }
+
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
