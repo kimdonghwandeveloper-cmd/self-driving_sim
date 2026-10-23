@@ -11,8 +11,10 @@ default = []
 physics = ["dep:bevy_rapier3d"]
 
 [dependencies]
-bevy = { version = "=0.19.1", default-features = false, features = ["3d"] }
+bevy = { version = "=0.19.1", default-features = false, features = ["3d", "ui"] }
 bevy_rapier3d = { version = "=0.36.0", optional = true, default-features = false, features = ["dim3"] }
+serde = { version = "=1.0.229", features = ["derive"] }
+toml = "=1.1.8"
 
 [profile.dev]
 opt-level = 1
