@@ -1,0 +1,20 @@
+# 개발용 키보드 매핑(임시). 게임패드 매핑은 장치 확보 후 추가합니다.
+# 키 이름은 Bevy KeyCode 이름을 사용합니다.
+#   KeyA..KeyZ, Digit0..Digit9, ArrowUp/ArrowDown/ArrowLeft/ArrowRight,
+#   Space, Enter, Backspace, Escape, Tab, ShiftLeft/ShiftRight,
+#   ControlLeft/ControlRight, AltLeft/AltRight
+# 동작마다 키를 여러 개 지정할 수 있고, 한 키를 두 동작에 지정할 수 없습니다.
+# 잘못된 값이 있으면 경고 로그를 남기고 기본 매핑을 사용합니다.
+
+[keyboard]
+throttle = ["ArrowUp", "KeyW"]
+brake = ["ArrowDown", "KeyS"]
+steer_left = ["ArrowLeft"]
+steer_right = ["ArrowRight"]
+gear_park = ["KeyP"]
+gear_reverse = ["KeyR"]
+gear_neutral = ["KeyN"]
+gear_drive = ["KeyD"]
+engine_toggle = ["Enter"]
+emergency_stop = ["Space"]
+emergency_release = ["Backspace"]
