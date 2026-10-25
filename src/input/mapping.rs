@@ -84,14 +84,14 @@ impl Default for KeyboardMapping {
             keys.iter().map(|key| (*key).to_owned()).collect()
         }
         Self {
-            throttle: names(&["ArrowUp", "KeyW"]),
-            brake: names(&["ArrowDown", "KeyS"]),
-            steer_left: names(&["ArrowLeft"]),
-            steer_right: names(&["ArrowRight"]),
-            gear_park: names(&["KeyP"]),
-            gear_reverse: names(&["KeyR"]),
-            gear_neutral: names(&["KeyN"]),
-            gear_drive: names(&["KeyD"]),
+            throttle: names(&["KeyW", "ArrowUp"]),
+            brake: names(&["KeyS", "ArrowDown"]),
+            steer_left: names(&["KeyA", "ArrowLeft"]),
+            steer_right: names(&["KeyD", "ArrowRight"]),
+            gear_park: names(&["KeyI"]),
+            gear_reverse: names(&["KeyL"]),
+            gear_neutral: names(&["KeyK"]),
+            gear_drive: names(&["KeyJ"]),
             engine_toggle: names(&["Enter"]),
             emergency_stop: names(&["Space"]),
             emergency_release: names(&["Backspace"]),
@@ -338,9 +338,9 @@ mod tests {
         let bindings = KeyboardMapping::default().resolve().unwrap();
         assert_eq!(
             bindings.keys(KeyAction::Throttle),
-            [KeyCode::ArrowUp, KeyCode::KeyW]
+            [KeyCode::KeyW, KeyCode::ArrowUp]
         );
-        assert_eq!(bindings.label(KeyAction::Gear(Gear::Drive)), "KeyD");
+        assert_eq!(bindings.label(KeyAction::Gear(Gear::Drive)), "KeyJ");
     }
 
     #[test]
@@ -361,13 +361,13 @@ mod tests {
     #[test]
     fn duplicate_key_is_rejected() {
         let mapping = KeyboardMapping {
-            steer_right: vec!["KeyD".into()],
+            steer_right: vec!["KeyJ".into()],
             ..KeyboardMapping::default()
         };
         assert_eq!(
             mapping.resolve(),
             Err(MappingError::DuplicateKey {
-                name: "KeyD".into(),
+                name: "KeyJ".into(),
                 first: KeyAction::SteerRight,
                 second: KeyAction::Gear(Gear::Drive),
             })

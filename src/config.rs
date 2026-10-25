@@ -196,13 +196,13 @@ mod tests {
         assert_eq!(bindings.keys(KeyAction::EmergencyStop), [KeyCode::KeyE]);
         assert_eq!(
             bindings.keys(KeyAction::Throttle),
-            [KeyCode::ArrowUp, KeyCode::KeyW]
+            [KeyCode::KeyW, KeyCode::ArrowUp]
         );
     }
 
     #[test]
     fn invalid_key_mapping_is_rejected() {
-        let result = parse_key_bindings("[keyboard]\nsteer_right = [\"KeyD\"]\n");
+        let result = parse_key_bindings("[keyboard]\nsteer_right = [\"KeyJ\"]\n");
         assert!(matches!(result, Err(ConfigError::Invalid(_))));
     }
 }
