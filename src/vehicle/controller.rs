@@ -124,6 +124,7 @@ pub fn engine_label(engine: EngineState) -> &'static str {
 mod tests {
     use super::*;
 
+    /// 수락된 명령이 전이 결과 문장을 만들고 상태를 바꾸는지 확인한다.
     #[test]
     fn accepted_command_reports_transition() {
         let mut state = VehicleState::default();
@@ -136,6 +137,7 @@ mod tests {
         assert_eq!(state.engine(), EngineState::Ready);
     }
 
+    /// 거부된 명령이 거부 사유 문장을 만드는지 확인한다.
     #[test]
     fn rejected_command_reports_reason() {
         let mut state = VehicleState::default();
@@ -147,6 +149,7 @@ mod tests {
         assert_eq!(result.message, "gear D: engine is off");
     }
 
+    /// 기어 충돌 요청은 상태를 바꾸지 않고 거부 문장만 만드는지 확인한다.
     #[test]
     fn gear_conflict_is_rejected_without_state_change() {
         let mut state = VehicleState::default();

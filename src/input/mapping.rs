@@ -333,6 +333,7 @@ pub fn gears() -> [Gear; 4] {
 mod tests {
     use super::*;
 
+    /// 기본 키 매핑이 검증을 통과하고 기대한 키·표시 이름을 갖는지 확인한다.
     #[test]
     fn default_mapping_is_valid() {
         let bindings = KeyboardMapping::default().resolve().unwrap();
@@ -343,6 +344,7 @@ mod tests {
         assert_eq!(bindings.label(KeyAction::Gear(Gear::Drive)), "KeyJ");
     }
 
+    /// 지원하지 않는 키 이름을 거부하는지 확인한다.
     #[test]
     fn unknown_key_name_is_rejected() {
         let mapping = KeyboardMapping {
@@ -358,6 +360,7 @@ mod tests {
         );
     }
 
+    /// 한 키를 두 동작에 할당하면 거부하는지 확인한다.
     #[test]
     fn duplicate_key_is_rejected() {
         let mapping = KeyboardMapping {
@@ -374,6 +377,7 @@ mod tests {
         );
     }
 
+    /// 키가 하나도 없는 동작을 거부하는지 확인한다.
     #[test]
     fn unbound_action_is_rejected() {
         let mapping = KeyboardMapping {
@@ -388,6 +392,7 @@ mod tests {
         );
     }
 
+    /// 기어 키 하나만 새로 누르면 해당 기어를 요청하는지 확인한다.
     #[test]
     fn single_gear_press_is_requested() {
         assert_eq!(
@@ -396,6 +401,7 @@ mod tests {
         );
     }
 
+    /// 기어 키를 누르고만 있고 새로 누르지 않으면 요청이 없는지 확인한다.
     #[test]
     fn no_new_press_means_no_request() {
         assert_eq!(
@@ -404,6 +410,7 @@ mod tests {
         );
     }
 
+    /// 서로 다른 기어 키를 같은 프레임에 누르면 충돌로 거부하는지 확인한다.
     #[test]
     fn simultaneous_gear_presses_conflict() {
         assert_eq!(
@@ -412,6 +419,7 @@ mod tests {
         );
     }
 
+    /// 다른 기어 키를 누른 채 새 기어 키를 누르면 충돌로 거부하는지 확인한다.
     #[test]
     fn new_press_while_other_gear_held_conflicts() {
         assert_eq!(

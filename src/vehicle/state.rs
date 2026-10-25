@@ -7,6 +7,8 @@ use std::fmt;
 
 /// 정지로 간주하는 기본 속도 임계값(m/s). 설정 파일 연동 전 임시값.
 pub const DEFAULT_STOP_THRESHOLD_MPS: f32 = 0.05;
+/// 정지 판정 임계값의 허용 상한(m/s). 잘못된 값으로 주행 중 기어 변경이 허용되는 것을 막는다.
+pub const MAX_STOP_THRESHOLD_MPS: f32 = 0.5;
 
 /// 시동 상태.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -94,6 +96,8 @@ pub enum TransitionError {
     EmergencyStopActive,
     NotStopped,
     EmergencyStopNotActive,
+    /// 속도 값이 NaN/무한대여서 정지 여부를 판정할 수 없음.
+    InvalidSpeed,
 }
 
 impl fmt::Display for TransitionError {
@@ -104,6 +108,7 @@ impl fmt::Display for TransitionError {
             TransitionError::EmergencyStopActive => "emergency stop is active",
             TransitionError::NotStopped => "vehicle must be fully stopped",
             TransitionError::EmergencyStopNotActive => "emergency stop is not active",
+            TransitionError::InvalidSpeed => "speed value is invalid",
         };
         f.write_str(message)
     }
@@ -111,15 +116,15 @@ impl fmt::Display for TransitionError {
 
 impl std::error::Error for TransitionError {}
 
-/// 차량의 시동·기어·속도·조향·입력 상태.
+/// 차량의 시동·기어·속도·입력 상태.
 ///
 /// 속도는 차량 전방 기준 부호 있는 값(m/s)이며 운동 모델(Phase 2)이 갱신한다.
+/// 조향은 현재 입력값([`VehicleInput::steering`])만 있으며, 실제 바퀴 조향각은 운동 모델에서 별도로 둔다.
 #[derive(Debug, Clone, PartialEq)]
 pub struct VehicleState {
     engine: EngineState,
     gear: Gear,
     speed_mps: f32,
-    steering: f32,
     input: VehicleInput,
     stop_threshold_mps: f32,
 }
@@ -133,14 +138,15 @@ impl Default for VehicleState {
 
 impl VehicleState {
     /// 정지 판정 임계값(m/s)을 지정해 시동 OFF, P, 정지 상태로 생성한다.
+    ///
+    /// 임계값은 `0..=MAX_STOP_THRESHOLD_MPS`로 자르고, NaN/무한대는 가장 엄격한 0으로 처리한다.
     pub fn new(stop_threshold_mps: f32) -> Self {
         Self {
             engine: EngineState::Off,
             gear: Gear::Park,
             speed_mps: 0.0,
-            steering: 0.0,
             input: VehicleInput::default(),
-            stop_threshold_mps: sanitize(stop_threshold_mps, 0.0, f32::MAX),
+            stop_threshold_mps: sanitize(stop_threshold_mps, 0.0, MAX_STOP_THRESHOLD_MPS),
         }
     }
 
@@ -154,14 +160,19 @@ impl VehicleState {
         self.gear
     }
 
-    /// 현재 부호 있는 속도(m/s)를 반환한다.
+    /// 현재 부호 있는 속도(m/s)를 반환한다. 잘못된 값이 들어오면 그대로 NaN/무한대다.
     pub fn speed_mps(&self) -> f32 {
         self.speed_mps
     }
 
-    /// 현재 조향 값(-1..=1)을 반환한다.
-    pub fn steering(&self) -> f32 {
-        self.steering
+    /// 속도 값이 유한한(판정 가능한) 값인지 확인한다.
+    pub fn speed_valid(&self) -> bool {
+        self.speed_mps.is_finite()
+    }
+
+    /// 정지 판정 임계값(m/s)을 반환한다.
+    pub fn stop_threshold_mps(&self) -> f32 {
+        self.stop_threshold_mps
     }
 
     /// 마지막으로 받은(정규화된) 조작 입력을 반환한다.
@@ -169,9 +180,20 @@ impl VehicleState {
         self.input
     }
 
-    /// 속도 크기가 정지 임계값 이하인지 확인한다.
+    /// 속도 크기가 정지 임계값 이하인지 확인한다. 속도가 잘못된 값이면 정지로 보지 않는다.
     pub fn is_stopped(&self) -> bool {
-        self.speed_mps.abs() <= self.stop_threshold_mps
+        self.speed_valid() && self.speed_mps.abs() <= self.stop_threshold_mps
+    }
+
+    /// 정지 상태가 아니면 사유를 반환한다. 잘못된 속도는 [`TransitionError::InvalidSpeed`].
+    fn ensure_stopped(&self) -> Result<(), TransitionError> {
+        if !self.speed_valid() {
+            Err(TransitionError::InvalidSpeed)
+        } else if !self.is_stopped() {
+            Err(TransitionError::NotStopped)
+        } else {
+            Ok(())
+        }
     }
 
     /// 시동 Ready이고 D/R일 때만 구동 가속을 허용한다.
@@ -188,19 +210,18 @@ impl VehicleState {
         }
     }
 
-    /// 조작 입력을 정규화해 저장하고 조향 값을 갱신한다.
+    /// 조작 입력을 정규화해 저장한다.
     pub fn set_input(&mut self, input: VehicleInput) {
         self.input = input.sanitized();
-        self.steering = self.input.steering;
     }
 
-    /// 운동 모델이 계산한 속도(m/s)를 반영한다. 유한하지 않은 값은 0으로 처리한다.
+    /// 운동 모델이 계산한 속도(m/s)를 반영한다.
+    ///
+    /// NaN/무한대는 0으로 바꾸지 않고 그대로 저장해 이상 상태로 남긴다. 이 동안에는 정지로 보지 않으므로
+    /// 시동 ON/OFF, P/D/R 변경, 비상 정지 해제가 [`TransitionError::InvalidSpeed`]로 거부된다.
+    /// 유효한 속도가 다시 들어오면 정상 판정으로 돌아간다.
     pub fn set_speed_mps(&mut self, speed_mps: f32) {
-        self.speed_mps = if speed_mps.is_finite() {
-            speed_mps
-        } else {
-            0.0
-        };
+        self.speed_mps = speed_mps;
     }
 
     /// 명령을 적용한다. 거부되면 상태는 변하지 않는다.
@@ -220,9 +241,7 @@ impl VehicleState {
             EngineState::Off => EngineState::Ready,
             EngineState::Ready => EngineState::Off,
         };
-        if !self.is_stopped() {
-            return Err(TransitionError::NotStopped);
-        }
+        self.ensure_stopped()?;
         self.engine = next;
         Ok(TransitionOutcome::EngineChanged(next))
     }
@@ -237,8 +256,8 @@ impl VehicleState {
         if gear == self.gear {
             return Ok(TransitionOutcome::Unchanged);
         }
-        if gear != Gear::Neutral && !self.is_stopped() {
-            return Err(TransitionError::NotStopped);
+        if gear != Gear::Neutral {
+            self.ensure_stopped()?;
         }
         let from = self.gear;
         self.gear = gear;
@@ -259,9 +278,7 @@ impl VehicleState {
         if self.engine != EngineState::EmergencyStop {
             return Err(TransitionError::EmergencyStopNotActive);
         }
-        if !self.is_stopped() {
-            return Err(TransitionError::NotStopped);
-        }
+        self.ensure_stopped()?;
         self.engine = EngineState::Ready;
         self.gear = Gear::Park;
         Ok(TransitionOutcome::EngineChanged(EngineState::Ready))
@@ -288,6 +305,7 @@ mod tests {
         }
     }
 
+    /// 기본 상태가 시동 OFF, P, 정지이며 구동이 금지되는지 확인한다.
     #[test]
     fn default_is_engine_off_park_stopped() {
         let state = VehicleState::default();
@@ -297,6 +315,7 @@ mod tests {
         assert!(!state.drive_permitted());
     }
 
+    /// 시동 OFF에서는 기어 변경이 거부되고 가속 입력이 0으로 막히는지 확인한다.
     #[test]
     fn engine_off_blocks_gear_change_and_throttle() {
         let mut state = VehicleState::default();
@@ -309,6 +328,7 @@ mod tests {
         assert_eq!(state.effective_throttle(), 0.0);
     }
 
+    /// 주행 중에는 시동 ON/OFF가 거부되고 정지하면 허용되는지 확인한다.
     #[test]
     fn engine_toggles_only_when_stopped() {
         let mut state = ready_in(Gear::Drive);
@@ -326,6 +346,7 @@ mod tests {
         );
     }
 
+    /// Ready 상태의 D/R에서만 가속이 전달되고 P/N에서는 0인지 확인한다.
     #[test]
     fn throttle_only_in_drive_or_reverse_when_ready() {
         for (gear, permitted) in [
@@ -342,6 +363,7 @@ mod tests {
         }
     }
 
+    /// 주행 중 P/D/R로의 변경이 거부되고 기어가 유지되는지 확인한다.
     #[test]
     fn drive_reverse_park_change_rejected_while_moving() {
         for (from, to) in [
@@ -361,6 +383,7 @@ mod tests {
         }
     }
 
+    /// 주행 중에도 N으로의 변경은 허용되는지 확인한다.
     #[test]
     fn neutral_allowed_while_moving() {
         let mut state = ready_in(Gear::Drive);
@@ -374,6 +397,7 @@ mod tests {
         );
     }
 
+    /// 정지 임계값 이하의 속도는 정지로 보아 기어 변경을 허용하는지 확인한다.
     #[test]
     fn gear_change_allowed_below_stop_threshold() {
         let mut state = ready_in(Gear::Drive);
@@ -386,6 +410,7 @@ mod tests {
         assert_eq!(state.gear(), Gear::Reverse);
     }
 
+    /// 현재와 같은 기어 요청은 주행 중에도 변화 없음으로 처리되는지 확인한다.
     #[test]
     fn same_gear_request_is_unchanged() {
         let mut state = ready_in(Gear::Drive);
@@ -396,6 +421,7 @@ mod tests {
         );
     }
 
+    /// 비상 정지 중에는 가속·기어·시동 조작이 모두 막히고 재진입은 변화 없음인지 확인한다.
     #[test]
     fn emergency_stop_blocks_throttle_gear_and_engine() {
         let mut state = ready_in(Gear::Drive);
@@ -420,6 +446,7 @@ mod tests {
         );
     }
 
+    /// 시동 OFF 상태에서도 비상 정지로 진입할 수 있는지 확인한다.
     #[test]
     fn emergency_stop_engages_from_engine_off() {
         let mut state = VehicleState::default();
@@ -427,6 +454,7 @@ mod tests {
         assert_eq!(state.engine(), EngineState::EmergencyStop);
     }
 
+    /// 비상 정지 해제는 정지 상태에서만 허용되고 Ready + P로 돌아가는지 확인한다.
     #[test]
     fn emergency_release_requires_stop_and_returns_to_park() {
         let mut state = ready_in(Gear::Drive);
@@ -447,6 +475,7 @@ mod tests {
         assert!(!state.drive_permitted());
     }
 
+    /// 비상 정지가 아닐 때의 해제 요청을 거부하는지 확인한다.
     #[test]
     fn release_without_emergency_stop_is_rejected() {
         let mut state = ready_in(Gear::Park);
@@ -456,8 +485,9 @@ mod tests {
         );
     }
 
+    /// 범위를 벗어나거나 NaN인 조작 입력이 허용 범위로 정규화되는지 확인한다.
     #[test]
-    fn input_and_speed_are_sanitized() {
+    fn input_is_sanitized() {
         let mut state = VehicleState::default();
         state.set_input(VehicleInput {
             throttle: 3.0,
@@ -466,10 +496,49 @@ mod tests {
         });
         assert_eq!(state.input().throttle, 1.0);
         assert_eq!(state.input().brake, 0.0);
-        assert_eq!(state.steering(), -1.0);
+        assert_eq!(state.input().steering, -1.0);
+    }
 
-        state.set_speed_mps(f32::INFINITY);
-        assert_eq!(state.speed_mps(), 0.0);
+    /// NaN/무한대 속도는 정지로 보지 않아 정지가 필요한 전이를 모두 거부하는지 확인한다.
+    #[test]
+    fn invalid_speed_blocks_stop_dependent_transitions() {
+        for invalid in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            let mut state = ready_in(Gear::Drive);
+            state.set_speed_mps(invalid);
+            assert!(!state.speed_valid());
+            assert!(!state.is_stopped());
+            assert_eq!(
+                state.apply(VehicleCommand::RequestGear(Gear::Reverse)),
+                Err(TransitionError::InvalidSpeed)
+            );
+            assert_eq!(
+                state.apply(VehicleCommand::ToggleEngine),
+                Err(TransitionError::InvalidSpeed)
+            );
+            assert!(state.apply(VehicleCommand::EngageEmergencyStop).is_ok());
+            assert_eq!(
+                state.apply(VehicleCommand::ReleaseEmergencyStop),
+                Err(TransitionError::InvalidSpeed)
+            );
+
+            state.set_speed_mps(0.0);
+            assert!(state.apply(VehicleCommand::ReleaseEmergencyStop).is_ok());
+        }
+    }
+
+    /// 생성자가 정지 임계값을 허용 범위로 제한하는지 확인한다.
+    #[test]
+    fn stop_threshold_is_clamped_in_constructor() {
+        assert_eq!(
+            VehicleState::new(100.0).stop_threshold_mps(),
+            MAX_STOP_THRESHOLD_MPS
+        );
+        assert_eq!(VehicleState::new(-1.0).stop_threshold_mps(), 0.0);
+        assert_eq!(VehicleState::new(f32::NAN).stop_threshold_mps(), 0.0);
+
+        let mut state = VehicleState::new(100.0);
+        state.set_speed_mps(10.0);
+        assert!(!state.is_stopped());
     }
 
     /// 짧은 명령·속도 시퀀스를 모두 조합해, 어떤 순서에서도 불변 조건이 깨지지 않는지 확인한다.
