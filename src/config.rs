@@ -10,15 +10,12 @@ use serde::Deserialize;
 use serde::de::DeserializeOwned;
 
 use crate::input::{KeyBindings, KeyboardMapping};
-use crate::vehicle::state::DEFAULT_STOP_THRESHOLD_MPS;
+use crate::vehicle::state::{DEFAULT_STOP_THRESHOLD_MPS, MAX_STOP_THRESHOLD_MPS};
 
 /// 차량 설정 파일 경로(저장소 루트 기준).
 pub const VEHICLE_CONFIG_PATH: &str = "config/vehicle.toml";
 /// 입력 설정 파일 경로(저장소 루트 기준).
 pub const INPUT_CONFIG_PATH: &str = "config/input.toml";
-
-/// 정지 판정 임계값의 허용 상한(m/s). 잘못된 설정으로 주행 중 기어 변경이 허용되는 것을 막는다.
-const MAX_STOP_THRESHOLD_MPS: f32 = 0.5;
 
 /// `config/vehicle.toml` 전체 구조.
 #[derive(Debug, Clone, PartialEq, Default, Deserialize)]
@@ -164,18 +161,28 @@ mod tests {
         Path::new(env!("CARGO_MANIFEST_DIR")).join(relative)
     }
 
+    /// 저장소의 설정 파일이 파싱·검증을 통과하는지 확인한다(값이 기본값과 같을 필요는 없다).
     #[test]
     fn repository_config_files_are_valid() {
         let vehicle = fs::read_to_string(repo_file(VEHICLE_CONFIG_PATH)).unwrap();
-        assert_eq!(
-            parse_vehicle_config(&vehicle).unwrap(),
-            VehicleConfig::default()
-        );
+        if let Err(error) = parse_vehicle_config(&vehicle) {
+            panic!("{VEHICLE_CONFIG_PATH}: {error}");
+        }
 
         let input = fs::read_to_string(repo_file(INPUT_CONFIG_PATH)).unwrap();
-        assert_eq!(parse_key_bindings(&input).unwrap(), KeyBindings::default());
+        if let Err(error) = parse_key_bindings(&input) {
+            panic!("{INPUT_CONFIG_PATH}: {error}");
+        }
     }
 
+    /// 빈 설정 문자열은 코드에 정의된 기본값과 같은 결과가 되는지 확인한다.
+    #[test]
+    fn empty_config_uses_defaults() {
+        assert_eq!(parse_vehicle_config("").unwrap(), VehicleConfig::default());
+        assert_eq!(parse_key_bindings("").unwrap(), KeyBindings::default());
+    }
+
+    /// 허용 범위를 벗어난 정지 임계값을 거부하는지 확인한다.
     #[test]
     fn stop_threshold_out_of_range_is_rejected() {
         let result = parse_vehicle_config("[state_machine]\nstop_threshold_mps = 2.0\n");
@@ -184,12 +191,14 @@ mod tests {
         assert!(matches!(result, Err(ConfigError::Invalid(_))));
     }
 
+    /// 오타 등 알 수 없는 필드를 파싱 오류로 거부하는지 확인한다.
     #[test]
     fn unknown_field_is_rejected() {
         let result = parse_vehicle_config("[state_machine]\nstop_treshold_mps = 0.1\n");
         assert!(matches!(result, Err(ConfigError::Parse(_))));
     }
 
+    /// 일부 키만 지정한 입력 설정이 나머지 동작에 기본 키를 유지하는지 확인한다.
     #[test]
     fn partial_input_config_keeps_other_defaults() {
         let bindings = parse_key_bindings("[keyboard]\nemergency_stop = [\"KeyE\"]\n").unwrap();
@@ -200,6 +209,7 @@ mod tests {
         );
     }
 
+    /// 다른 동작과 겹치는 키 매핑을 검증 오류로 거부하는지 확인한다.
     #[test]
     fn invalid_key_mapping_is_rejected() {
         let result = parse_key_bindings("[keyboard]\nsteer_right = [\"KeyJ\"]\n");
