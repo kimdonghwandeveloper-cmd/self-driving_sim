@@ -131,8 +131,8 @@ pub fn step(state: &mut VehicleState, motion: &mut Motion, params: &DynamicsPara
     motion.accel_mps2 = (next_speed - speed) / dt;
     state.set_speed_mps(next_speed);
 
-    let target = steering_command(state.input().steering, params)
-        * params.max_steer_angle_deg.to_radians();
+    let target =
+        steering_command(state.input().steering, params) * params.max_steer_angle_deg.to_radians();
     let max_change = params.steer_rate_deg_s.to_radians() * dt;
     motion.steer_angle_rad += (target - motion.steer_angle_rad).clamp(-max_change, max_change);
 
@@ -189,7 +189,7 @@ fn approach_zero(value: f32, amount: f32) -> f32 {
 }
 
 /// 각도를 -π..=π 범위로 정규화한다.
-fn wrap_angle(angle: f32) -> f32 {
+pub(crate) fn wrap_angle(angle: f32) -> f32 {
     let wrapped = (angle + PI).rem_euclid(TAU) - PI;
     if wrapped == -PI { PI } else { wrapped }
 }

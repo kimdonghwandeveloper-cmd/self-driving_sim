@@ -6,8 +6,9 @@ use bevy::prelude::*;
 
 use crate::input::KeyBindings;
 use crate::input::mapping::KeyAction;
+use crate::training::TrainingLog;
 use crate::vehicle::controller::{ControlFeedback, Vehicle, engine_label, gear_label};
-use crate::vehicle::{Gear, Motion, VehicleMotion, VehicleState};
+use crate::vehicle::{Gear, Motion, VehicleContact, VehicleMotion, VehicleState};
 
 /// HUD 텍스트 엔티티 표시용 마커.
 #[derive(Component)]
@@ -31,6 +32,15 @@ pub fn spawn_hud(mut commands: Commands) {
     ));
 }
 
+/// HUD에 표시할 충돌 상태.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CollisionStatus {
+    /// 지금 장애물에 닿아 있는지.
+    pub touching: bool,
+    /// 이번 세션에 기록된 충돌 횟수.
+    pub collisions: usize,
+}
+
 /// `update_hud`가 프레임 사이에 재사용하는 문자열.
 #[derive(Default)]
 pub struct HudCache {
@@ -45,6 +55,8 @@ pub fn update_hud(
     vehicle: Res<Vehicle>,
     motion: Res<VehicleMotion>,
     feedback: Res<ControlFeedback>,
+    contact: Res<VehicleContact>,
+    log: Res<TrainingLog>,
     bindings: Res<KeyBindings>,
     mut cache: Local<HudCache>,
     mut query: Query<&mut Text, With<VehicleHud>>,
@@ -53,10 +65,15 @@ pub fn update_hud(
     if bindings.is_changed() || cache.key_guide.is_empty() {
         cache.key_guide = key_guide_text(&bindings);
     }
+    let collision = CollisionStatus {
+        touching: contact.touching,
+        collisions: log.collision_count(),
+    };
     write_hud(
         &mut cache.buffer,
         &vehicle.0,
         &motion.0,
+        collision,
         &feedback,
         &cache.key_guide,
     );
@@ -71,11 +88,19 @@ pub fn update_hud(
 pub fn hud_text(
     state: &VehicleState,
     motion: &Motion,
+    collision: CollisionStatus,
     feedback: &ControlFeedback,
     bindings: &KeyBindings,
 ) -> String {
     let mut out = String::new();
-    write_hud(&mut out, state, motion, feedback, &key_guide_text(bindings));
+    write_hud(
+        &mut out,
+        state,
+        motion,
+        collision,
+        feedback,
+        &key_guide_text(bindings),
+    );
     out
 }
 
@@ -84,20 +109,22 @@ fn write_hud(
     out: &mut String,
     state: &VehicleState,
     motion: &Motion,
+    collision: CollisionStatus,
     feedback: &ControlFeedback,
     key_guide: &str,
 ) {
     out.clear();
-    write_status(out, state, motion, feedback).expect("writing to a String cannot fail");
+    write_status(out, state, motion, collision, feedback).expect("writing to a String cannot fail");
     out.push_str("\n\n");
     out.push_str(key_guide);
 }
 
-/// 차량 상태·운동·입력·마지막 명령 결과 줄을 쓴다.
+/// 차량 상태·운동·충돌·입력·마지막 명령 결과 줄을 쓴다.
 fn write_status(
     out: &mut String,
     state: &VehicleState,
     motion: &Motion,
+    collision: CollisionStatus,
     feedback: &ControlFeedback,
 ) -> fmt::Result {
     let input = state.input();
@@ -134,6 +161,12 @@ fn write_status(
         motion.heading_rad.to_degrees(),
         motion.x_m,
         motion.z_m
+    )?;
+    writeln!(
+        out,
+        "Obstacle contact: {}   Collisions: {}",
+        if collision.touching { "YES" } else { "no" },
+        collision.collisions
     )?;
     writeln!(
         out,
@@ -197,6 +230,7 @@ mod tests {
         let text = hud_text(
             &state,
             &Motion::default(),
+            CollisionStatus::default(),
             &feedback,
             &KeyBindings::default(),
         );
@@ -214,9 +248,26 @@ mod tests {
         let text = hud_text(
             &state,
             &Motion::default(),
+            CollisionStatus::default(),
             &ControlFeedback::default(),
             &KeyBindings::default(),
         );
         assert!(text.contains("INVALID"));
+    }
+
+    /// 장애물 접촉 여부와 누적 충돌 횟수를 표시하는지 확인한다.
+    #[test]
+    fn hud_shows_obstacle_contact() {
+        let text = hud_text(
+            &VehicleState::default(),
+            &Motion::default(),
+            CollisionStatus {
+                touching: true,
+                collisions: 2,
+            },
+            &ControlFeedback::default(),
+            &KeyBindings::default(),
+        );
+        assert!(text.contains("Obstacle contact: YES   Collisions: 2"));
     }
 }
