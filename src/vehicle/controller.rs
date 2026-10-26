@@ -4,6 +4,8 @@ use bevy::prelude::*;
 
 use super::dynamics::{self, DynamicsParams, Motion};
 use super::state::{EngineState, Gear, TransitionOutcome, VehicleCommand, VehicleState};
+use bevy::app::RunFixedMainLoop;
+
 use crate::SimSet;
 use crate::input::{ControlRequest, DriverInput};
 
@@ -38,13 +40,14 @@ pub struct VehiclePlugin;
 impl Plugin for VehiclePlugin {
     /// 차량 관련 리소스와 시스템을 앱에 등록한다. 이미 넣은 `Vehicle`·`VehicleDynamics`는 유지한다.
     ///
-    /// 명령 처리는 매 프레임(`Update`), 운동 모델은 렌더 프레임과 독립된 고정 주기(`FixedUpdate`)로 돈다.
+    /// 명령 처리는 매 프레임 고정 주기 루프 직전에, 운동 모델은 렌더 프레임과 독립된 고정 주기
+    /// (`FixedUpdate`)로 돈다. 따라서 이번 프레임의 입력·명령이 같은 프레임의 운동 계산에 반영된다.
     fn build(&self, app: &mut App) {
         app.init_resource::<Vehicle>()
             .init_resource::<VehicleMotion>()
             .init_resource::<VehicleDynamics>()
             .init_resource::<ControlFeedback>()
-            .add_systems(Update, apply_controls.in_set(SimSet::Control))
+            .add_systems(RunFixedMainLoop, apply_controls.in_set(SimSet::Control))
             .add_systems(FixedUpdate, step_motion);
     }
 }

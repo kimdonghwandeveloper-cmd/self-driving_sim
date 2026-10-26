@@ -2,7 +2,7 @@ use std::path::Path;
 
 use bevy::{app::AppExit, prelude::*};
 use self_driving_sim::{
-    SimSet, config,
+    config, configure_sim_sets,
     input::InputPlugin,
     scene::ScenePlugin,
     ui::HudPlugin,
@@ -25,11 +25,8 @@ pub fn run(smoke_test: bool) -> AppExit {
     // 로그 플러그인이 등록된 뒤에 설정을 읽어 로드 결과가 로그에 남도록 한다.
     let vehicle_config = config::load_vehicle_config(Path::new(config::VEHICLE_CONFIG_PATH));
     let key_bindings = config::load_key_bindings(Path::new(config::INPUT_CONFIG_PATH));
-    app.configure_sets(
-        Update,
-        (SimSet::Input, SimSet::Control, SimSet::Display).chain(),
-    )
-    .insert_resource(Vehicle(VehicleState::new(
+    configure_sim_sets(&mut app);
+    app.insert_resource(Vehicle(VehicleState::new(
         vehicle_config.state_machine.stop_threshold_mps,
     )))
     .insert_resource(VehicleDynamics(vehicle_config.dynamics))
