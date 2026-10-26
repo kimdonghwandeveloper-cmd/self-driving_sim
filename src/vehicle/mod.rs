@@ -5,7 +5,7 @@ pub mod controller;
 pub mod dynamics;
 pub mod state;
 
-pub use collision::{GroundRect, Obstacle, VEHICLE_FOOTPRINT};
+pub use collision::{ContactState, GroundRect, Obstacle, VEHICLE_FOOTPRINT};
 pub use controller::{
     CollisionEvent, Vehicle, VehicleContact, VehicleDynamics, VehicleMotion, VehiclePlugin,
 };

@@ -116,7 +116,16 @@ pub struct Sweep {
     pub blocked: bool,
 }
 
-/// 장애물에 새로 닿은 순간의 정보.
+/// 차체와 장애물의 접촉 상태. 단계마다 [`step_with_obstacles`]가 갱신한다.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ContactState {
+    /// 장애물과 접촉 거리([`CONTACT_MARGIN_M`]) 안에 있는지. HUD 표시용이며 충돌 기록 기준이 아니다.
+    pub touching: bool,
+    /// 이번 접촉 동안 이미 충돌(이동 막힘)을 보고했는지. 접촉이 풀리면 거짓으로 돌아간다.
+    pub impact_reported: bool,
+}
+
+/// 장애물에 실제로 부딪힌(이동이 막힌) 순간의 정보.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Impact {
     /// 닿기 직전의 부호 있는 속도(m/s).
@@ -193,8 +202,11 @@ pub fn sweep(footprint: &Footprint, from: &Motion, to: &Motion, obstacles: &[Gro
 /// 운동 모델을 한 단계 적분하고 장애물 관통을 막는다.
 ///
 /// 경로가 장애물에 막히면 닿기 직전 자세에서 세우고 속도를 0으로 만든다.
-/// `touching`은 직전 단계의 접촉 여부이며 이번 단계 결과로 갱신된다.
-/// 접촉하지 않다가 새로 닿은 단계에서만 [`Impact`]를 반환한다(밀고 있는 동안 반복 보고하지 않음).
+/// `contact`는 직전 단계까지의 접촉 상태이며 이번 단계 결과로 갱신된다.
+///
+/// 충돌([`Impact`])은 이동이 실제로 막힌 단계에서만 반환한다. 장애물 가까이(접촉 거리 안)에
+/// 멈추거나 스쳐 지나가기만 하면 충돌이 아니다. 같은 접촉 동안 계속 밀어도 한 번만 반환하고,
+/// 접촉 거리 밖으로 떨어진 뒤 다시 막히면 새 충돌로 반환한다.
 pub fn step_with_obstacles(
     state: &mut VehicleState,
     motion: &mut Motion,
@@ -202,7 +214,7 @@ pub fn step_with_obstacles(
     dt: f32,
     footprint: &Footprint,
     obstacles: &[GroundRect],
-    touching: &mut bool,
+    contact: &mut ContactState,
 ) -> Option<Impact> {
     let before = *motion;
     let speed_before = state.speed_mps();
@@ -214,10 +226,14 @@ pub fn step_with_obstacles(
         state.set_speed_mps(0.0);
         motion.accel_mps2 = -speed_before / dt;
     }
-    let now_touching = in_contact(footprint, motion, obstacles);
-    let started = now_touching && !*touching;
-    *touching = now_touching;
-    started.then_some(Impact {
+    contact.touching = in_contact(footprint, motion, obstacles);
+    let new_impact = result.blocked && !contact.impact_reported;
+    if result.blocked {
+        contact.impact_reported = true;
+    } else if !contact.touching {
+        contact.impact_reported = false;
+    }
+    new_impact.then_some(Impact {
         speed_mps: speed_at_contact,
         x_m: motion.x_m,
         z_m: motion.z_m,
@@ -255,7 +271,7 @@ mod tests {
     fn drive(
         state: &mut VehicleState,
         motion: &mut Motion,
-        touching: &mut bool,
+        contact: &mut ContactState,
         obstacles: &[GroundRect],
         driver: VehicleInput,
         steps: usize,
@@ -270,7 +286,7 @@ mod tests {
                 DT,
                 &VEHICLE_FOOTPRINT,
                 obstacles,
-                touching,
+                contact,
             ));
             assert!(
                 !hits_any(&VEHICLE_FOOTPRINT, motion, obstacles, 0.0),
@@ -326,11 +342,11 @@ mod tests {
         let wall = [wall_ahead(3.0, 0.5)];
         let mut state = ready_in(Gear::Drive);
         let mut motion = Motion::default();
-        let mut touching = false;
+        let mut contact = ContactState::default();
         let impacts = drive(
             &mut state,
             &mut motion,
-            &mut touching,
+            &mut contact,
             &wall,
             throttle(),
             640,
@@ -338,7 +354,7 @@ mod tests {
 
         assert_eq!(impacts.len(), 1, "{impacts:?}");
         assert!(impacts[0].speed_mps > 1.0);
-        assert!(touching);
+        assert!(contact.touching);
         assert_eq!(state.speed_mps(), 0.0);
         assert!(in_contact(&VEHICLE_FOOTPRINT, &motion, &wall));
         // 이분 탐색으로 벽에 거의 붙어서 멈춘다.
@@ -362,17 +378,80 @@ mod tests {
         assert!((result.fraction - 1.0 / 6.0).abs() < 1e-3, "{result:?}");
     }
 
+    /// 벽 1 cm 앞에 정지해 있으면 접촉으로만 표시하고 충돌은 0회이며,
+    /// 거기서 벽으로 가속하면 충돌 1회, 계속 밀어도 1회를 유지하는지 확인한다.
+    #[test]
+    fn resting_near_wall_is_contact_not_collision() {
+        let wall = [wall_ahead(1.0, 0.5)];
+        let mut state = ready_in(Gear::Drive);
+        // 앞범퍼와 벽 사이 1 cm.
+        let mut motion = Motion {
+            z_m: -0.99,
+            ..Motion::default()
+        };
+        let mut contact = ContactState::default();
+        let idle = drive(
+            &mut state,
+            &mut motion,
+            &mut contact,
+            &wall,
+            VehicleInput::default(),
+            64,
+        );
+        assert!(idle.is_empty(), "{idle:?}");
+        assert!(contact.touching);
+
+        // 정지 상태에서 1 cm를 메우려면 몇 단계가 걸리므로 1초 동안 가속한다.
+        let first = drive(&mut state, &mut motion, &mut contact, &wall, throttle(), 64);
+        assert_eq!(first.len(), 1, "{first:?}");
+        assert!(first[0].speed_mps > 0.0);
+        let pushing = drive(
+            &mut state,
+            &mut motion,
+            &mut contact,
+            &wall,
+            throttle(),
+            320,
+        );
+        assert!(pushing.is_empty(), "{pushing:?}");
+        assert!(contact.touching);
+    }
+
+    /// 벽 옆을 1 cm 간격으로 나란히 지나가면 접촉으로만 표시하고 충돌로 세지 않는지 확인한다.
+    #[test]
+    fn passing_alongside_wall_is_not_collision() {
+        // 차체 오른쪽 면(x=0.9)에서 1 cm 떨어진, 진행 방향(-Z)으로 긴 벽.
+        let wall = [GroundRect::axis_aligned(
+            Vec2::new(0.9 + 0.01 + 0.25, -20.0),
+            Vec2::new(0.5, 50.0),
+        )];
+        let mut state = ready_in(Gear::Drive);
+        let mut motion = Motion::default();
+        let mut contact = ContactState::default();
+        let impacts = drive(
+            &mut state,
+            &mut motion,
+            &mut contact,
+            &wall,
+            throttle(),
+            320,
+        );
+        assert!(impacts.is_empty(), "{impacts:?}");
+        assert!(contact.touching);
+        assert!(state.speed_mps() > 4.0);
+    }
+
     /// 최고 속도에서도 검사 간격보다 두꺼운 얇은 벽(0.1 m)을 건너뛰지 않는지 확인한다.
     #[test]
     fn thin_wall_is_not_tunneled_at_top_speed() {
         let wall = [wall_ahead(30.0, 0.1)];
         let mut state = ready_in(Gear::Drive);
         let mut motion = Motion::default();
-        let mut touching = false;
+        let mut contact = ContactState::default();
         let impacts = drive(
             &mut state,
             &mut motion,
-            &mut touching,
+            &mut contact,
             &wall,
             throttle(),
             64 * 15,
@@ -391,12 +470,12 @@ mod tests {
         let wall = [wall_ahead(1.0, 0.5)];
         let mut state = ready_in(Gear::Drive);
         let mut motion = Motion::default();
-        let mut touching = false;
+        let mut contact = ContactState::default();
         assert_eq!(
             drive(
                 &mut state,
                 &mut motion,
-                &mut touching,
+                &mut contact,
                 &wall,
                 throttle(),
                 192
@@ -408,24 +487,14 @@ mod tests {
         state
             .apply(VehicleCommand::RequestGear(Gear::Reverse))
             .unwrap();
-        assert!(
-            drive(
-                &mut state,
-                &mut motion,
-                &mut touching,
-                &wall,
-                throttle(),
-                64
-            )
-            .is_empty()
-        );
-        assert!(!touching);
+        assert!(drive(&mut state, &mut motion, &mut contact, &wall, throttle(), 64).is_empty());
+        assert!(!contact.touching);
 
         let brake = VehicleInput {
             brake: 1.0,
             ..VehicleInput::default()
         };
-        drive(&mut state, &mut motion, &mut touching, &wall, brake, 64);
+        drive(&mut state, &mut motion, &mut contact, &wall, brake, 64);
         state
             .apply(VehicleCommand::RequestGear(Gear::Drive))
             .unwrap();
@@ -433,7 +502,7 @@ mod tests {
             drive(
                 &mut state,
                 &mut motion,
-                &mut touching,
+                &mut contact,
                 &wall,
                 throttle(),
                 256
@@ -452,13 +521,13 @@ mod tests {
         )];
         let mut state = ready_in(Gear::Drive);
         let mut motion = Motion::default();
-        let mut touching = false;
+        let mut contact = ContactState::default();
         let driver = VehicleInput {
             throttle: 0.6,
             steering: 1.0,
             ..VehicleInput::default()
         };
-        let impacts = drive(&mut state, &mut motion, &mut touching, &pillar, driver, 640);
+        let impacts = drive(&mut state, &mut motion, &mut contact, &pillar, driver, 640);
         assert_eq!(impacts.len(), 1);
         assert_eq!(state.speed_mps(), 0.0);
     }
@@ -472,7 +541,7 @@ mod tests {
         )];
         let mut state = ready_in(Gear::Drive);
         let mut motion = Motion::default();
-        let mut touching = false;
+        let mut contact = ContactState::default();
         state.set_input(throttle());
         for _ in 0..320 {
             step_with_obstacles(
@@ -482,11 +551,11 @@ mod tests {
                 DT,
                 &VEHICLE_FOOTPRINT,
                 &block,
-                &mut touching,
+                &mut contact,
             );
         }
         assert!(motion.z_m < -5.0);
-        assert!(!touching);
+        assert!(!contact.touching);
     }
 
     /// 장애물이 없으면 운동 모델 결과와 똑같이 움직이는지 확인한다.
@@ -497,7 +566,7 @@ mod tests {
         let mut plain = Motion::default();
         let mut state = plain_state.clone();
         let mut motion = plain;
-        let mut touching = false;
+        let mut contact = ContactState::default();
         let driver = VehicleInput {
             throttle: 1.0,
             steering: 0.5,
@@ -514,7 +583,7 @@ mod tests {
                 DT,
                 &VEHICLE_FOOTPRINT,
                 &[],
-                &mut touching,
+                &mut contact,
             );
             assert!(impact.is_none());
         }

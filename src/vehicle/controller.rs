@@ -2,7 +2,7 @@
 
 use bevy::prelude::*;
 
-use super::collision::{self, GroundRect, Obstacle, VEHICLE_FOOTPRINT};
+use super::collision::{self, ContactState, GroundRect, Obstacle, VEHICLE_FOOTPRINT};
 use super::dynamics::{DynamicsParams, Motion};
 use super::state::{EngineState, Gear, TransitionOutcome, VehicleCommand, VehicleState};
 use bevy::app::RunFixedMainLoop;
@@ -22,13 +22,11 @@ pub struct VehicleMotion(pub Motion);
 #[derive(Resource, Debug, Clone, Default)]
 pub struct VehicleDynamics(pub DynamicsParams);
 
-/// 차체가 지금 장애물에 닿아 있는지. 새 접촉 판정과 HUD 표시에 쓴다.
+/// 차체와 장애물의 접촉 상태 리소스. 충돌 중복 판정과 HUD 접촉 표시에 쓴다.
 #[derive(Resource, Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct VehicleContact {
-    pub touching: bool,
-}
+pub struct VehicleContact(pub ContactState);
 
-/// 차체가 장애물에 새로 닿은 순간의 충돌 메시지. 교육 기록으로 전달한다.
+/// 차체가 장애물에 실제로 부딪힌(이동이 막힌) 순간의 충돌 메시지. 교육 기록으로 전달한다.
 #[derive(Message, Debug, Clone, Copy, PartialEq)]
 pub struct CollisionEvent {
     /// 고정 주기 시뮬레이션 경과 시간(s).
@@ -115,7 +113,7 @@ pub fn step_motion(
         time.delta_secs(),
         &VEHICLE_FOOTPRINT,
         &obstacles,
-        &mut contact.touching,
+        &mut contact.0,
     );
     if let Some(impact) = impact {
         collisions.write(CollisionEvent {

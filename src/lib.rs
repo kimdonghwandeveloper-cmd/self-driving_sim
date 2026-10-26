@@ -151,7 +151,7 @@ mod tests {
 
         let world = app.world();
         assert_eq!(world.resource::<Vehicle>().0.speed_mps(), 0.0);
-        assert!(world.resource::<VehicleContact>().touching);
+        assert!(world.resource::<VehicleContact>().0.touching);
         assert_eq!(world.resource::<TrainingLog>().collision_count(), 1);
     }
 }

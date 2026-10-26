@@ -53,7 +53,7 @@ impl CollisionSources<'_> {
     /// 현재 접촉 여부와 누적 충돌 횟수로 표시용 상태를 만든다.
     fn status(&self) -> CollisionStatus {
         CollisionStatus {
-            touching: self.contact.touching,
+            touching: self.contact.0.touching,
             collisions: self.log.collision_count(),
         }
     }
