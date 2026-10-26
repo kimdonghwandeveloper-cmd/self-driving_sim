@@ -219,6 +219,7 @@ impl VehicleState {
     ///
     /// NaN/무한대는 0으로 바꾸지 않고 그대로 저장해 이상 상태로 남긴다. 이 동안에는 정지로 보지 않으므로
     /// 시동 ON/OFF, P/D/R 변경, 비상 정지 해제가 [`TransitionError::InvalidSpeed`]로 거부된다.
+    /// (D/R의 같은 방향 주행 중 변경도 속도를 판정할 수 없으므로 거부된다.)
     /// 유효한 속도가 다시 들어오면 정상 판정으로 돌아간다.
     pub fn set_speed_mps(&mut self, speed_mps: f32) {
         self.speed_mps = speed_mps;
@@ -246,7 +247,12 @@ impl VehicleState {
         Ok(TransitionOutcome::EngineChanged(next))
     }
 
-    /// 기어를 변경한다. 시동 Ready가 필요하며, N 이외(P/D/R)는 정지 상태에서만 허용한다.
+    /// 기어를 변경한다. 시동 Ready가 필요하다. 일반 자동변속 차량 규칙을 따른다(임시).
+    ///
+    /// - N: 언제든 허용.
+    /// - P: 정지 상태에서만 허용.
+    /// - D/R: 정지 상태이거나, 현재 움직이는 방향이 그 기어의 진행 방향과 같을 때 허용
+    ///   (예: 전진 중 N→D 허용, 전진 중 N→R·D→R 거부).
     fn request_gear(&mut self, gear: Gear) -> Result<TransitionOutcome, TransitionError> {
         match self.engine {
             EngineState::Off => return Err(TransitionError::EngineOff),
@@ -256,12 +262,21 @@ impl VehicleState {
         if gear == self.gear {
             return Ok(TransitionOutcome::Unchanged);
         }
-        if gear != Gear::Neutral {
+        if gear != Gear::Neutral && !self.moving_toward(gear) {
             self.ensure_stopped()?;
         }
         let from = self.gear;
         self.gear = gear;
         Ok(TransitionOutcome::GearChanged { from, to: gear })
+    }
+
+    /// 유효한 속도로 정지 임계값을 넘어 `gear`의 진행 방향(D=전진, R=후진)으로 움직이는 중인지 확인한다.
+    fn moving_toward(&self, gear: Gear) -> bool {
+        self.speed_valid()
+            && !self.is_stopped()
+            && gear
+                .drive_direction()
+                .is_some_and(|direction| direction * self.speed_mps > 0.0)
     }
 
     /// 어떤 시동 상태에서든 비상 정지로 진입한다. 이후 구동 가속은 차단된다.
@@ -363,23 +378,42 @@ mod tests {
         }
     }
 
-    /// 주행 중 P/D/R로의 변경이 거부되고 기어가 유지되는지 확인한다.
+    /// 주행 방향과 반대인 D/R 변경과 주행 중 P 변경이 거부되고 기어가 유지되는지 확인한다.
     #[test]
-    fn drive_reverse_park_change_rejected_while_moving() {
-        for (from, to) in [
-            (Gear::Drive, Gear::Reverse),
-            (Gear::Reverse, Gear::Drive),
-            (Gear::Drive, Gear::Park),
-            (Gear::Neutral, Gear::Drive),
+    fn opposite_direction_and_park_rejected_while_moving() {
+        for (from, to, speed) in [
+            (Gear::Drive, Gear::Reverse, 1.0),
+            (Gear::Reverse, Gear::Drive, -1.0),
+            (Gear::Drive, Gear::Park, 1.0),
+            (Gear::Reverse, Gear::Park, -1.0),
+            (Gear::Neutral, Gear::Reverse, 1.0),
+            (Gear::Neutral, Gear::Drive, -1.0),
         ] {
             let mut state = ready_in(from);
-            state.set_speed_mps(1.0);
+            state.set_speed_mps(speed);
             assert_eq!(
                 state.apply(VehicleCommand::RequestGear(to)),
                 Err(TransitionError::NotStopped),
                 "{from:?} -> {to:?}"
             );
             assert_eq!(state.gear(), from);
+        }
+    }
+
+    /// N 상태로 굴러가는 중에 같은 방향 기어(전진 중 D, 후진 중 R)로는 바꿀 수 있는지 확인한다.
+    #[test]
+    fn same_direction_gear_allowed_while_moving() {
+        for (to, speed) in [(Gear::Drive, 2.0), (Gear::Reverse, -1.0)] {
+            let mut state = ready_in(Gear::Neutral);
+            state.set_speed_mps(speed);
+            assert_eq!(
+                state.apply(VehicleCommand::RequestGear(to)),
+                Ok(TransitionOutcome::GearChanged {
+                    from: Gear::Neutral,
+                    to
+                }),
+                "{to:?} at {speed}"
+            );
         }
     }
 
@@ -553,7 +587,7 @@ mod tests {
             VehicleCommand::EngageEmergencyStop,
             VehicleCommand::ReleaseEmergencyStop,
         ];
-        let speeds = [0.0, 1.0];
+        let speeds = [0.0, 1.0, -1.0];
         let steps: Vec<(VehicleCommand, f32)> = commands
             .iter()
             .flat_map(|&command| speeds.iter().map(move |&speed| (command, speed)))
@@ -594,9 +628,13 @@ mod tests {
             assert_eq!(after.effective_throttle(), 0.0);
         }
         if before.gear() != after.gear() && after.gear() != Gear::Neutral {
+            let same_direction = after
+                .gear()
+                .drive_direction()
+                .is_some_and(|direction| direction * before.speed_mps() > 0.0);
             assert!(
-                before.is_stopped(),
-                "{command:?}: gear changed while moving"
+                before.is_stopped() || same_direction,
+                "{command:?}: gear changed against the motion"
             );
         }
         if before.engine() == EngineState::Off && after.gear() != before.gear() {
