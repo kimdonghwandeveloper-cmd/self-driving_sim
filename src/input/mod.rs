@@ -7,6 +7,8 @@ pub mod mapping;
 
 use bevy::prelude::*;
 
+use bevy::app::RunFixedMainLoop;
+
 use crate::SimSet;
 use crate::vehicle::{Gear, VehicleCommand, VehicleInput};
 
@@ -28,11 +30,14 @@ pub enum ControlRequest {
 pub struct InputPlugin;
 
 impl Plugin for InputPlugin {
-    /// 입력 관련 리소스, 메시지, 시스템을 앱에 등록한다.
+    /// 입력 관련 리소스, 메시지, 시스템을 앱에 등록한다. 키보드는 고정 주기 루프 직전에 읽는다.
     fn build(&self, app: &mut App) {
         app.init_resource::<DriverInput>()
             .init_resource::<KeyBindings>()
             .add_message::<ControlRequest>()
-            .add_systems(Update, keyboard::read_keyboard.in_set(SimSet::Input));
+            .add_systems(
+                RunFixedMainLoop,
+                keyboard::read_keyboard.in_set(SimSet::Input),
+            );
     }
 }
