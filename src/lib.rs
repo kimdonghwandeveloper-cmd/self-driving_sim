@@ -35,10 +35,14 @@ pub fn configure_sim_sets(app: &mut App) {
 mod tests {
     use std::time::Duration;
 
+    use bevy::input::ButtonState;
+    use bevy::input::keyboard::{Key, KeyboardInput, NativeKey};
     use bevy::time::TimeUpdateStrategy;
 
     use super::*;
-    use crate::vehicle::{Gear, Vehicle, VehicleCommand, VehiclePlugin};
+    use crate::vehicle::{
+        DynamicsParams, EngineState, Gear, Vehicle, VehicleCommand, VehiclePlugin,
+    };
 
     /// 키보드 입력과 차량 시스템만 있는 창 없는 앱을 만든다. 한 번 갱신할 때마다 고정 주기 1단계가 돈다.
     fn headless_app() -> App {
@@ -52,20 +56,50 @@ mod tests {
         app
     }
 
-    /// 지정 키를 누른 상태로 앱을 한 번 갱신한다(다른 키는 뗀다).
+    /// 키 하나의 누름/뗌 메시지를 만든다. 실제 창 입력과 같은 경로(PreUpdate 키보드 시스템)를 탄다.
+    fn key_message(key_code: KeyCode, state: ButtonState) -> KeyboardInput {
+        KeyboardInput {
+            key_code,
+            logical_key: Key::Unidentified(NativeKey::Unidentified),
+            state,
+            text: None,
+            repeat: false,
+            window: Entity::PLACEHOLDER,
+        }
+    }
+
+    /// `keys`만 눌린 상태가 되도록 누름/뗌 메시지를 보내고 앱을 한 번 갱신한다.
+    ///
+    /// `ButtonInput`을 직접 바꾸면 PreUpdate에서 "새로 눌림"이 지워지므로 메시지로 전달한다.
     fn update_with_keys(app: &mut App, keys: &[KeyCode]) {
-        let mut input = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
-        input.release_all();
-        for key in keys {
-            input.press(*key);
+        let held: Vec<KeyCode> = app
+            .world()
+            .resource::<ButtonInput<KeyCode>>()
+            .get_pressed()
+            .copied()
+            .collect();
+        for key in held.iter().filter(|key| !keys.contains(key)) {
+            app.world_mut()
+                .write_message(key_message(*key, ButtonState::Released));
+        }
+        for key in keys.iter().filter(|key| !held.contains(key)) {
+            app.world_mut()
+                .write_message(key_message(*key, ButtonState::Pressed));
         }
         app.update();
     }
 
-    /// 제동·비상 정지 키를 누른 그 프레임의 운동 계산부터 가속이 멈추는지 확인한다.
+    /// 가속 키를 누른 채 제동·비상 정지 키를 누르면, 그 프레임의 운동 계산부터 해당 감속이 적용되는지 확인한다.
+    ///
+    /// 가속 키를 계속 누르고 있으므로 입력·명령이 한 프레임 늦으면 속도가 오히려 오른다.
     #[test]
     fn brake_and_emergency_stop_apply_in_same_frame() {
-        for stop_key in [KeyCode::KeyS, KeyCode::Space] {
+        let params = DynamicsParams::default();
+        let dt = 1.0 / 64.0;
+        for (stop_key, expected_decel) in [
+            (KeyCode::KeyS, params.max_brake_decel_mps2),
+            (KeyCode::Space, params.emergency_decel_mps2),
+        ] {
             let mut app = headless_app();
             {
                 let state = &mut app.world_mut().resource_mut::<Vehicle>().0;
@@ -80,12 +114,17 @@ mod tests {
             let before = app.world().resource::<Vehicle>().0.speed_mps();
             assert!(before > 0.5, "vehicle should be moving, got {before}");
 
-            update_with_keys(&mut app, &[stop_key]);
-            let after = app.world().resource::<Vehicle>().0.speed_mps();
+            update_with_keys(&mut app, &[KeyCode::KeyW, stop_key]);
+            let state = &app.world().resource::<Vehicle>().0;
+            let drop = before - state.speed_mps();
             assert!(
-                after < before,
-                "{stop_key:?}: speed rose from {before} to {after} in the stop frame"
+                drop >= expected_decel * dt * 0.99,
+                "{stop_key:?}: speed changed from {before} to {} in the stop frame",
+                state.speed_mps()
             );
+            if stop_key == KeyCode::Space {
+                assert_eq!(state.engine(), EngineState::EmergencyStop);
+            }
         }
     }
 }
