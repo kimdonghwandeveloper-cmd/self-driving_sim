@@ -40,6 +40,10 @@ pub struct DynamicsParams {
     pub max_steer_angle_deg: f32,
     /// 바퀴 조향각 변화 속도(도/s).
     pub steer_rate_deg_s: f32,
+    /// 조향 감도(배율). 조향 입력에 곱한 뒤 -1..=1로 자른다.
+    /// 1.0이면 입력 그대로, 1보다 작으면 최대 입력에서도 최대 조향각보다 덜 꺾이고,
+    /// 1보다 크면 작은 입력으로 최대 조향각에 먼저 도달한다.
+    pub steer_sensitivity: f32,
 }
 
 impl Default for DynamicsParams {
@@ -55,6 +59,7 @@ impl Default for DynamicsParams {
             wheelbase_m: 2.8,
             max_steer_angle_deg: 30.0,
             steer_rate_deg_s: 60.0,
+            steer_sensitivity: 1.0,
         }
     }
 }
@@ -72,6 +77,7 @@ impl DynamicsParams {
             ("wheelbase_m", self.wheelbase_m),
             ("max_steer_angle_deg", self.max_steer_angle_deg),
             ("steer_rate_deg_s", self.steer_rate_deg_s),
+            ("steer_sensitivity", self.steer_sensitivity),
         ] {
             if !(value.is_finite() && value > 0.0) {
                 return Err(format!(
@@ -125,7 +131,8 @@ pub fn step(state: &mut VehicleState, motion: &mut Motion, params: &DynamicsPara
     motion.accel_mps2 = (next_speed - speed) / dt;
     state.set_speed_mps(next_speed);
 
-    let target = state.input().steering * params.max_steer_angle_deg.to_radians();
+    let target = steering_command(state.input().steering, params)
+        * params.max_steer_angle_deg.to_radians();
     let max_change = params.steer_rate_deg_s.to_radians() * dt;
     motion.steer_angle_rad += (target - motion.steer_angle_rad).clamp(-max_change, max_change);
 
@@ -135,6 +142,11 @@ pub fn step(state: &mut VehicleState, motion: &mut Motion, params: &DynamicsPara
     let (forward_x, forward_z) = motion.forward();
     motion.x_m += forward_x * next_speed * dt;
     motion.z_m += forward_z * next_speed * dt;
+}
+
+/// 조향 입력(-1..=1)에 조향 감도를 곱해 -1..=1 범위의 조향 지령으로 바꾼다.
+fn steering_command(steering: f32, params: &DynamicsParams) -> f32 {
+    (steering * params.steer_sensitivity).clamp(-1.0, 1.0)
 }
 
 /// 다음 단계의 부호 있는 속도를 계산한다.
@@ -365,6 +377,28 @@ mod tests {
         assert!((motion.steer_angle_rad - params.max_steer_angle_deg.to_radians()).abs() < 1e-5);
     }
 
+    /// 조향 감도가 목표 바퀴 각도를 배율로 바꾸고, 최대 조향각은 넘지 않는지 확인한다.
+    #[test]
+    fn steer_sensitivity_scales_target_angle() {
+        let max = DynamicsParams::default().max_steer_angle_deg.to_radians();
+        let settled_angle = |sensitivity: f32, steering: f32| {
+            let params = DynamicsParams {
+                steer_sensitivity: sensitivity,
+                ..DynamicsParams::default()
+            };
+            let mut state = ready_in(Gear::Drive);
+            state.set_input(input(0.0, 0.0, steering));
+            let mut motion = Motion::default();
+            for _ in 0..128 {
+                step(&mut state, &mut motion, &params, DT);
+            }
+            motion.steer_angle_rad
+        };
+        assert!((settled_angle(0.5, 1.0) - max * 0.5).abs() < 1e-5);
+        assert!((settled_angle(2.0, -0.5) + max).abs() < 1e-5);
+        assert!((settled_angle(2.0, 1.0) - max).abs() < 1e-5);
+    }
+
     /// 시간 간격이 달라도 같은 시간 동안의 주행 거리가 거의 같은지 확인한다.
     #[test]
     fn distance_is_independent_of_timestep() {
@@ -423,6 +457,10 @@ mod tests {
             },
             DynamicsParams {
                 max_steer_angle_deg: 80.0,
+                ..DynamicsParams::default()
+            },
+            DynamicsParams {
+                steer_sensitivity: 0.0,
                 ..DynamicsParams::default()
             },
         ] {
