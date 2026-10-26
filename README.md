@@ -106,6 +106,7 @@ Release도 `cargo run --locked --release`에 같은 환경변수를 적용합니
 - `config/{vehicle,input}.toml`: 시뮬레이터 임시 설정값
 - `assets/{models,textures,maps}/`: 추후 에셋 경로
 - [docs/development.md](docs/development.md): 선정 버전, 개발 PC, 검증 결과
+- [docs/vehicle-assumptions.md](docs/vehicle-assumptions.md): 실차 사양 가정과 미확인 위험(사륜 조향·특수 구동 등)
 
 나머지 설정 파일과 도메인 모듈은 해당 기능을 구현할 때 추가합니다.
 엔진 설정은 [Bevy 공식 가이드](https://bevy.org/learn/quick-start/getting-started/setup/)와
