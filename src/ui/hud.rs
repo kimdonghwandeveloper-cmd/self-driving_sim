@@ -2,6 +2,7 @@
 
 use std::fmt::{self, Write};
 
+use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 
 use crate::input::KeyBindings;
@@ -41,6 +42,23 @@ pub struct CollisionStatus {
     pub collisions: usize,
 }
 
+/// HUD가 충돌 상태를 만들 때 읽는 리소스 묶음.
+#[derive(SystemParam)]
+pub struct CollisionSources<'w> {
+    contact: Res<'w, VehicleContact>,
+    log: Res<'w, TrainingLog>,
+}
+
+impl CollisionSources<'_> {
+    /// 현재 접촉 여부와 누적 충돌 횟수로 표시용 상태를 만든다.
+    fn status(&self) -> CollisionStatus {
+        CollisionStatus {
+            touching: self.contact.touching,
+            collisions: self.log.collision_count(),
+        }
+    }
+}
+
 /// `update_hud`가 프레임 사이에 재사용하는 문자열.
 #[derive(Default)]
 pub struct HudCache {
@@ -55,8 +73,7 @@ pub fn update_hud(
     vehicle: Res<Vehicle>,
     motion: Res<VehicleMotion>,
     feedback: Res<ControlFeedback>,
-    contact: Res<VehicleContact>,
-    log: Res<TrainingLog>,
+    collision: CollisionSources,
     bindings: Res<KeyBindings>,
     mut cache: Local<HudCache>,
     mut query: Query<&mut Text, With<VehicleHud>>,
@@ -65,15 +82,11 @@ pub fn update_hud(
     if bindings.is_changed() || cache.key_guide.is_empty() {
         cache.key_guide = key_guide_text(&bindings);
     }
-    let collision = CollisionStatus {
-        touching: contact.touching,
-        collisions: log.collision_count(),
-    };
     write_hud(
         &mut cache.buffer,
         &vehicle.0,
         &motion.0,
-        collision,
+        collision.status(),
         &feedback,
         &cache.key_guide,
     );
