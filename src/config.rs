@@ -10,6 +10,7 @@ use serde::Deserialize;
 use serde::de::DeserializeOwned;
 
 use crate::input::{KeyBindings, KeyboardMapping};
+use crate::vehicle::dynamics::DynamicsParams;
 use crate::vehicle::state::{DEFAULT_STOP_THRESHOLD_MPS, MAX_STOP_THRESHOLD_MPS};
 
 /// 차량 설정 파일 경로(저장소 루트 기준).
@@ -22,6 +23,7 @@ pub const INPUT_CONFIG_PATH: &str = "config/input.toml";
 #[serde(default, deny_unknown_fields)]
 pub struct VehicleConfig {
     pub state_machine: StateMachineConfig,
+    pub dynamics: DynamicsParams,
 }
 
 /// `[state_machine]` 구역.
@@ -41,7 +43,7 @@ impl Default for StateMachineConfig {
 }
 
 impl VehicleConfig {
-    /// 값의 범위를 검사한다.
+    /// 상태 머신·운동 모델 값의 범위를 검사한다.
     pub fn validate(&self) -> Result<(), String> {
         let threshold = self.state_machine.stop_threshold_mps;
         if !(0.0..=MAX_STOP_THRESHOLD_MPS).contains(&threshold) {
@@ -49,7 +51,7 @@ impl VehicleConfig {
                 "state_machine.stop_threshold_mps must be within 0..={MAX_STOP_THRESHOLD_MPS}, got {threshold}"
             ));
         }
-        Ok(())
+        self.dynamics.validate()
     }
 }
 
@@ -188,6 +190,20 @@ mod tests {
         let result = parse_vehicle_config("[state_machine]\nstop_threshold_mps = 2.0\n");
         assert!(matches!(result, Err(ConfigError::Invalid(_))));
         let result = parse_vehicle_config("[state_machine]\nstop_threshold_mps = -0.1\n");
+        assert!(matches!(result, Err(ConfigError::Invalid(_))));
+    }
+
+    /// 운동 모델 일부 값만 지정하면 나머지는 기본값을 유지하고, 잘못된 값은 거부하는지 확인한다.
+    #[test]
+    fn dynamics_section_is_parsed_and_validated() {
+        let config = parse_vehicle_config("[dynamics]\nwheelbase_m = 3.2\n").unwrap();
+        assert_eq!(config.dynamics.wheelbase_m, 3.2);
+        assert_eq!(
+            config.dynamics.max_accel_mps2,
+            DynamicsParams::default().max_accel_mps2
+        );
+
+        let result = parse_vehicle_config("[dynamics]\nmax_brake_decel_mps2 = -1.0\n");
         assert!(matches!(result, Err(ConfigError::Invalid(_))));
     }
 

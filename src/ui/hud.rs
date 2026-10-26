@@ -7,7 +7,7 @@ use bevy::prelude::*;
 use crate::input::KeyBindings;
 use crate::input::mapping::KeyAction;
 use crate::vehicle::controller::{ControlFeedback, Vehicle, engine_label, gear_label};
-use crate::vehicle::{Gear, VehicleState};
+use crate::vehicle::{Gear, Motion, VehicleMotion, VehicleState};
 
 /// HUD 텍스트 엔티티 표시용 마커.
 #[derive(Component)]
@@ -43,6 +43,7 @@ pub struct HudCache {
 /// 매 프레임 HUD 텍스트를 현재 상태로 갱신한다. 내용이 같으면 텍스트를 건드리지 않는다.
 pub fn update_hud(
     vehicle: Res<Vehicle>,
+    motion: Res<VehicleMotion>,
     feedback: Res<ControlFeedback>,
     bindings: Res<KeyBindings>,
     mut cache: Local<HudCache>,
@@ -52,7 +53,13 @@ pub fn update_hud(
     if bindings.is_changed() || cache.key_guide.is_empty() {
         cache.key_guide = key_guide_text(&bindings);
     }
-    write_hud(&mut cache.buffer, &vehicle.0, &feedback, &cache.key_guide);
+    write_hud(
+        &mut cache.buffer,
+        &vehicle.0,
+        &motion.0,
+        &feedback,
+        &cache.key_guide,
+    );
     for mut text in &mut query {
         if text.0 != cache.buffer {
             text.0.clone_from(&cache.buffer);
@@ -63,26 +70,38 @@ pub fn update_hud(
 /// HUD에 표시할 전체 문자열을 만든다.
 pub fn hud_text(
     state: &VehicleState,
+    motion: &Motion,
     feedback: &ControlFeedback,
     bindings: &KeyBindings,
 ) -> String {
     let mut out = String::new();
-    write_hud(&mut out, state, feedback, &key_guide_text(bindings));
+    write_hud(&mut out, state, motion, feedback, &key_guide_text(bindings));
     out
 }
 
 /// `out`을 비우고 상태 줄과 키 안내를 이어 쓴다.
-fn write_hud(out: &mut String, state: &VehicleState, feedback: &ControlFeedback, key_guide: &str) {
+fn write_hud(
+    out: &mut String,
+    state: &VehicleState,
+    motion: &Motion,
+    feedback: &ControlFeedback,
+    key_guide: &str,
+) {
     out.clear();
-    write_status(out, state, feedback).expect("writing to a String cannot fail");
+    write_status(out, state, motion, feedback).expect("writing to a String cannot fail");
     out.push_str("\n\n");
     out.push_str(key_guide);
 }
 
-/// 차량 상태·입력·마지막 명령 결과 줄을 쓴다.
-fn write_status(out: &mut String, state: &VehicleState, feedback: &ControlFeedback) -> fmt::Result {
+/// 차량 상태·운동·입력·마지막 명령 결과 줄을 쓴다.
+fn write_status(
+    out: &mut String,
+    state: &VehicleState,
+    motion: &Motion,
+    feedback: &ControlFeedback,
+) -> fmt::Result {
     let input = state.input();
-    let motion = if !state.speed_valid() {
+    let moving = if !state.speed_valid() {
         "INVALID"
     } else if state.is_stopped() {
         "stopped"
@@ -103,8 +122,18 @@ fn write_status(out: &mut String, state: &VehicleState, feedback: &ControlFeedba
     )?;
     writeln!(
         out,
-        "Speed: {:.2} m/s ({motion}, no dynamics yet)",
-        state.speed_mps()
+        "Speed: {:+.2} m/s ({:.1} km/h, {moving})   Accel: {:+.2} m/s^2",
+        state.speed_mps(),
+        state.speed_mps().abs() * 3.6,
+        motion.accel_mps2
+    )?;
+    writeln!(
+        out,
+        "Wheel angle: {:+.1} deg   Heading: {:+.1} deg   Position: ({:.1}, {:.1}) m",
+        motion.steer_angle_rad.to_degrees(),
+        motion.heading_rad.to_degrees(),
+        motion.x_m,
+        motion.z_m
     )?;
     writeln!(
         out,
@@ -165,7 +194,12 @@ mod tests {
                 message: "gear D: engine is off".to_owned(),
             }),
         };
-        let text = hud_text(&state, &feedback, &KeyBindings::default());
+        let text = hud_text(
+            &state,
+            &Motion::default(),
+            &feedback,
+            &KeyBindings::default(),
+        );
         assert!(text.contains("Engine: OFF   Gear: P"));
         assert!(text.contains("Last: [REJECTED] gear D: engine is off"));
         assert!(text.contains("e-stop Space"));
@@ -177,7 +211,12 @@ mod tests {
     fn hud_marks_invalid_speed() {
         let mut state = VehicleState::default();
         state.set_speed_mps(f32::NAN);
-        let text = hud_text(&state, &ControlFeedback::default(), &KeyBindings::default());
+        let text = hud_text(
+            &state,
+            &Motion::default(),
+            &ControlFeedback::default(),
+            &KeyBindings::default(),
+        );
         assert!(text.contains("INVALID"));
     }
 }
