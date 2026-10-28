@@ -58,15 +58,25 @@ impl GroundRect {
         self.half_size.x * right.dot(axis).abs() + self.half_size.y * forward.dot(axis).abs()
     }
 
+    /// 두 직사각형의 겹침 깊이(m)를 분리축 판정으로 구한다.
+    ///
+    /// 네 분리축 중 가장 얕게 겹친 축의 겹침 길이다. 양수면 겹치고, 0 이하면 그만큼 떨어져 있다.
+    pub fn penetration(&self, other: &GroundRect) -> f32 {
+        let offset = other.center - self.center;
+        self.axes()
+            .into_iter()
+            .chain(other.axes())
+            .map(|axis| {
+                self.projected_radius(axis) + other.projected_radius(axis) - offset.dot(axis).abs()
+            })
+            .fold(f32::INFINITY, f32::min)
+    }
+
     /// 두 직사각형이 겹치는지 분리축 판정으로 검사한다.
     ///
     /// `margin`(m)만큼 떨어져 있어도 겹친 것으로 본다. 0이면 맞닿기만 한 경우는 겹침이 아니다.
     pub fn overlaps(&self, other: &GroundRect, margin: f32) -> bool {
-        let offset = other.center - self.center;
-        self.axes().into_iter().chain(other.axes()).all(|axis| {
-            offset.dot(axis).abs()
-                < self.projected_radius(axis) + other.projected_radius(axis) + margin
-        })
+        self.penetration(other) + margin > 0.0
     }
 }
 
@@ -163,16 +173,29 @@ pub fn in_contact(footprint: &Footprint, motion: &Motion, obstacles: &[GroundRec
 
 /// `from`에서 `to`로 가는 경로를 검사해 장애물에 닿기 직전까지의 이동 비율을 구한다.
 ///
-/// 출발 자세가 이미 겹쳐 있으면(장애물이 차량 위에 놓인 경우 등) 빠져나갈 수 있도록 막지 않는다.
+/// 출발 자세에서 이미 겹친 장애물(장애물이 차량 위에 놓인 경우 등)은 빠져나갈 수 있도록,
+/// 겹침 깊이가 출발 때보다 깊어지는 경우만 막는다. 나머지 장애물은 평소처럼 닿으면 막는다.
 pub fn sweep(footprint: &Footprint, from: &Motion, to: &Motion, obstacles: &[GroundRect]) -> Sweep {
     let free = Sweep {
         fraction: 1.0,
         blocked: false,
     };
-    let hits = |t: f32| hits_any(footprint, &pose_between(from, to, t), obstacles, 0.0);
-    if obstacles.is_empty() || hits(0.0) {
+    if obstacles.is_empty() {
         return free;
     }
+    let start_body = footprint.rect_at(from);
+    let hits = |t: f32| {
+        let body = footprint.rect_at(&pose_between(from, to, t));
+        obstacles.iter().any(|obstacle| {
+            let start = start_body.penetration(obstacle);
+            let depth = body.penetration(obstacle);
+            if start > 0.0 {
+                depth > start
+            } else {
+                depth > 0.0
+            }
+        })
+    };
     let travel = Vec2::new(to.x_m - from.x_m, to.z_m - from.z_m).length()
         + wrap_angle(to.heading_rad - from.heading_rad).abs() * footprint.reach_m();
     let samples = (travel / MAX_SAMPLE_STEP_M).ceil().max(1.0) as u32;
@@ -265,6 +288,31 @@ mod tests {
             Vec2::new(0.0, -(front + distance_m + thickness_m / 2.0)),
             Vec2::new(6.0, thickness_m),
         )
+    }
+
+    /// 같은 입력으로 `steps`번 적분하고 새 충돌 목록을 반환한다. 관통 검사를 하지 않는다(초기 겹침 시험용).
+    fn drive_unchecked(
+        state: &mut VehicleState,
+        motion: &mut Motion,
+        contact: &mut ContactState,
+        obstacles: &[GroundRect],
+        driver: VehicleInput,
+        steps: usize,
+    ) -> Vec<Impact> {
+        state.set_input(driver);
+        (0..steps)
+            .filter_map(|_| {
+                step_with_obstacles(
+                    state,
+                    motion,
+                    &DynamicsParams::default(),
+                    DT,
+                    &VEHICLE_FOOTPRINT,
+                    obstacles,
+                    contact,
+                )
+            })
+            .collect()
     }
 
     /// 같은 입력으로 `steps`번 적분하며 매 단계 관통이 없는지 확인하고, 새 접촉 보고 목록을 반환한다.
@@ -556,6 +604,81 @@ mod tests {
         }
         assert!(motion.z_m < -5.0);
         assert!(!contact.touching);
+    }
+
+    /// 장애물과 겹친 채 시작하면 더 깊이 들어가는 이동은 막고(충돌 1회), 빠져나가는 이동은 허용하는지 확인한다.
+    #[test]
+    fn starting_overlap_cannot_push_deeper() {
+        // 앞범퍼(z=-3.5)가 1 m 상자(z -4.3..-3.3) 안으로 0.2 m 들어가 있다.
+        let block = [GroundRect::axis_aligned(
+            Vec2::new(0.0, -3.8),
+            Vec2::new(1.0, 1.0),
+        )];
+        let depth = |motion: &Motion| VEHICLE_FOOTPRINT.rect_at(motion).penetration(&block[0]);
+        let mut state = ready_in(Gear::Drive);
+        let mut motion = Motion::default();
+        let mut contact = ContactState::default();
+        let start = depth(&motion);
+        assert!((start - 0.2).abs() < 1e-5);
+
+        let impacts = drive_unchecked(
+            &mut state,
+            &mut motion,
+            &mut contact,
+            &block,
+            throttle(),
+            64,
+        );
+        assert_eq!(impacts.len(), 1);
+        assert!(depth(&motion) <= start, "{motion:?}");
+        assert_eq!(state.speed_mps(), 0.0);
+
+        state
+            .apply(VehicleCommand::RequestGear(Gear::Reverse))
+            .unwrap();
+        drive_unchecked(
+            &mut state,
+            &mut motion,
+            &mut contact,
+            &block,
+            throttle(),
+            128,
+        );
+        assert!(depth(&motion) < -CONTACT_MARGIN_M, "{motion:?}");
+        assert!(!contact.touching);
+    }
+
+    /// 한 장애물과 겹친 채 시작해도 다른 장애물은 평소처럼 막는지 확인한다.
+    #[test]
+    fn starting_overlap_still_blocks_other_obstacles() {
+        // 차체 한가운데를 지나는 긴 띠(z 5..-25)와 계속 겹친 채로, 앞범퍼(z=-3.5)에서 6 m 앞의
+        // 벽 앞면(z=-9.5)에 닿는다. 띠와의 겹침 깊이는 전진해도 그대로다.
+        let obstacles = [
+            GroundRect::axis_aligned(Vec2::new(0.0, -10.0), Vec2::new(1.0, 30.0)),
+            GroundRect::axis_aligned(Vec2::new(0.0, -10.0), Vec2::new(6.0, 1.0)),
+        ];
+        let mut state = ready_in(Gear::Drive);
+        let mut motion = Motion::default();
+        let mut contact = ContactState::default();
+        let mut impacts = Vec::new();
+        for _ in 0..64 * 8 {
+            impacts.extend(drive_unchecked(
+                &mut state,
+                &mut motion,
+                &mut contact,
+                &obstacles,
+                throttle(),
+                1,
+            ));
+            assert!(
+                motion.z_m > -6.0 - 1e-3,
+                "passed the wall: z={}",
+                motion.z_m
+            );
+        }
+        assert_eq!(impacts.len(), 1);
+        assert!(motion.z_m < -6.0 + 0.01, "stopped early: z={}", motion.z_m);
+        assert_eq!(state.speed_mps(), 0.0);
     }
 
     /// 장애물이 없으면 운동 모델 결과와 똑같이 움직이는지 확인한다.
