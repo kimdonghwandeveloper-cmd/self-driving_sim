@@ -1,21 +1,34 @@
-//! 개발용 3D 장면: 격자 바닥, 움직이는 차량 도형, 차량을 따라가는 카메라.
+//! 개발용 3D 장면: 격자 바닥, 고정 장애물, 움직이는 차량 도형, 차량을 따라가는 카메라.
 //!
 //! Phase 3의 입석 조작자 카메라·테스트맵이 생기기 전까지 운동 모델을 눈으로 확인하는 용도다.
-//! 차체 크기와 카메라 위치는 모두 **시뮬레이터 임시값**이다.
+//! 차체 크기, 장애물 배치, 카메라 위치는 모두 **시뮬레이터 임시값**이다.
 
 use bevy::prelude::*;
 
 use crate::SimSet;
-use crate::vehicle::{Motion, VehicleMotion};
+use crate::vehicle::{GroundRect, Motion, Obstacle, VEHICLE_FOOTPRINT, VehicleMotion};
 
 /// 바닥 한 변 길이(m).
 const GROUND_SIZE_M: f32 = 200.0;
 /// 격자선 간격(m). 이동 거리를 눈으로 가늠하는 기준이다.
 const GRID_SPACING_M: f32 = 5.0;
-/// 차체 크기(폭, 높이, 길이; m). 실차 치수 미확인 임시값.
-const BODY_SIZE_M: Vec3 = Vec3::new(1.8, 2.2, 4.2);
+/// 차체 크기(폭, 높이, 길이; m). 폭·길이는 충돌 박스와 같다. 실차 치수 미확인 임시값.
+const BODY_SIZE_M: Vec3 = Vec3::new(VEHICLE_FOOTPRINT.width_m, 2.2, VEHICLE_FOOTPRINT.length_m);
 /// 후륜축 중심에서 차체 중심까지의 전방 거리(m).
-const REAR_AXLE_TO_CENTER_M: f32 = 1.4;
+const REAR_AXLE_TO_CENTER_M: f32 = VEHICLE_FOOTPRINT.rear_axle_to_center_m;
+/// 장애물 표시 높이(m). 충돌 판정은 높이를 보지 않는다.
+const OBSTACLE_HEIGHT_M: f32 = 1.2;
+/// 충돌 시험용 고정 장애물(중심 x·z, 크기 x·z; m). 시작 위치는 원점, 정면은 -Z다.
+const OBSTACLES: [(Vec2, Vec2); 4] = [
+    // 정면 30 m 앞의 벽
+    (Vec2::new(0.0, -30.0), Vec2::new(12.0, 0.5)),
+    // 오른쪽 앞 기둥
+    (Vec2::new(6.0, -14.0), Vec2::new(1.0, 1.0)),
+    // 왼쪽 앞 상자
+    (Vec2::new(-7.0, -10.0), Vec2::new(2.0, 2.0)),
+    // 후진 시험용 뒤쪽 벽
+    (Vec2::new(0.0, 15.0), Vec2::new(8.0, 0.5)),
+];
 /// 차량 기준 카메라 위치(오른쪽, 위, 뒤; m).
 const CAMERA_OFFSET_M: Vec3 = Vec3::new(0.0, 5.0, 11.0);
 /// 카메라가 차량을 따라가는 빠르기(1/s). 클수록 바로 붙는다.
@@ -55,6 +68,7 @@ fn setup_scene(
         MeshMaterial3d(materials.add(Color::srgb(0.25, 0.30, 0.30))),
     ));
     spawn_grid(&mut commands, &mut meshes, &mut materials);
+    spawn_obstacles(&mut commands, &mut meshes, &mut materials);
 
     let body = meshes.add(Cuboid::from_size(BODY_SIZE_M));
     let front_marker = meshes.add(Cuboid::new(BODY_SIZE_M.x * 0.8, 0.3, 0.3));
@@ -117,6 +131,23 @@ fn spawn_grid(
     }
 }
 
+/// 충돌 판정용 [`Obstacle`]과 같은 크기의 상자를 장애물 위치에 놓는다.
+fn spawn_obstacles(
+    commands: &mut Commands,
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<StandardMaterial>,
+) {
+    let material = materials.add(Color::srgb(0.85, 0.35, 0.25));
+    for (center, size) in OBSTACLES {
+        commands.spawn((
+            Mesh3d(meshes.add(Cuboid::new(size.x, OBSTACLE_HEIGHT_M, size.y))),
+            MeshMaterial3d(material.clone()),
+            Transform::from_xyz(center.x, OBSTACLE_HEIGHT_M / 2.0, center.y),
+            Obstacle(GroundRect::axis_aligned(center, size)),
+        ));
+    }
+}
+
 /// 운동 모델의 자세를 차량 도형 Transform에 반영한다.
 fn sync_vehicle_body(
     motion: Res<VehicleMotion>,
@@ -174,6 +205,20 @@ mod tests {
             body_transform(&motion).translation,
             Vec3::new(3.0, 0.0, -2.0)
         );
+    }
+
+    /// 시작 자세의 차체가 어떤 장애물과도 겹치지 않는지 확인한다.
+    #[test]
+    fn start_pose_is_clear_of_obstacles() {
+        let obstacles: Vec<GroundRect> = OBSTACLES
+            .iter()
+            .map(|(center, size)| GroundRect::axis_aligned(*center, *size))
+            .collect();
+        assert!(!crate::vehicle::collision::in_contact(
+            &VEHICLE_FOOTPRINT,
+            &Motion::default(),
+            &obstacles
+        ));
     }
 
     /// 카메라 목표가 차량 뒤쪽 위에 있는지 확인한다.

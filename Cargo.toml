@@ -7,7 +7,7 @@ publish = false
 
 [features]
 default = []
-# Compatibility check only; collision systems will be added in a later phase.
+# Compatibility check only. Collisions currently use the built-in ground check in src/vehicle/collision.rs.
 physics = ["dep:bevy_rapier3d"]
 
 [dependencies]

@@ -3,6 +3,7 @@
 pub mod config;
 pub mod input;
 pub mod scene;
+pub mod training;
 pub mod ui;
 pub mod vehicle;
 
@@ -40,8 +41,10 @@ mod tests {
     use bevy::time::TimeUpdateStrategy;
 
     use super::*;
+    use crate::training::{TrainingLog, TrainingPlugin};
     use crate::vehicle::{
-        DynamicsParams, EngineState, Gear, Vehicle, VehicleCommand, VehiclePlugin,
+        DynamicsParams, EngineState, Gear, GroundRect, Obstacle, Vehicle, VehicleCommand,
+        VehicleContact, VehicleMotion, VehiclePlugin,
     };
 
     /// 키보드 입력과 차량 시스템만 있는 창 없는 앱을 만든다. 한 번 갱신할 때마다 고정 주기 1단계가 돈다.
@@ -52,8 +55,17 @@ mod tests {
                 1.0 / 64.0,
             )));
         configure_sim_sets(&mut app);
-        app.add_plugins((input::InputPlugin, VehiclePlugin));
+        app.add_plugins((input::InputPlugin, VehiclePlugin, TrainingPlugin));
         app
+    }
+
+    /// 시동을 켜고 D로 바꾼다.
+    fn engine_on_in_drive(app: &mut App) {
+        let state = &mut app.world_mut().resource_mut::<Vehicle>().0;
+        state.apply(VehicleCommand::ToggleEngine).unwrap();
+        state
+            .apply(VehicleCommand::RequestGear(Gear::Drive))
+            .unwrap();
     }
 
     /// 키 하나의 누름/뗌 메시지를 만든다. 실제 창 입력과 같은 경로(PreUpdate 키보드 시스템)를 탄다.
@@ -101,13 +113,7 @@ mod tests {
             (KeyCode::Space, params.emergency_decel_mps2),
         ] {
             let mut app = headless_app();
-            {
-                let state = &mut app.world_mut().resource_mut::<Vehicle>().0;
-                state.apply(VehicleCommand::ToggleEngine).unwrap();
-                state
-                    .apply(VehicleCommand::RequestGear(Gear::Drive))
-                    .unwrap();
-            }
+            engine_on_in_drive(&mut app);
             for _ in 0..64 {
                 update_with_keys(&mut app, &[KeyCode::KeyW]);
             }
@@ -126,5 +132,26 @@ mod tests {
                 assert_eq!(state.engine(), EngineState::EmergencyStop);
             }
         }
+    }
+
+    /// 가속 키를 누른 채 장애물로 달려가면 앱 전체 경로에서 관통 없이 멈추고,
+    /// 밀고 있는 동안에도 교육 기록에는 충돌이 한 번만 남는지 확인한다.
+    #[test]
+    fn collision_stops_vehicle_and_is_recorded_once() {
+        let mut app = headless_app();
+        // 앞범퍼(z=-3.5)에서 4 m 앞에 벽의 앞면(z=-7.5)이 있다.
+        let wall = GroundRect::axis_aligned(Vec2::new(0.0, -8.0), Vec2::new(6.0, 1.0));
+        app.world_mut().spawn(Obstacle(wall));
+        engine_on_in_drive(&mut app);
+        for _ in 0..64 * 6 {
+            update_with_keys(&mut app, &[KeyCode::KeyW]);
+            let motion = app.world().resource::<VehicleMotion>().0;
+            assert!(motion.z_m > -4.0 - 1e-3, "penetrated: z={}", motion.z_m);
+        }
+
+        let world = app.world();
+        assert_eq!(world.resource::<Vehicle>().0.speed_mps(), 0.0);
+        assert!(world.resource::<VehicleContact>().0.touching);
+        assert_eq!(world.resource::<TrainingLog>().collision_count(), 1);
     }
 }

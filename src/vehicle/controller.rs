@@ -2,7 +2,8 @@
 
 use bevy::prelude::*;
 
-use super::dynamics::{self, DynamicsParams, Motion};
+use super::collision::{self, ContactState, GroundRect, Obstacle, VEHICLE_FOOTPRINT};
+use super::dynamics::{DynamicsParams, Motion};
 use super::state::{EngineState, Gear, TransitionOutcome, VehicleCommand, VehicleState};
 use bevy::app::RunFixedMainLoop;
 
@@ -20,6 +21,23 @@ pub struct VehicleMotion(pub Motion);
 /// 운동 모델 파라미터 리소스. 설정 파일에서 읽는다.
 #[derive(Resource, Debug, Clone, Default)]
 pub struct VehicleDynamics(pub DynamicsParams);
+
+/// 차체와 장애물의 접촉 상태 리소스. 충돌 중복 판정과 HUD 접촉 표시에 쓴다.
+#[derive(Resource, Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct VehicleContact(pub ContactState);
+
+/// 차체가 장애물에 실제로 부딪힌(이동이 막힌) 순간의 충돌 메시지. 교육 기록으로 전달한다.
+#[derive(Message, Debug, Clone, Copy, PartialEq)]
+pub struct CollisionEvent {
+    /// 고정 주기 시뮬레이션 경과 시간(s).
+    pub sim_time_s: f32,
+    /// 닿기 직전의 부호 있는 속도(m/s).
+    pub speed_mps: f32,
+    /// 멈춘 자세의 후륜축 중심 x 좌표(m).
+    pub x_m: f32,
+    /// 멈춘 자세의 후륜축 중심 z 좌표(m).
+    pub z_m: f32,
+}
 
 /// 마지막 명령 처리 결과. HUD에 표시한다.
 #[derive(Resource, Debug, Clone, Default, PartialEq, Eq)]
@@ -47,6 +65,8 @@ impl Plugin for VehiclePlugin {
             .init_resource::<VehicleMotion>()
             .init_resource::<VehicleDynamics>()
             .init_resource::<ControlFeedback>()
+            .init_resource::<VehicleContact>()
+            .add_message::<CollisionEvent>()
             .add_systems(RunFixedMainLoop, apply_controls.in_set(SimSet::Control))
             .add_systems(FixedUpdate, step_motion);
     }
@@ -75,14 +95,34 @@ pub fn apply_controls(
     }
 }
 
-/// 고정 시간 간격마다 운동 모델을 한 단계 적분한다.
+/// 고정 시간 간격마다 운동 모델을 한 단계 적분하고, 장애물 관통을 막으며 새 충돌을 알린다.
 pub fn step_motion(
     time: Res<Time>,
     params: Res<VehicleDynamics>,
+    obstacles: Query<&Obstacle>,
     mut vehicle: ResMut<Vehicle>,
     mut motion: ResMut<VehicleMotion>,
+    mut contact: ResMut<VehicleContact>,
+    mut collisions: MessageWriter<CollisionEvent>,
 ) {
-    dynamics::step(&mut vehicle.0, &mut motion.0, &params.0, time.delta_secs());
+    let obstacles: Vec<GroundRect> = obstacles.iter().map(|obstacle| obstacle.0).collect();
+    let impact = collision::step_with_obstacles(
+        &mut vehicle.0,
+        &mut motion.0,
+        &params.0,
+        time.delta_secs(),
+        &VEHICLE_FOOTPRINT,
+        &obstacles,
+        &mut contact.0,
+    );
+    if let Some(impact) = impact {
+        collisions.write(CollisionEvent {
+            sim_time_s: time.elapsed_secs(),
+            speed_mps: impact.speed_mps,
+            x_m: impact.x_m,
+            z_m: impact.z_m,
+        });
+    }
 }
 
 /// 요청 하나를 상태 머신에 적용하고 처리 결과를 만든다.

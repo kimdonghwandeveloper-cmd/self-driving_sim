@@ -5,6 +5,7 @@ use self_driving_sim::{
     config, configure_sim_sets,
     input::InputPlugin,
     scene::ScenePlugin,
+    training::TrainingPlugin,
     ui::HudPlugin,
     vehicle::{Vehicle, VehicleDynamics, VehiclePlugin, VehicleState},
 };
@@ -31,7 +32,13 @@ pub fn run(smoke_test: bool) -> AppExit {
     )))
     .insert_resource(VehicleDynamics(vehicle_config.dynamics))
     .insert_resource(key_bindings)
-    .add_plugins((InputPlugin, VehiclePlugin, ScenePlugin, HudPlugin));
+    .add_plugins((
+        InputPlugin,
+        VehiclePlugin,
+        TrainingPlugin,
+        ScenePlugin,
+        HudPlugin,
+    ));
 
     if smoke_test {
         app.add_systems(Update, finish_smoke_test);

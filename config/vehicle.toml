@@ -22,3 +22,6 @@ emergency_decel_mps2 = 5.0
 wheelbase_m = 2.8
 max_steer_angle_deg = 30.0
 steer_rate_deg_s = 60.0
+# 조향 감도(배율). 조향 입력에 곱한 뒤 최대 입력 범위로 자릅니다.
+# 1.0 = 입력 그대로, 0.5 = 끝까지 꺾어도 최대 조향각의 절반, 2.0 = 입력 절반에서 최대 조향각.
+steer_sensitivity = 1.0
