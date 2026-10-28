@@ -88,23 +88,26 @@ pub fn parse_toml<T: DeserializeOwned>(text: &str) -> Result<T, ConfigError> {
     toml::from_str(text).map_err(ConfigError::Parse)
 }
 
-/// 파일을 읽어 설정 구조로 변환한다. 파일이 없으면 `Ok(None)`.
-fn read_toml<T: DeserializeOwned>(path: &Path) -> Result<Option<T>, ConfigError> {
+/// 파일을 읽어 `parse`로 변환·검증한다. 파일이 없으면 `Ok(None)`.
+fn read_config<T>(
+    path: &Path,
+    parse: fn(&str) -> Result<T, ConfigError>,
+) -> Result<Option<T>, ConfigError> {
     match fs::read_to_string(path) {
-        Ok(text) => parse_toml(&text).map(Some),
+        Ok(text) => parse(&text).map(Some),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(ConfigError::Read(error)),
     }
 }
 
-/// 차량 설정 문자열을 변환하고 검증한다.
+/// 차량 설정 문자열을 변환하고 검증한다. 파일 로더도 이 함수를 쓴다.
 pub fn parse_vehicle_config(text: &str) -> Result<VehicleConfig, ConfigError> {
     let config: VehicleConfig = parse_toml(text)?;
     config.validate().map_err(ConfigError::Invalid)?;
     Ok(config)
 }
 
-/// 입력 설정 문자열을 변환하고 키 매핑을 검증한다.
+/// 입력 설정 문자열을 변환하고 키 매핑을 검증한다. 파일 로더도 이 함수를 쓴다.
 pub fn parse_key_bindings(text: &str) -> Result<KeyBindings, ConfigError> {
     let config: InputConfig = parse_toml(text)?;
     config
@@ -115,24 +118,12 @@ pub fn parse_key_bindings(text: &str) -> Result<KeyBindings, ConfigError> {
 
 /// 차량 설정 파일을 읽는다. 실패하면 경고 후 기본값을 반환한다.
 pub fn load_vehicle_config(path: &Path) -> VehicleConfig {
-    let loaded = read_toml::<VehicleConfig>(path).and_then(|config| {
-        if let Some(config) = &config {
-            config.validate().map_err(ConfigError::Invalid)?;
-        }
-        Ok(config)
-    });
-    finish_load(path, loaded)
+    finish_load(path, read_config(path, parse_vehicle_config))
 }
 
 /// 입력 설정 파일을 읽어 키 매핑을 검증한다. 실패하면 경고 후 기본 매핑을 반환한다.
 pub fn load_key_bindings(path: &Path) -> KeyBindings {
-    let loaded = read_toml::<InputConfig>(path).and_then(|config| {
-        config
-            .map(|config| config.keyboard.resolve())
-            .transpose()
-            .map_err(|error| ConfigError::Invalid(error.to_string()))
-    });
-    finish_load(path, loaded)
+    finish_load(path, read_config(path, parse_key_bindings))
 }
 
 /// 로드 결과를 로그로 남기고, 없거나 실패하면 기본값을 반환한다.

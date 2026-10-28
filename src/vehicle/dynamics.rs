@@ -30,7 +30,7 @@ pub struct DynamicsParams {
     pub max_accel_mps2: f32,
     /// 제동 입력 1.0일 때 감속도(m/s²).
     pub max_brake_decel_mps2: f32,
-    /// 가속 입력이 없을 때(관성 주행·N) 감속도(m/s²).
+    /// 가속 입력이 없을 때(관성 주행·N) 감속도(m/s²). 0이면 감속 없이 관성으로 계속 굴러간다.
     pub coast_decel_mps2: f32,
     /// 비상 정지 중 감속도(m/s²).
     pub emergency_decel_mps2: f32,
@@ -65,14 +65,19 @@ impl Default for DynamicsParams {
 }
 
 impl DynamicsParams {
-    /// 모든 값이 유한한 양수인지, 최대 조향각이 상한 이하인지 검사한다.
+    /// 모든 값이 유한한 양수인지(관성 감속만 0 허용), 최대 조향각이 상한 이하인지 검사한다.
     pub fn validate(&self) -> Result<(), String> {
+        if !(self.coast_decel_mps2.is_finite() && self.coast_decel_mps2 >= 0.0) {
+            return Err(format!(
+                "dynamics.coast_decel_mps2 must be zero or a positive number, got {}",
+                self.coast_decel_mps2
+            ));
+        }
         for (name, value) in [
             ("max_forward_speed_mps", self.max_forward_speed_mps),
             ("max_reverse_speed_mps", self.max_reverse_speed_mps),
             ("max_accel_mps2", self.max_accel_mps2),
             ("max_brake_decel_mps2", self.max_brake_decel_mps2),
-            ("coast_decel_mps2", self.coast_decel_mps2),
             ("emergency_decel_mps2", self.emergency_decel_mps2),
             ("wheelbase_m", self.wheelbase_m),
             ("max_steer_angle_deg", self.max_steer_angle_deg),
@@ -463,9 +468,35 @@ mod tests {
                 steer_sensitivity: 0.0,
                 ..DynamicsParams::default()
             },
+            DynamicsParams {
+                coast_decel_mps2: -0.1,
+                ..DynamicsParams::default()
+            },
         ] {
             assert!(params.validate().is_err(), "{params:?}");
         }
+    }
+
+    /// 관성 감속 0은 허용되고, N에서 속도를 줄이지 않고 계속 굴러가는지 확인한다.
+    #[test]
+    fn zero_coast_decel_keeps_rolling_in_neutral() {
+        let params = DynamicsParams {
+            coast_decel_mps2: 0.0,
+            ..DynamicsParams::default()
+        };
+        assert!(params.validate().is_ok());
+        let mut state = ready_in(Gear::Drive);
+        state.set_speed_mps(2.0);
+        state
+            .apply(VehicleCommand::RequestGear(Gear::Neutral))
+            .unwrap();
+        state.set_input(input(0.0, 0.0, 0.0));
+        let mut motion = Motion::default();
+        for _ in 0..128 {
+            step(&mut state, &mut motion, &params, DT);
+        }
+        assert_eq!(state.speed_mps(), 2.0);
+        assert!((-motion.z_m - 4.0).abs() < 1e-3, "z={}", motion.z_m);
     }
 
     /// 각도 정규화가 -π..=π 범위를 유지하는지 확인한다.

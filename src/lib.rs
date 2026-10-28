@@ -101,6 +101,107 @@ mod tests {
         app.update();
     }
 
+    /// `keys`를 누른 채 가상 시간이 `until`(시작부터 누적)에 이를 때까지 앱을 갱신한다.
+    ///
+    /// 렌더 프레임 간격은 `frames`를 순서대로 반복해 쓰고, 마지막 프레임은 `until`에 딱 맞게 자른다.
+    /// 한 프레임 간격이 고정 주기(1/64 s)보다 길면 그 프레임에 고정 단계가 여러 번 몰린다.
+    fn run_frames_until(app: &mut App, keys: &[KeyCode], until: Duration, frames: &[Duration]) {
+        for frame in frames.iter().cycle() {
+            let elapsed = app.world().resource::<Time<Virtual>>().elapsed();
+            if elapsed >= until {
+                break;
+            }
+            let delta = (*frame).min(until - elapsed);
+            app.insert_resource(TimeUpdateStrategy::ManualDuration(delta));
+            update_with_keys(app, keys);
+        }
+    }
+
+    /// 렌더 프레임 간격이 30 Hz·144 Hz·불규칙(고정 단계 몰림 포함)으로 달라도,
+    /// 입력→명령→고정 주기 운동 계산 전체 경로의 주행 결과가 같은지 확인한다.
+    #[test]
+    fn app_result_is_independent_of_frame_rate() {
+        let ms = |value: f64| Duration::from_secs_f64(value / 1000.0);
+        let patterns: [Vec<Duration>; 4] = [
+            vec![ms(1000.0 / 30.0)],
+            vec![ms(1000.0 / 144.0)],
+            vec![ms(7.0), ms(23.0), ms(3.0), ms(41.0)],
+            // 짧은 프레임 사이에 200 ms 멈춤: 한 프레임에 고정 단계 12~13번이 몰린다.
+            vec![ms(1000.0 / 144.0), ms(1000.0 / 144.0), ms(200.0)],
+        ];
+        let drive = |frames: &[Duration]| {
+            let mut app = headless_app();
+            engine_on_in_drive(&mut app);
+            let seconds = |value: u64| Duration::from_secs(value);
+            run_frames_until(
+                &mut app,
+                &[KeyCode::KeyW, KeyCode::KeyD],
+                seconds(3),
+                frames,
+            );
+            run_frames_until(&mut app, &[KeyCode::KeyW], seconds(5), frames);
+            run_frames_until(&mut app, &[KeyCode::KeyS], seconds(7), frames);
+            let world = app.world();
+            let motion = world.resource::<VehicleMotion>().0;
+            let fixed_steps = world.resource::<Time<Fixed>>().elapsed().as_secs_f64() * 64.0;
+            (
+                motion.x_m,
+                motion.z_m,
+                motion.heading_rad,
+                world.resource::<Vehicle>().0.speed_mps(),
+                fixed_steps.round() as u32,
+            )
+        };
+        let reference = drive(&patterns[0]);
+        assert_eq!(reference.4, 64 * 7);
+        assert!(reference.2.abs() > 0.1, "should have turned: {reference:?}");
+        assert!(
+            reference.1 < -5.0,
+            "should have moved forward: {reference:?}"
+        );
+        for frames in &patterns[1..] {
+            let result = drive(frames);
+            assert_eq!(
+                result.4, reference.4,
+                "fixed step count differs for {frames:?}"
+            );
+            for (got, want) in [
+                (result.0, reference.0),
+                (result.1, reference.1),
+                (result.2, reference.2),
+                (result.3, reference.3),
+            ] {
+                assert!(
+                    (got - want).abs() < 1e-4,
+                    "{frames:?}: {result:?} vs {reference:?}"
+                );
+            }
+        }
+    }
+
+    /// 같은 렌더 프레임 간격·입력 순서로 앱 전체를 두 번 돌리면 결과가 정확히 같은지 확인한다.
+    #[test]
+    fn app_replay_is_deterministic() {
+        let frames = [Duration::from_millis(9), Duration::from_millis(31)];
+        let replay = || {
+            let mut app = headless_app();
+            engine_on_in_drive(&mut app);
+            run_frames_until(
+                &mut app,
+                &[KeyCode::KeyW, KeyCode::KeyA],
+                Duration::from_secs(2),
+                &frames,
+            );
+            run_frames_until(&mut app, &[KeyCode::KeyS], Duration::from_secs(4), &frames);
+            let world = app.world();
+            (
+                world.resource::<Vehicle>().0.clone(),
+                world.resource::<VehicleMotion>().0,
+            )
+        };
+        assert_eq!(replay(), replay());
+    }
+
     /// 가속 키를 누른 채 제동·비상 정지 키를 누르면, 그 프레임의 운동 계산부터 해당 감속이 적용되는지 확인한다.
     ///
     /// 가속 키를 계속 누르고 있으므로 입력·명령이 한 프레임 늦으면 속도가 오히려 오른다.

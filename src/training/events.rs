@@ -22,11 +22,16 @@ pub enum TrainingEvent {
 #[derive(Resource, Debug, Clone, Default, PartialEq)]
 pub struct TrainingLog {
     events: Vec<TrainingEvent>,
+    /// 누적 충돌 횟수. HUD가 매 프레임 조회하므로 기록할 때 갱신해 둔다.
+    collisions: usize,
 }
 
 impl TrainingLog {
     /// 이벤트를 기록 끝에 추가한다.
     pub fn push(&mut self, event: TrainingEvent) {
+        if matches!(event, TrainingEvent::Collision { .. }) {
+            self.collisions += 1;
+        }
         self.events.push(event);
     }
 
@@ -35,12 +40,9 @@ impl TrainingLog {
         &self.events
     }
 
-    /// 기록된 충돌 횟수를 센다.
+    /// 기록된 충돌 횟수를 반환한다. 기록 전체를 다시 세지 않는다.
     pub fn collision_count(&self) -> usize {
-        self.events
-            .iter()
-            .filter(|event| matches!(event, TrainingEvent::Collision { .. }))
-            .count()
+        self.collisions
     }
 }
 
