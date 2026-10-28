@@ -1,5 +1,6 @@
 //! 상태 머신과 Bevy 앱을 연결하는 차량 컨트롤러.
 
+use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 
 use super::collision::{self, ContactState, GroundRect, Obstacle, VEHICLE_FOOTPRINT};
@@ -95,24 +96,40 @@ pub fn apply_controls(
     }
 }
 
+/// 장면의 고정 장애물 목록. 시스템 전용 버퍼를 재사용해 고정 단계마다 새로 할당하지 않는다.
+#[derive(SystemParam)]
+pub struct ObstacleSet<'w, 's> {
+    query: Query<'w, 's, &'static Obstacle>,
+    buffer: Local<'s, Vec<GroundRect>>,
+}
+
+impl ObstacleSet<'_, '_> {
+    /// 현재 장애물 영역을 버퍼에 다시 채워 반환한다. 버퍼 용량은 유지된다.
+    fn rects(&mut self) -> &[GroundRect] {
+        self.buffer.clear();
+        self.buffer
+            .extend(self.query.iter().map(|obstacle| obstacle.0));
+        &self.buffer
+    }
+}
+
 /// 고정 시간 간격마다 운동 모델을 한 단계 적분하고, 장애물 관통을 막으며 새 충돌을 알린다.
 pub fn step_motion(
     time: Res<Time>,
     params: Res<VehicleDynamics>,
-    obstacles: Query<&Obstacle>,
+    mut obstacles: ObstacleSet,
     mut vehicle: ResMut<Vehicle>,
     mut motion: ResMut<VehicleMotion>,
     mut contact: ResMut<VehicleContact>,
     mut collisions: MessageWriter<CollisionEvent>,
 ) {
-    let obstacles: Vec<GroundRect> = obstacles.iter().map(|obstacle| obstacle.0).collect();
     let impact = collision::step_with_obstacles(
         &mut vehicle.0,
         &mut motion.0,
         &params.0,
         time.delta_secs(),
         &VEHICLE_FOOTPRINT,
-        &obstacles,
+        obstacles.rects(),
         &mut contact.0,
     );
     if let Some(impact) = impact {
