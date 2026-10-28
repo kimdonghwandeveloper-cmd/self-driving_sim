@@ -651,9 +651,10 @@ mod tests {
     /// 한 장애물과 겹친 채 시작해도 다른 장애물은 평소처럼 막는지 확인한다.
     #[test]
     fn starting_overlap_still_blocks_other_obstacles() {
-        // 차체 한가운데에 상자가 겹쳐 있고, 앞범퍼(z=-3.5)에서 6 m 앞에 벽의 앞면(z=-9.5)이 있다.
+        // 차체 한가운데를 지나는 긴 띠(z 5..-25)와 계속 겹친 채로, 앞범퍼(z=-3.5)에서 6 m 앞의
+        // 벽 앞면(z=-9.5)에 닿는다. 띠와의 겹침 깊이는 전진해도 그대로다.
         let obstacles = [
-            GroundRect::axis_aligned(Vec2::new(0.0, -1.4), Vec2::new(1.0, 1.0)),
+            GroundRect::axis_aligned(Vec2::new(0.0, -10.0), Vec2::new(1.0, 30.0)),
             GroundRect::axis_aligned(Vec2::new(0.0, -10.0), Vec2::new(6.0, 1.0)),
         ];
         let mut state = ready_in(Gear::Drive);
