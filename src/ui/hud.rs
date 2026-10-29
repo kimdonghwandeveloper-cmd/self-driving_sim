@@ -5,10 +5,13 @@ use std::fmt::{self, Write};
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 
+use crate::calibration::{ActiveTrial, CalibrationLog, CalibrationReadout};
 use crate::input::KeyBindings;
 use crate::input::mapping::KeyAction;
 use crate::training::TrainingLog;
-use crate::vehicle::controller::{ControlFeedback, Vehicle, engine_label, gear_label};
+use crate::vehicle::controller::{
+    ControlFeedback, Vehicle, VehicleDynamics, engine_label, gear_label,
+};
 use crate::vehicle::{Gear, Motion, VehicleContact, VehicleMotion, VehicleState};
 
 /// HUD 텍스트 엔티티 표시용 마커.
@@ -68,12 +71,28 @@ pub struct HudCache {
     buffer: String,
 }
 
+/// HUD가 보정 표시값을 만들 때 읽는 리소스 묶음.
+#[derive(SystemParam)]
+pub struct CalibrationSources<'w> {
+    dynamics: Res<'w, VehicleDynamics>,
+    log: Res<'w, CalibrationLog>,
+}
+
+impl CalibrationSources<'_> {
+    /// 현재 상태·자세로 회전반경·정지거리·시험 결과 표시값을 만든다.
+    fn readout(&self, state: &VehicleState, motion: &Motion) -> CalibrationReadout {
+        CalibrationReadout::new(state, motion, &self.dynamics.0, &self.log)
+    }
+}
+
 /// 매 프레임 HUD 텍스트를 현재 상태로 갱신한다. 내용이 같으면 텍스트를 건드리지 않는다.
+#[allow(clippy::too_many_arguments)]
 pub fn update_hud(
     vehicle: Res<Vehicle>,
     motion: Res<VehicleMotion>,
     feedback: Res<ControlFeedback>,
     collision: CollisionSources,
+    calibration: CalibrationSources,
     bindings: Res<KeyBindings>,
     mut cache: Local<HudCache>,
     mut query: Query<&mut Text, With<VehicleHud>>,
@@ -87,6 +106,7 @@ pub fn update_hud(
         &vehicle.0,
         &motion.0,
         collision.status(),
+        &calibration.readout(&vehicle.0, &motion.0),
         &feedback,
         &cache.key_guide,
     );
@@ -102,6 +122,7 @@ pub fn hud_text(
     state: &VehicleState,
     motion: &Motion,
     collision: CollisionStatus,
+    calibration: &CalibrationReadout,
     feedback: &ControlFeedback,
     bindings: &KeyBindings,
 ) -> String {
@@ -111,23 +132,27 @@ pub fn hud_text(
         state,
         motion,
         collision,
+        calibration,
         feedback,
         &key_guide_text(bindings),
     );
     out
 }
 
-/// `out`을 비우고 상태 줄과 키 안내를 이어 쓴다.
+/// `out`을 비우고 상태 줄, 보정 측정 줄, 키 안내를 이어 쓴다.
 fn write_hud(
     out: &mut String,
     state: &VehicleState,
     motion: &Motion,
     collision: CollisionStatus,
+    calibration: &CalibrationReadout,
     feedback: &ControlFeedback,
     key_guide: &str,
 ) {
     out.clear();
     write_status(out, state, motion, collision, feedback).expect("writing to a String cannot fail");
+    out.push_str("\n\n");
+    write_calibration(out, calibration).expect("writing to a String cannot fail");
     out.push_str("\n\n");
     out.push_str(key_guide);
 }
@@ -197,6 +222,60 @@ fn write_status(
     }
 }
 
+/// 회전반경·예상 정지거리·진행 중 시험·마지막 시험 결과 줄을 쓴다. 모두 시뮬레이터 임시값 기준이다.
+fn write_calibration(out: &mut String, calibration: &CalibrationReadout) -> fmt::Result {
+    match calibration.turn_radius_m {
+        Some(radius) => write!(out, "Turn radius (rear axle): {radius:.2} m")?,
+        None => write!(out, "Turn radius (rear axle): straight")?,
+    }
+    writeln!(
+        out,
+        "   Min at full lock: {:.2} m",
+        calibration.min_turn_radius_m
+    )?;
+    writeln!(
+        out,
+        "Full-brake stop estimate: {:.2} m",
+        calibration.brake_estimate_m
+    )?;
+    match calibration.active {
+        Some(ActiveTrial::Braking { distance_m, time_s }) => {
+            writeln!(out, "Test: braking {distance_m:.2} m / {time_s:.2} s")?;
+        }
+        Some(ActiveTrial::Accelerating { distance_m, time_s }) => {
+            writeln!(out, "Test: accelerating {distance_m:.2} m / {time_s:.2} s")?;
+        }
+        None => writeln!(out, "Test: -")?,
+    }
+    let (stops, accels) = calibration.trials;
+    match calibration.last_stop {
+        Some(stop) => writeln!(
+            out,
+            "Last stop #{stops}: {:.2} m from {:.2} m/s in {:.2} s ({})",
+            stop.distance_m,
+            stop.from_speed_mps,
+            stop.time_s,
+            if stop.emergency { "e-stop" } else { "brake" }
+        )?,
+        None => writeln!(out, "Last stop: -")?,
+    }
+    match calibration.last_accel {
+        Some(accel) => write!(
+            out,
+            "Last accel #{accels}: 0 -> {:.2} m/s in {:.2} s, {:.2} m ({})",
+            accel.to_speed_mps,
+            accel.time_s,
+            accel.distance_m,
+            if accel.reached_limit {
+                "top speed"
+            } else {
+                "released"
+            }
+        ),
+        None => write!(out, "Last accel: -"),
+    }
+}
+
 /// 키 매핑으로 HUD 아래쪽 키 안내 세 줄을 만든다.
 pub fn key_guide_text(bindings: &KeyBindings) -> String {
     let key = |action| bindings.label(action);
@@ -216,10 +295,11 @@ pub fn key_guide_text(bindings: &KeyBindings) -> String {
             key(KeyAction::Gear(Gear::Drive))
         ),
         format!(
-            "      engine {} | e-stop {} | release {}",
+            "      engine {} | e-stop {} | release {} | reset to start {}",
             key(KeyAction::EngineToggle),
             key(KeyAction::EmergencyStop),
-            key(KeyAction::EmergencyRelease)
+            key(KeyAction::EmergencyRelease),
+            key(KeyAction::ResetCourse)
         ),
     ]
     .join("\n")
@@ -244,6 +324,7 @@ mod tests {
             &state,
             &Motion::default(),
             CollisionStatus::default(),
+            &CalibrationReadout::default(),
             &feedback,
             &KeyBindings::default(),
         );
@@ -262,6 +343,7 @@ mod tests {
             &state,
             &Motion::default(),
             CollisionStatus::default(),
+            &CalibrationReadout::default(),
             &ControlFeedback::default(),
             &KeyBindings::default(),
         );
@@ -278,9 +360,63 @@ mod tests {
                 touching: true,
                 collisions: 2,
             },
+            &CalibrationReadout::default(),
             &ControlFeedback::default(),
             &KeyBindings::default(),
         );
         assert!(text.contains("Obstacle contact: YES   Collisions: 2"));
+    }
+
+    /// 회전반경·예상 정지거리·시험 결과와 복귀 키 안내를 표시하는지 확인한다.
+    #[test]
+    fn hud_shows_calibration_readout() {
+        use crate::calibration::{AccelResult, StopResult};
+        let readout = CalibrationReadout {
+            turn_radius_m: Some(9.5),
+            min_turn_radius_m: 4.85,
+            brake_estimate_m: 1.25,
+            active: Some(ActiveTrial::Braking {
+                distance_m: 0.5,
+                time_s: 0.25,
+            }),
+            last_stop: Some(StopResult {
+                from_speed_mps: 4.0,
+                distance_m: 2.42,
+                time_s: 1.21,
+                emergency: false,
+            }),
+            last_accel: Some(AccelResult {
+                to_speed_mps: 5.0,
+                distance_m: 12.54,
+                time_s: 5.0,
+                reached_limit: true,
+            }),
+            trials: (3, 1),
+        };
+        let text = hud_text(
+            &VehicleState::default(),
+            &Motion::default(),
+            CollisionStatus::default(),
+            &readout,
+            &ControlFeedback::default(),
+            &KeyBindings::default(),
+        );
+        assert!(text.contains("Turn radius (rear axle): 9.50 m   Min at full lock: 4.85 m"));
+        assert!(text.contains("Full-brake stop estimate: 1.25 m"));
+        assert!(text.contains("Test: braking 0.50 m / 0.25 s"));
+        assert!(text.contains("Last stop #3: 2.42 m from 4.00 m/s in 1.21 s (brake)"));
+        assert!(text.contains("Last accel #1: 0 -> 5.00 m/s in 5.00 s, 12.54 m (top speed)"));
+        assert!(text.contains("reset to start KeyR"));
+
+        let straight = hud_text(
+            &VehicleState::default(),
+            &Motion::default(),
+            CollisionStatus::default(),
+            &CalibrationReadout::default(),
+            &ControlFeedback::default(),
+            &KeyBindings::default(),
+        );
+        assert!(straight.contains("Turn radius (rear axle): straight"));
+        assert!(straight.contains("Last stop: -"));
     }
 }
