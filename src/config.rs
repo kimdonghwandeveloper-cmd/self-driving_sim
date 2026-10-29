@@ -148,6 +148,7 @@ fn finish_load<T: Default>(path: &Path, loaded: Result<Option<T>, ConfigError>) 
 mod tests {
     use super::*;
     use crate::input::mapping::KeyAction;
+    use crate::vehicle::dynamics::SteerReturn;
 
     /// 저장소의 설정 파일 경로를 만든다.
     fn repo_file(relative: &str) -> std::path::PathBuf {
@@ -196,6 +197,19 @@ mod tests {
 
         let result = parse_vehicle_config("[dynamics]\nmax_brake_decel_mps2 = -1.0\n");
         assert!(matches!(result, Err(ConfigError::Invalid(_))));
+    }
+
+    /// 조향 중립 복귀 방식을 `auto`/`hold` 문자열로 읽고, 그 밖의 값은 파싱 오류로 거부하는지 확인한다.
+    #[test]
+    fn steer_return_mode_is_parsed() {
+        assert_eq!(
+            VehicleConfig::default().dynamics.steer_return,
+            SteerReturn::Auto
+        );
+        let config = parse_vehicle_config("[dynamics]\nsteer_return = \"hold\"\n").unwrap();
+        assert_eq!(config.dynamics.steer_return, SteerReturn::Hold);
+        let result = parse_vehicle_config("[dynamics]\nsteer_return = \"center\"\n");
+        assert!(matches!(result, Err(ConfigError::Parse(_))));
     }
 
     /// 오타 등 알 수 없는 필드를 파싱 오류로 거부하는지 확인한다.

@@ -18,6 +18,20 @@ const REST_SPEED_MPS: f32 = 1.0e-3;
 /// 최대 조향각 허용 상한(도). 90도에 가까우면 tan이 발산한다.
 const MAX_STEER_ANGLE_LIMIT_DEG: f32 = 60.0;
 
+/// 조향 입력이 중립(0)일 때 바퀴 조향각 처리 방식. 실차 동작 미확정이라 설정으로 고른다.
+///
+/// 조향 입력이 있는 동안에는 방식과 관계없이 입력 위치가 목표 조향각이다. 따라서 `Hold`에서 반대쪽
+/// 입력을 주면 바퀴는 가운데에서 멈추지 않고 반대쪽 목표 각도까지 움직인다.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SteerReturn {
+    /// 입력을 놓으면 `steer_return_rate_deg_s` 속도로 0도로 돌아간다(기본값, 기존 동작).
+    #[default]
+    Auto,
+    /// 입력을 놓으면 현재 바퀴 각도를 유지한다.
+    Hold,
+}
+
 /// `config/vehicle.toml`의 `[dynamics]` 구역. 운동 모델 파라미터.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -47,6 +61,10 @@ pub struct DynamicsParams {
     /// 1.0이면 입력 그대로, 1보다 작으면 최대 입력에서도 최대 조향각보다 덜 꺾이고,
     /// 1보다 크면 작은 입력으로 최대 조향각에 먼저 도달한다.
     pub steer_sensitivity: f32,
+    /// 조향 입력이 중립일 때 처리 방식(`"auto"` 또는 `"hold"`).
+    pub steer_return: SteerReturn,
+    /// `auto`에서 입력을 놓았을 때 0도로 돌아가는 속도(도/s). `hold`에서는 쓰지 않는다.
+    pub steer_return_rate_deg_s: f32,
 }
 
 impl Default for DynamicsParams {
@@ -63,6 +81,8 @@ impl Default for DynamicsParams {
             max_steer_angle_deg: 30.0,
             steer_rate_deg_s: 60.0,
             steer_sensitivity: 1.0,
+            steer_return: SteerReturn::Auto,
+            steer_return_rate_deg_s: 60.0,
         }
     }
 }
@@ -86,6 +106,7 @@ impl DynamicsParams {
             ("max_steer_angle_deg", self.max_steer_angle_deg),
             ("steer_rate_deg_s", self.steer_rate_deg_s),
             ("steer_sensitivity", self.steer_sensitivity),
+            ("steer_return_rate_deg_s", self.steer_return_rate_deg_s),
         ] {
             if !(value.is_finite() && value > 0.0) {
                 return Err(format!(
@@ -139,10 +160,12 @@ pub fn step(state: &mut VehicleState, motion: &mut Motion, params: &DynamicsPara
     motion.accel_mps2 = (next_speed - speed) / dt;
     state.set_speed_mps(next_speed);
 
-    let target =
-        steering_command(state.input().steering, params) * params.max_steer_angle_deg.to_radians();
-    let max_change = params.steer_rate_deg_s.to_radians() * dt;
-    motion.steer_angle_rad += (target - motion.steer_angle_rad).clamp(-max_change, max_change);
+    if let Some((target, rate_deg_s)) =
+        steer_target(state.input().steering, motion.steer_angle_rad, params)
+    {
+        let max_change = rate_deg_s.to_radians() * dt;
+        motion.steer_angle_rad += (target - motion.steer_angle_rad).clamp(-max_change, max_change);
+    }
 
     // 우조향(양수)이면 전진 시 heading이 줄어든다. 후진이면 속도 부호로 회전 방향이 자동으로 바뀐다.
     let yaw_rate = -next_speed * motion.steer_angle_rad.tan() / params.wheelbase_m;
@@ -155,6 +178,24 @@ pub fn step(state: &mut VehicleState, motion: &mut Motion, params: &DynamicsPara
 /// 조향 입력(-1..=1)에 조향 감도를 곱해 -1..=1 범위의 조향 지령으로 바꾼다.
 fn steering_command(steering: f32, params: &DynamicsParams) -> f32 {
     (steering * params.steer_sensitivity).clamp(-1.0, 1.0)
+}
+
+/// 이번 단계의 목표 바퀴 조향각(rad)과 그쪽으로 움직이는 속도(도/s)를 정한다.
+///
+/// 입력이 있으면 입력 위치의 목표 각도로 `steer_rate_deg_s` 속도로 움직인다. 입력이 중립이면
+/// `auto`는 0도로 `steer_return_rate_deg_s` 속도로 돌아가고, `hold`는 각도를 바꾸지 않는다(`None`).
+fn steer_target(steering: f32, current_rad: f32, params: &DynamicsParams) -> Option<(f32, f32)> {
+    let command = steering_command(steering, params);
+    if command != 0.0 {
+        return Some((
+            command * params.max_steer_angle_deg.to_radians(),
+            params.steer_rate_deg_s,
+        ));
+    }
+    match params.steer_return {
+        SteerReturn::Auto if current_rad != 0.0 => Some((0.0, params.steer_return_rate_deg_s)),
+        SteerReturn::Auto | SteerReturn::Hold => None,
+    }
 }
 
 /// 다음 단계의 부호 있는 속도를 계산한다.
@@ -440,6 +481,63 @@ mod tests {
         assert!((settled_angle(2.0, 1.0) - max).abs() < 1e-5);
     }
 
+    /// `auto`에서 입력을 놓으면 조향 속도와 별개인 복귀 속도로 0도까지 돌아가는지 확인한다.
+    #[test]
+    fn auto_return_uses_separate_return_rate() {
+        let params = DynamicsParams {
+            steer_return_rate_deg_s: 120.0,
+            ..DynamicsParams::default()
+        };
+        let max_deg = params.max_steer_angle_deg;
+        let mut state = ready_in(Gear::Drive);
+        let mut motion = Motion::default();
+        let hold_input = |state: &mut VehicleState, motion: &mut Motion, steering, steps| {
+            state.set_input(input(0.0, 0.0, steering));
+            for _ in 0..steps {
+                step(state, motion, &params, DT);
+            }
+        };
+        hold_input(&mut state, &mut motion, 1.0, 64);
+        assert!((motion.steer_angle_rad - max_deg.to_radians()).abs() < 1e-5);
+
+        // 0.125초 동안 120도/s로 15도 돌아온다(조향 속도 60도/s였다면 7.5도).
+        hold_input(&mut state, &mut motion, 0.0, 8);
+        assert!(
+            (motion.steer_angle_rad - (max_deg - 15.0).to_radians()).abs() < 1e-4,
+            "{}",
+            motion.steer_angle_rad.to_degrees()
+        );
+        hold_input(&mut state, &mut motion, 0.0, 64);
+        assert_eq!(motion.steer_angle_rad, 0.0);
+    }
+
+    /// `hold`에서 입력을 놓으면 각도를 유지하고, 반대 입력은 반대쪽 목표 각도까지 움직이는지 확인한다.
+    #[test]
+    fn hold_keeps_angle_until_new_input() {
+        let params = DynamicsParams {
+            steer_return: SteerReturn::Hold,
+            ..DynamicsParams::default()
+        };
+        let max = params.max_steer_angle_deg.to_radians();
+        let mut state = ready_in(Gear::Drive);
+        let mut motion = Motion::default();
+        let hold_input = |state: &mut VehicleState, motion: &mut Motion, steering, steps| {
+            state.set_input(input(0.0, 0.0, steering));
+            for _ in 0..steps {
+                step(state, motion, &params, DT);
+            }
+        };
+        // 0.25초 우조향하면 15도에서 놓는다.
+        hold_input(&mut state, &mut motion, 1.0, 16);
+        let held = motion.steer_angle_rad;
+        assert!((held - 15f32.to_radians()).abs() < 1e-4);
+        hold_input(&mut state, &mut motion, 0.0, 128);
+        assert_eq!(motion.steer_angle_rad, held);
+
+        hold_input(&mut state, &mut motion, -1.0, 128);
+        assert!((motion.steer_angle_rad + max).abs() < 1e-5);
+    }
+
     /// 시간 간격이 달라도 같은 시간 동안의 주행 거리가 거의 같은지 확인한다.
     #[test]
     fn distance_is_independent_of_timestep() {
@@ -506,6 +604,10 @@ mod tests {
             },
             DynamicsParams {
                 coast_decel_mps2: -0.1,
+                ..DynamicsParams::default()
+            },
+            DynamicsParams {
+                steer_return_rate_deg_s: 0.0,
                 ..DynamicsParams::default()
             },
         ] {
