@@ -2,6 +2,8 @@
 //!
 //! 저속 셔틀이므로 높이는 무시하고, 지면(x, z) 위의 회전된 직사각형끼리 분리축 판정(SAT)을 한다.
 //! 운동 모델이 한 단계 움직인 경로를 잘게 나눠 검사하고, 장애물에 닿으면 닿기 직전 자세에서 세운다.
+//! 검사 지점 사이 구간은 "차체 위 어느 점도 장애물까지 거리보다 많이 움직이지 않았는지"로 보수적으로
+//! 확인하고, 확인되지 않으면 구간을 더 나눈다. 회전 중 모서리가 검사 지점 사이에서만 스치는 경우도 잡는다.
 //! 미끄러지며 벽을 따라가는 처리는 하지 않는다(접촉하면 정지).
 //! 차체 크기와 후륜축 위치는 실차 치수를 확인하지 않은 **시뮬레이터 임시값**이다.
 
@@ -11,10 +13,13 @@ use bevy::prelude::Component;
 use super::dynamics::{self, DynamicsParams, Motion, wrap_angle};
 use super::state::VehicleState;
 
-/// 경로 검사 간격(m). 장애물은 이보다 두껍게 둔다(더 얇으면 사이를 건너뛸 수 있다).
+/// 경로 기본 검사 간격(m, 차체 위 점이 움직이는 최대 거리 기준). 구간 안은 보수 검사로 다시 확인한다.
 const MAX_SAMPLE_STEP_M: f32 = 0.05;
-/// 닿는 지점을 좁히는 이분 탐색 횟수. 검사 간격 0.05 m 기준 오차는 약 0.01 mm다.
-const BISECTION_STEPS: u32 = 12;
+/// 보수 검사로 더 나누지 않는 최소 구간(m). 이보다 짧은 구간은 양 끝 검사만 믿으므로,
+/// 놓칠 수 있는 겹침은 이 값의 절반(0.05 mm) 이하다.
+const MIN_CERTIFY_SPAN_M: f32 = 1e-4;
+/// 닿는 지점을 좁히는 정밀도(m). 멈춘 자세는 실제 접촉 지점보다 이 거리 안쪽(닿기 전)이다.
+const BOUNDARY_RESOLUTION_M: f32 = 1e-5;
 /// 차체와 장애물 사이가 이 거리(m) 안이면 접촉으로 본다.
 pub const CONTACT_MARGIN_M: f32 = 0.02;
 
@@ -52,22 +57,23 @@ impl GroundRect {
         [Vec2::new(cos, -sin), Vec2::new(-sin, -cos)]
     }
 
-    /// 단위 벡터 `axis` 위에 투영했을 때 중심에서 가장자리까지의 길이를 구한다.
-    fn projected_radius(&self, axis: Vec2) -> f32 {
-        let [right, forward] = self.axes();
+    /// 미리 구한 단위 벡터 `axes`로, 축 `axis` 위에 투영했을 때 중심에서 가장자리까지의 길이를 구한다.
+    fn projected_radius(&self, [right, forward]: [Vec2; 2], axis: Vec2) -> f32 {
         self.half_size.x * right.dot(axis).abs() + self.half_size.y * forward.dot(axis).abs()
     }
 
     /// 두 직사각형의 겹침 깊이(m)를 분리축 판정으로 구한다.
     ///
     /// 네 분리축 중 가장 얕게 겹친 축의 겹침 길이다. 양수면 겹치고, 0 이하면 그만큼 떨어져 있다.
+    /// 떨어져 있을 때 `-penetration`은 실제 최단 거리 이하다(축에 투영하면 거리가 줄기만 한다).
     pub fn penetration(&self, other: &GroundRect) -> f32 {
         let offset = other.center - self.center;
-        self.axes()
-            .into_iter()
-            .chain(other.axes())
+        let (own, others) = (self.axes(), other.axes());
+        own.into_iter()
+            .chain(others)
             .map(|axis| {
-                self.projected_radius(axis) + other.projected_radius(axis) - offset.dot(axis).abs()
+                self.projected_radius(own, axis) + other.projected_radius(others, axis)
+                    - offset.dot(axis).abs()
             })
             .fold(f32::INFINITY, f32::min)
     }
@@ -122,17 +128,26 @@ pub struct Obstacle(pub GroundRect);
 pub struct Sweep {
     /// 장애물에 닿지 않고 갈 수 있는 이동 비율(0..=1).
     pub fraction: f32,
-    /// 장애물에 막혀 이동을 잘랐는지.
-    pub blocked: bool,
+    /// 이동을 막은 장애물의 번호(`obstacles` 순서). 막히지 않았으면 `None`.
+    pub blocked_by: Option<usize>,
+}
+
+impl Sweep {
+    /// 장애물에 막혀 이동을 잘랐는지 반환한다.
+    pub fn blocked(&self) -> bool {
+        self.blocked_by.is_some()
+    }
 }
 
 /// 차체와 장애물의 접촉 상태. 단계마다 [`step_with_obstacles`]가 갱신한다.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ContactState {
     /// 장애물과 접촉 거리([`CONTACT_MARGIN_M`]) 안에 있는지. HUD 표시용이며 충돌 기록 기준이 아니다.
     pub touching: bool,
-    /// 이번 접촉 동안 이미 충돌(이동 막힘)을 보고했는지. 접촉이 풀리면 거짓으로 돌아간다.
-    pub impact_reported: bool,
+    /// 현재 접촉 중이며 이미 충돌을 보고한 장애물 번호(`obstacles` 순서).
+    /// 그 장애물의 접촉 거리 밖으로 벗어나면 빠지므로, 다른 장애물 옆에 붙어 있어도 재충돌을 놓치지 않는다.
+    /// 장애물 목록의 순서는 단계마다 같다고 가정한다.
+    pub reported: Vec<usize>,
 }
 
 /// 장애물에 실제로 부딪힌(이동이 막힌) 순간의 정보.
@@ -171,53 +186,168 @@ pub fn in_contact(footprint: &Footprint, motion: &Motion, obstacles: &[GroundRec
     hits_any(footprint, motion, obstacles, CONTACT_MARGIN_M)
 }
 
+/// 경로 위 한 자세의 검사 결과.
+#[derive(Debug, Clone, Copy)]
+struct Probe {
+    /// 이 자세에서 막는 장애물 번호. 없으면 `None`.
+    hit: Option<usize>,
+    /// 출발 때 겹치지 않았던 장애물까지의 최소 분리 거리 하한(m). 그런 장애물이 없으면 무한대.
+    gap: f32,
+}
+
+/// 한 단계 경로(`from`→`to` 보간) 검사기. 출발 자세의 겹침 정보는 만들 때 한 번만 구한다.
+struct PathCheck<'a> {
+    footprint: &'a Footprint,
+    from: &'a Motion,
+    to: &'a Motion,
+    obstacles: &'a [GroundRect],
+    /// 출발 자세에서 이미 겹친 장애물의 (번호, 출발 겹침 깊이). 보통 비어 있어 할당하지 않는다.
+    start_overlaps: Vec<(usize, f32)>,
+    /// 비율 0→1 동안 차체 위 어느 점이든 움직이는 거리의 상한(m).
+    travel_m: f32,
+}
+
+impl<'a> PathCheck<'a> {
+    /// 경로 검사기를 만든다. 출발 겹침 깊이와 이동 거리 상한을 미리 계산한다.
+    fn new(
+        footprint: &'a Footprint,
+        from: &'a Motion,
+        to: &'a Motion,
+        obstacles: &'a [GroundRect],
+    ) -> Self {
+        let start_body = footprint.rect_at(from);
+        let start_overlaps = obstacles
+            .iter()
+            .enumerate()
+            .map(|(index, obstacle)| (index, start_body.penetration(obstacle)))
+            .filter(|&(_, depth)| depth > 0.0)
+            .collect();
+        // 위치·방향을 선형 보간하므로 점 이동 거리는 기준점 이동 + 회전각 × 기준점에서 가장 먼 모서리 거리 이하다.
+        let travel_m = Vec2::new(to.x_m - from.x_m, to.z_m - from.z_m).length()
+            + wrap_angle(to.heading_rad - from.heading_rad).abs() * footprint.reach_m();
+        Self {
+            footprint,
+            from,
+            to,
+            obstacles,
+            start_overlaps,
+            travel_m,
+        }
+    }
+
+    /// 비율 `a`에서 `b`까지 차체 위 점이 움직이는 거리의 상한(m)을 구한다.
+    fn span_m(&self, a: f32, b: f32) -> f32 {
+        self.travel_m * (b - a)
+    }
+
+    /// 비율 `t` 자세를 검사한다.
+    ///
+    /// 출발 때 겹친 장애물은 출발보다 깊어질 때만 막고, 나머지는 겹치면 막는다.
+    fn probe(&self, t: f32) -> Probe {
+        let body = self.footprint.rect_at(&pose_between(self.from, self.to, t));
+        let mut gap = f32::INFINITY;
+        for (index, obstacle) in self.obstacles.iter().enumerate() {
+            let depth = body.penetration(obstacle);
+            let start = self
+                .start_overlaps
+                .iter()
+                .find(|&&(overlapped, _)| overlapped == index)
+                .map(|&(_, start)| start);
+            let blocked = match start {
+                Some(start) => depth > start,
+                None => {
+                    gap = gap.min(-depth);
+                    depth > 0.0
+                }
+            };
+            if blocked {
+                return Probe {
+                    hit: Some(index),
+                    gap,
+                };
+            }
+        }
+        Probe { hit: None, gap }
+    }
+
+    /// 막히지 않은 비율 `a`(분리 하한 `gap_a`)에서 `b`(검사 결과 `at_b`)까지 가장 먼저 닿는 곳을 찾는다.
+    ///
+    /// 양 끝 분리 거리의 합이 구간 이동 거리보다 크면 구간 안 어디서도 닿을 수 없다(각 점은 이동한 만큼만
+    /// 가까워진다). 그렇지 않으면 반으로 나눠 앞 구간부터 확인한다. 닿으면 (닿기 직전 비율, 장애물 번호).
+    fn first_contact(&self, a: f32, gap_a: f32, b: f32, at_b: Probe) -> Option<(f32, usize)> {
+        if let Some(index) = at_b.hit {
+            return Some(self.boundary(a, gap_a, b, index));
+        }
+        let span = self.span_m(a, b);
+        if gap_a + at_b.gap > span || span <= MIN_CERTIFY_SPAN_M {
+            return None;
+        }
+        let mid = (a + b) / 2.0;
+        let at_mid = self.probe(mid);
+        self.first_contact(a, gap_a, mid, at_mid)
+            .or_else(|| self.first_contact(mid, at_mid.gap, b, at_b))
+    }
+
+    /// 막히지 않은 `clear`와 장애물 `index`에 막힌 `hit` 사이에서 처음 닿기 직전 비율을 좁힌다.
+    ///
+    /// 가운데가 비어 있으면 앞 구간에 더 이른 접촉이 숨어 있지 않은지 [`Self::first_contact`]로 확인한다.
+    fn boundary(
+        &self,
+        mut clear: f32,
+        mut gap: f32,
+        mut hit: f32,
+        mut index: usize,
+    ) -> (f32, usize) {
+        while self.span_m(clear, hit) > BOUNDARY_RESOLUTION_M {
+            let mid = (clear + hit) / 2.0;
+            let at_mid = self.probe(mid);
+            if let Some(blocking) = at_mid.hit {
+                hit = mid;
+                index = blocking;
+                continue;
+            }
+            if let Some(earlier) = self.first_contact(clear, gap, mid, at_mid) {
+                return earlier;
+            }
+            clear = mid;
+            gap = at_mid.gap;
+        }
+        (clear, index)
+    }
+}
+
 /// `from`에서 `to`로 가는 경로를 검사해 장애물에 닿기 직전까지의 이동 비율을 구한다.
 ///
+/// 기본 간격([`MAX_SAMPLE_STEP_M`])으로 나눈 검사 지점 사이도 보수적으로 확인하므로, 회전 중 모서리가
+/// 지점 사이에서만 장애물을 스치는 경우도 막는다(놓칠 수 있는 겹침은 [`MIN_CERTIFY_SPAN_M`]의 절반 이하).
+///
 /// 출발 자세에서 이미 겹친 장애물(장애물이 차량 위에 놓인 경우 등)은 빠져나갈 수 있도록,
-/// 겹침 깊이가 출발 때보다 깊어지는 경우만 막는다. 나머지 장애물은 평소처럼 닿으면 막는다.
+/// 겹침 깊이가 출발 때보다 깊어지는 경우만 막는다. 이 장애물은 검사 지점에서만 확인한다.
+/// 나머지 장애물은 평소처럼 닿으면 막는다.
 pub fn sweep(footprint: &Footprint, from: &Motion, to: &Motion, obstacles: &[GroundRect]) -> Sweep {
     let free = Sweep {
         fraction: 1.0,
-        blocked: false,
+        blocked_by: None,
     };
     if obstacles.is_empty() {
         return free;
     }
-    let start_body = footprint.rect_at(from);
-    let hits = |t: f32| {
-        let body = footprint.rect_at(&pose_between(from, to, t));
-        obstacles.iter().any(|obstacle| {
-            let start = start_body.penetration(obstacle);
-            let depth = body.penetration(obstacle);
-            if start > 0.0 {
-                depth > start
-            } else {
-                depth > 0.0
-            }
-        })
-    };
-    let travel = Vec2::new(to.x_m - from.x_m, to.z_m - from.z_m).length()
-        + wrap_angle(to.heading_rad - from.heading_rad).abs() * footprint.reach_m();
-    let samples = (travel / MAX_SAMPLE_STEP_M).ceil().max(1.0) as u32;
+    let path = PathCheck::new(footprint, from, to, obstacles);
+    let samples = (path.travel_m / MAX_SAMPLE_STEP_M).ceil().max(1.0) as u32;
+    // 출발 자세는 정의상 막히지 않는다(겹친 장애물은 출발 깊이 그대로다).
     let mut clear = 0.0;
+    let mut gap = path.probe(0.0).gap;
     for index in 1..=samples {
         let t = index as f32 / samples as f32;
-        if hits(t) {
-            let mut hit = t;
-            for _ in 0..BISECTION_STEPS {
-                let mid = (clear + hit) / 2.0;
-                if hits(mid) {
-                    hit = mid;
-                } else {
-                    clear = mid;
-                }
-            }
+        let at_t = path.probe(t);
+        if let Some((fraction, obstacle)) = path.first_contact(clear, gap, t, at_t) {
             return Sweep {
-                fraction: clear,
-                blocked: true,
+                fraction,
+                blocked_by: Some(obstacle),
             };
         }
         clear = t;
+        gap = at_t.gap;
     }
     free
 }
@@ -228,8 +358,9 @@ pub fn sweep(footprint: &Footprint, from: &Motion, to: &Motion, obstacles: &[Gro
 /// `contact`는 직전 단계까지의 접촉 상태이며 이번 단계 결과로 갱신된다.
 ///
 /// 충돌([`Impact`])은 이동이 실제로 막힌 단계에서만 반환한다. 장애물 가까이(접촉 거리 안)에
-/// 멈추거나 스쳐 지나가기만 하면 충돌이 아니다. 같은 접촉 동안 계속 밀어도 한 번만 반환하고,
-/// 접촉 거리 밖으로 떨어진 뒤 다시 막히면 새 충돌로 반환한다.
+/// 멈추거나 스쳐 지나가기만 하면 충돌이 아니다. 같은 장애물을 계속 밀어도 한 번만 반환하고,
+/// 그 장애물의 접촉 거리 밖으로 떨어진 뒤 다시 막히면 새 충돌로 반환한다. 중복 판정은 장애물마다
+/// 따로 하므로, 다른 장애물에 붙어 있거나 다른 장애물에 새로 막혀도 각각 기록된다.
 pub fn step_with_obstacles(
     state: &mut VehicleState,
     motion: &mut Motion,
@@ -244,18 +375,26 @@ pub fn step_with_obstacles(
     dynamics::step(state, motion, params, dt);
     let speed_at_contact = state.speed_mps();
     let result = sweep(footprint, &before, motion, obstacles);
-    if result.blocked {
+    if result.blocked() {
         *motion = pose_between(&before, motion, result.fraction);
         state.set_speed_mps(0.0);
         motion.accel_mps2 = -speed_before / dt;
     }
-    contact.touching = in_contact(footprint, motion, obstacles);
-    let new_impact = result.blocked && !contact.impact_reported;
-    if result.blocked {
-        contact.impact_reported = true;
-    } else if !contact.touching {
-        contact.impact_reported = false;
-    }
+    let body = footprint.rect_at(motion);
+    let near = |index: usize| {
+        obstacles
+            .get(index)
+            .is_some_and(|obstacle| body.overlaps(obstacle, CONTACT_MARGIN_M))
+    };
+    contact.touching = (0..obstacles.len()).any(near);
+    contact.reported.retain(|&index| near(index));
+    let new_impact = match result.blocked_by {
+        Some(index) if !contact.reported.contains(&index) => {
+            contact.reported.push(index);
+            true
+        }
+        _ => false,
+    };
     new_impact.then_some(Impact {
         speed_mps: speed_at_contact,
         x_m: motion.x_m,
@@ -422,7 +561,7 @@ mod tests {
         let to = Motion { z_m: -6.0, ..from };
         assert!(!hits_any(&VEHICLE_FOOTPRINT, &to, &wall, 0.0));
         let result = sweep(&VEHICLE_FOOTPRINT, &from, &to, &wall);
-        assert!(result.blocked);
+        assert!(result.blocked());
         assert!((result.fraction - 1.0 / 6.0).abs() < 1e-3, "{result:?}");
     }
 
@@ -560,6 +699,70 @@ mod tests {
         );
     }
 
+    /// 측면 벽에 1 cm 간격으로 붙은 채 정면 벽에서 떨어졌다 다시 닿으면 새 충돌로 보고하는지 확인한다.
+    ///
+    /// 중복 방지를 장애물마다 따로 하지 않으면, 측면 벽 때문에 접촉이 계속 유지돼 재충돌을 놓친다.
+    #[test]
+    fn returning_to_wall_beside_another_reports_new_impact() {
+        let obstacles = [
+            wall_ahead(1.0, 0.5),
+            // 차체 오른쪽 면(x=0.9)에서 1 cm 떨어진, 진행 방향으로 긴 측면 벽(z 8..-12).
+            GroundRect::axis_aligned(Vec2::new(0.9 + 0.01 + 0.25, -2.0), Vec2::new(0.5, 20.0)),
+        ];
+        let mut state = ready_in(Gear::Drive);
+        let mut motion = Motion::default();
+        let mut contact = ContactState::default();
+        let first = drive(
+            &mut state,
+            &mut motion,
+            &mut contact,
+            &obstacles,
+            throttle(),
+            192,
+        );
+        assert_eq!(first.len(), 1, "{first:?}");
+
+        state
+            .apply(VehicleCommand::RequestGear(Gear::Reverse))
+            .unwrap();
+        assert!(
+            drive(
+                &mut state,
+                &mut motion,
+                &mut contact,
+                &obstacles,
+                throttle(),
+                64
+            )
+            .is_empty()
+        );
+        let front = VEHICLE_FOOTPRINT.rect_at(&motion);
+        assert!(
+            !front.overlaps(&obstacles[0], CONTACT_MARGIN_M),
+            "{motion:?}"
+        );
+        // 측면 벽 때문에 접촉 표시는 계속 켜져 있다.
+        assert!(contact.touching);
+
+        let brake = VehicleInput {
+            brake: 1.0,
+            ..VehicleInput::default()
+        };
+        drive(&mut state, &mut motion, &mut contact, &obstacles, brake, 64);
+        state
+            .apply(VehicleCommand::RequestGear(Gear::Drive))
+            .unwrap();
+        let again = drive(
+            &mut state,
+            &mut motion,
+            &mut contact,
+            &obstacles,
+            throttle(),
+            256,
+        );
+        assert_eq!(again.len(), 1, "{again:?}");
+    }
+
     /// 회전하며 비스듬히 다가가도 모서리가 장애물을 관통하지 않는지 확인한다.
     #[test]
     fn turning_into_pillar_does_not_penetrate() {
@@ -578,6 +781,45 @@ mod tests {
         let impacts = drive(&mut state, &mut motion, &mut contact, &pillar, driver, 640);
         assert_eq!(impacts.len(), 1);
         assert_eq!(state.speed_mps(), 0.0);
+    }
+
+    /// 회전 중 검사 지점 사이에서만 모서리가 기둥을 스치는 경우도 막는지 확인한다(검토 지적 사례).
+    ///
+    /// 최고 속도·최대 조향각으로 도는 한 단계에서, 경로를 잘게 나눈 검사 지점은 모두 비어 있지만
+    /// 그 사이(단계의 약 5/6 지점)에서 차체 모서리가 장면의 1 m 기둥을 수 mm 침범한다.
+    #[test]
+    fn turning_clip_between_samples_is_blocked() {
+        let params = DynamicsParams::default();
+        let pillar = [GroundRect::axis_aligned(Vec2::new(6.0, -14.0), Vec2::ONE)];
+        let depth = |motion: &Motion| VEHICLE_FOOTPRINT.rect_at(motion).penetration(&pillar[0]);
+        let mut state = ready_in(Gear::Drive);
+        state.set_speed_mps(params.max_forward_speed_mps);
+        state.set_input(VehicleInput {
+            throttle: 1.0,
+            steering: 1.0,
+            ..VehicleInput::default()
+        });
+        let from = Motion {
+            x_m: 4.839558,
+            z_m: -10.219388,
+            heading_rad: -0.7,
+            steer_angle_rad: params.max_steer_angle_deg.to_radians(),
+            ..Motion::default()
+        };
+        let mut to = from;
+        dynamics::step(&mut state, &mut to, &params, DT);
+        // 전제: 양 끝은 비어 있고, 경로 중간에서만 수 mm 겹친다.
+        let deepest = |end: f32| {
+            (0..=2000)
+                .map(|i| depth(&pose_between(&from, &to, end * i as f32 / 2000.0)))
+                .fold(f32::NEG_INFINITY, f32::max)
+        };
+        assert!(depth(&from) < 0.0 && depth(&to) < 0.0);
+        assert!(deepest(1.0) > 0.003, "deepest={}", deepest(1.0));
+
+        let result = sweep(&VEHICLE_FOOTPRINT, &from, &to, &pillar);
+        assert!(result.blocked(), "{result:?}");
+        assert!(deepest(result.fraction) <= 0.0, "{result:?}");
     }
 
     /// 장애물과 겹친 채 시작해도 갇히지 않고 빠져나갈 수 있는지 확인한다.

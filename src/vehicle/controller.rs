@@ -24,7 +24,7 @@ pub struct VehicleMotion(pub Motion);
 pub struct VehicleDynamics(pub DynamicsParams);
 
 /// 차체와 장애물의 접촉 상태 리소스. 충돌 중복 판정과 HUD 접촉 표시에 쓴다.
-#[derive(Resource, Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Resource, Debug, Clone, Default, PartialEq, Eq)]
 pub struct VehicleContact(pub ContactState);
 
 /// 차체가 장애물에 실제로 부딪힌(이동이 막힌) 순간의 충돌 메시지. 교육 기록으로 전달한다.

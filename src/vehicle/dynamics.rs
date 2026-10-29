@@ -28,11 +28,14 @@ pub struct DynamicsParams {
     pub max_reverse_speed_mps: f32,
     /// 가속 입력 1.0일 때 가속도(m/s²).
     pub max_accel_mps2: f32,
-    /// 제동 입력 1.0일 때 감속도(m/s²).
+    /// 제동 입력 1.0일 때 더하는 감속 성분(m/s²).
+    ///
+    /// 세 감속 값(제동·관성·비상)은 최종 감속도가 아니라 **더해지는 성분**이다. 기본값에서 가속 입력 없이
+    /// 최대 제동하면 3.0 + 0.3 = 3.3, 비상 정지만이면 5.0 + 0.3 = 5.3, 둘 다면 8.3 m/s²로 감속한다.
     pub max_brake_decel_mps2: f32,
-    /// 가속 입력이 없을 때(관성 주행·N) 감속도(m/s²). 0이면 감속 없이 관성으로 계속 굴러간다.
+    /// 가속 입력이 없을 때(관성 주행·N) 더하는 감속 성분(m/s²). 0이면 감속 없이 관성으로 계속 굴러간다.
     pub coast_decel_mps2: f32,
-    /// 비상 정지 중 감속도(m/s²).
+    /// 비상 정지 중 더하는 감속 성분(m/s²).
     pub emergency_decel_mps2: f32,
     /// 축간거리(m).
     pub wheelbase_m: f32,
@@ -158,7 +161,7 @@ fn steering_command(steering: f32, params: &DynamicsParams) -> f32 {
 ///
 /// - P는 주차 잠금으로 0을 유지한다(P는 정지 상태에서만 들어갈 수 있다).
 /// - 구동 가속은 상태 머신이 허용한 가속 입력(`effective_throttle`)과 D/R 방향으로만 생긴다.
-/// - 제동·관성·비상 정지 감속은 항상 속도를 0 쪽으로만 당기며 0을 넘지 않는다.
+/// - 제동·관성·비상 정지 감속은 각 성분을 더한 값으로, 항상 속도를 0 쪽으로만 당기며 0을 넘지 않는다.
 fn longitudinal_speed(state: &VehicleState, params: &DynamicsParams, speed: f32, dt: f32) -> f32 {
     if state.gear() == Gear::Park {
         return 0.0;
@@ -308,6 +311,39 @@ mod tests {
         assert!(motion.accel_mps2 < -5.0);
         run(&mut state, &mut motion, 1.0, DT, input(1.0, 0.0, 0.0));
         assert_eq!(state.speed_mps(), 0.0);
+    }
+
+    /// 제동·관성·비상 감속이 성분 합으로 적용되는지 확인한다(최대 제동 + 비상 정지 = 3.0 + 0.3 + 5.0).
+    #[test]
+    fn deceleration_components_add_up() {
+        let params = DynamicsParams::default();
+        let speed_drop = |brake: f32, emergency: bool| {
+            let mut state = ready_in(Gear::Drive);
+            state.set_speed_mps(4.0);
+            if emergency {
+                state.apply(VehicleCommand::EngageEmergencyStop).unwrap();
+            }
+            state.set_input(input(0.0, brake, 0.0));
+            let mut motion = Motion::default();
+            step(&mut state, &mut motion, &params, DT);
+            (4.0 - state.speed_mps()) / DT
+        };
+        let close = |actual: f32, expected: f32| (actual - expected).abs() < 1e-3;
+        assert!(
+            close(speed_drop(1.0, false), 3.3),
+            "{}",
+            speed_drop(1.0, false)
+        );
+        assert!(
+            close(speed_drop(0.0, true), 5.3),
+            "{}",
+            speed_drop(0.0, true)
+        );
+        assert!(
+            close(speed_drop(1.0, true), 8.3),
+            "{}",
+            speed_drop(1.0, true)
+        );
     }
 
     /// P와 시동 OFF에서는 가속 입력이 있어도 움직이지 않는지 확인한다.
