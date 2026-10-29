@@ -2,6 +2,7 @@ use std::path::Path;
 
 use bevy::{app::AppExit, prelude::*};
 use self_driving_sim::{
+    calibration::CalibrationPlugin,
     config, configure_sim_sets,
     input::InputPlugin,
     scene::ScenePlugin,
@@ -36,6 +37,7 @@ pub fn run(smoke_test: bool) -> AppExit {
         InputPlugin,
         VehiclePlugin,
         TrainingPlugin,
+        CalibrationPlugin,
         ScenePlugin,
         HudPlugin,
     ));

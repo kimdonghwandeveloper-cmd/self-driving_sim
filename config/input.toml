@@ -18,3 +18,5 @@ gear_drive = ["KeyJ"]
 engine_toggle = ["Enter"]
 emergency_stop = ["Space"]
 emergency_release = ["Backspace"]
+# 정지 상태에서 시작 위치(원점, 전방 -Z)로 복귀합니다. 보정 시험을 같은 코스에서 반복할 때 씁니다.
+reset_course = ["KeyR"]

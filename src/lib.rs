@@ -1,5 +1,6 @@
 //! 자율주행 셔틀 안전관리자 조작 훈련 시뮬레이터의 도메인 로직과 Bevy 플러그인.
 
+pub mod calibration;
 pub mod config;
 pub mod input;
 pub mod scene;
@@ -41,6 +42,7 @@ mod tests {
     use bevy::time::TimeUpdateStrategy;
 
     use super::*;
+    use crate::calibration::{CalibrationLog, CalibrationPlugin};
     use crate::training::{TrainingLog, TrainingPlugin};
     use crate::vehicle::{
         DynamicsParams, EngineState, Gear, GroundRect, Obstacle, Vehicle, VehicleCommand,
@@ -55,7 +57,12 @@ mod tests {
                 1.0 / 64.0,
             )));
         configure_sim_sets(&mut app);
-        app.add_plugins((input::InputPlugin, VehiclePlugin, TrainingPlugin));
+        app.add_plugins((
+            input::InputPlugin,
+            VehiclePlugin,
+            TrainingPlugin,
+            CalibrationPlugin,
+        ));
         app
     }
 
@@ -254,5 +261,43 @@ mod tests {
         assert_eq!(world.resource::<Vehicle>().0.speed_mps(), 0.0);
         assert!(world.resource::<VehicleContact>().0.touching);
         assert_eq!(world.resource::<TrainingLog>().collision_count(), 1);
+    }
+
+    /// 키보드 경로로 가속→최대 제동→시작 위치 복귀를 두 번 반복하면, 매번 같은 출발점에서
+    /// 같은 정지거리가 측정되고 움직이는 중 복귀 키는 거부되는지 확인한다.
+    #[test]
+    fn brake_trial_repeats_from_start_pose() {
+        let mut app = headless_app();
+        engine_on_in_drive(&mut app);
+        // 첫 갱신은 경과 시간이 0이라 고정 단계가 돌지 않으므로, 시험 전에 한 번 비워 둔다.
+        update_with_keys(&mut app, &[]);
+        let mut stops = Vec::new();
+        for _ in 0..2 {
+            for _ in 0..64 * 2 {
+                update_with_keys(&mut app, &[KeyCode::KeyW]);
+            }
+            update_with_keys(&mut app, &[KeyCode::KeyW, KeyCode::KeyR]);
+            let moved = app.world().resource::<VehicleMotion>().0;
+            assert!(moved.z_m < -1.0, "reset must be rejected while moving");
+            for _ in 0..64 {
+                update_with_keys(&mut app, &[KeyCode::KeyS]);
+            }
+            let stop = app
+                .world()
+                .resource::<CalibrationLog>()
+                .last_stop()
+                .expect("brake trial recorded");
+            stops.push((stop.from_speed_mps, stop.distance_m));
+            update_with_keys(&mut app, &[]);
+            update_with_keys(&mut app, &[KeyCode::KeyR]);
+            let world = app.world();
+            assert_eq!(world.resource::<VehicleMotion>().0, Default::default());
+            assert_eq!(world.resource::<Vehicle>().0.gear(), Gear::Drive);
+            update_with_keys(&mut app, &[]);
+        }
+        assert!(stops[0].1 > 0.5, "{stops:?}");
+        assert_eq!(stops[0], stops[1]);
+        let counts = app.world().resource::<CalibrationLog>().trial_counts();
+        assert_eq!(counts.0, 2);
     }
 }
