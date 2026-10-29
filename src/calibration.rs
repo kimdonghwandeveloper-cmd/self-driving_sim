@@ -163,15 +163,20 @@ impl CalibrationLog {
     /// 고정 단계 하나가 끝난 상태로 시험을 진행·종료한다.
     ///
     /// - 제동 시험: 움직이는 중 가속 없이 제동 입력이나 비상 정지 감속이 생기면 시작하고, 속도가 0이 되면 끝난다.
-    ///   정지 전에 제동을 풀거나 장애물 접촉 상태로 멈추면(충돌로 막힌 경우 포함) 결과 없이 버린다.
+    ///   정지하는 단계까지 제동(또는 비상 정지)이 유지되지 않았거나, 장애물에 막혀 이동이 잘리면 결과 없이 버린다.
     /// - 가속 시험: 정지 상태에서 가속이 허용된 입력이 생기면 시작하고, 가속을 떼거나 최고 속도에 닿으면 끝난다.
-    ///   장애물에 닿으면 결과 없이 버린다.
+    ///   장애물에 막혀 이동이 잘리면 결과 없이 버린다.
+    ///
+    /// `blocked`는 이번 단계에서 장애물 때문에 이동이 잘렸는지다([`ContactState::blocked`]).
+    /// 장애물 근처(접촉 거리 안)에 있을 뿐 막히지 않은 시험은 정상 결과로 남긴다.
+    ///
+    /// [`ContactState::blocked`]: crate::vehicle::ContactState::blocked
     pub fn observe(
         &mut self,
         state: &VehicleState,
         motion: &Motion,
         params: &DynamicsParams,
-        touching: bool,
+        blocked: bool,
         dt: f32,
     ) {
         let speed = state.speed_mps();
@@ -186,8 +191,8 @@ impl CalibrationLog {
         let emergency = state.engine() == EngineState::EmergencyStop;
         let braking = !throttle && (state.input().brake > 0.0 || emergency);
 
-        self.observe_brake(speed, step_m, braking, emergency, touching, dt);
-        self.observe_accel(state, speed, step_m, throttle, touching, params, dt);
+        self.observe_brake(speed, step_m, braking, emergency, blocked, dt);
+        self.observe_accel(state, speed, step_m, throttle, blocked, params, dt);
 
         self.prev_speed_mps = speed;
         self.prev_pos = pos;
@@ -200,7 +205,7 @@ impl CalibrationLog {
         step_m: f32,
         braking: bool,
         emergency: bool,
-        touching: bool,
+        blocked: bool,
         dt: f32,
     ) {
         if self.brake.is_none() && braking && self.prev_speed_mps != 0.0 {
@@ -209,25 +214,26 @@ impl CalibrationLog {
         let Some(mut trial) = self.brake else {
             return;
         };
+        // 이번 단계에 제동이 유지되지 않았으면(관성만으로 멈춘 경우 포함) 정지 여부보다 먼저 버린다.
+        if blocked || !braking {
+            self.brake = None;
+            return;
+        }
         trial.distance_m += step_m;
         trial.time_s += dt;
         trial.emergency |= emergency;
-        self.brake = if speed == 0.0 {
-            if !touching {
-                self.last_stop = Some(StopResult {
-                    from_speed_mps: trial.start_speed_mps,
-                    distance_m: trial.distance_m,
-                    time_s: trial.time_s,
-                    emergency: trial.emergency,
-                });
-                self.stop_trials += 1;
-            }
-            None
-        } else if braking {
-            Some(trial)
-        } else {
-            None
-        };
+        if speed != 0.0 {
+            self.brake = Some(trial);
+            return;
+        }
+        self.brake = None;
+        self.last_stop = Some(StopResult {
+            from_speed_mps: trial.start_speed_mps,
+            distance_m: trial.distance_m,
+            time_s: trial.time_s,
+            emergency: trial.emergency,
+        });
+        self.stop_trials += 1;
     }
 
     /// 가속 시험을 시작·누적·종료한다. `observe`에서만 부른다.
@@ -238,7 +244,7 @@ impl CalibrationLog {
         speed: f32,
         step_m: f32,
         throttle: bool,
-        touching: bool,
+        blocked: bool,
         params: &DynamicsParams,
         dt: f32,
     ) {
@@ -248,7 +254,7 @@ impl CalibrationLog {
         let Some(mut trial) = self.accel else {
             return;
         };
-        if touching {
+        if blocked {
             self.accel = None;
             return;
         }
@@ -411,7 +417,7 @@ pub fn record_trials(
         &vehicle.0,
         &motion.0,
         &params.0,
-        contact.0.touching,
+        contact.0.blocked,
         time.delta_secs(),
     );
 }
@@ -419,8 +425,11 @@ pub fn record_trials(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::vehicle::collision::step_with_obstacles;
     use crate::vehicle::dynamics::step;
-    use crate::vehicle::{VehicleCommand, VehicleInput};
+    use crate::vehicle::{
+        ContactState, GroundRect, VEHICLE_FOOTPRINT, VehicleCommand, VehicleInput,
+    };
 
     /// 테스트용 고정 시간 간격(s).
     const DT: f32 = 1.0 / 64.0;
@@ -514,7 +523,144 @@ mod tests {
         assert_eq!(log.last_stop(), None);
     }
 
-    /// 장애물에 닿은 채 멈추면 제동 시험 결과를 남기지 않는지 확인한다.
+    /// 장애물 판정을 포함해 입력을 유지한 채 `steps`번 적분하고, 실제 이동 막힘 여부로 측정한다.
+    fn drive_among(
+        state: &mut VehicleState,
+        motion: &mut Motion,
+        log: &mut CalibrationLog,
+        contact: &mut ContactState,
+        obstacles: &[GroundRect],
+        input: VehicleInput,
+        steps: usize,
+    ) {
+        let params = DynamicsParams::default();
+        state.set_input(input);
+        for _ in 0..steps {
+            step_with_obstacles(
+                state,
+                motion,
+                &params,
+                DT,
+                &VEHICLE_FOOTPRINT,
+                obstacles,
+                contact,
+            );
+            log.observe(state, motion, &params, contact.blocked, DT);
+        }
+    }
+
+    /// 벽 옆 1 cm 간격(접촉 거리 안, 막힘 없음)에서 한 가속·제동 시험은 정상 결과로 남는지 확인한다.
+    #[test]
+    fn trials_beside_wall_without_impact_are_recorded() {
+        // 차체 오른쪽 면(x = 0.9)에서 1 cm 떨어진, 진행 방향(-Z)으로 긴 벽.
+        let wall = [GroundRect::axis_aligned(
+            Vec2::new(0.91 + 0.5, -14.0),
+            Vec2::new(1.0, 32.0),
+        )];
+        let mut state = ready_in_drive();
+        let mut motion = Motion::default();
+        let mut log = CalibrationLog::default();
+        let mut contact = ContactState::default();
+        let mut run = |input, steps| {
+            drive_among(
+                &mut state,
+                &mut motion,
+                &mut log,
+                &mut contact,
+                &wall,
+                input,
+                steps,
+            );
+        };
+        run(input(1.0, 0.0), 64 * 6);
+        run(input(0.0, 1.0), 64 * 3);
+        assert!(contact.touching, "the wall should be within contact margin");
+        assert!(!contact.blocked);
+        let accel = log.last_accel().expect("accel beside wall is valid");
+        assert!(accel.reached_limit);
+        let stop = log.last_stop().expect("stop beside wall is valid");
+        assert!((stop.from_speed_mps - 5.0).abs() < 1e-3);
+        assert_eq!(log.trial_counts(), (1, 1));
+    }
+
+    /// 벽에 실제로 부딪혀 멈춘 제동 시험, 벽을 계속 미는 동안의 가속 시험은 결과로 남지 않는지 확인한다.
+    #[test]
+    fn trials_ended_by_impact_are_discarded() {
+        // 앞범퍼(z = -3.5)에서 4 m 앞에 벽의 앞면(z = -7.5)이 있다.
+        let wall = [GroundRect::axis_aligned(
+            Vec2::new(0.0, -8.0),
+            Vec2::new(6.0, 1.0),
+        )];
+        let mut state = ready_in_drive();
+        let mut motion = Motion::default();
+        let mut log = CalibrationLog::default();
+        let mut contact = ContactState::default();
+        // 약 3.4 m 가속 후 최대 제동: 정지거리 약 1 m라 벽에 막혀 멈춘다.
+        drive_among(
+            &mut state,
+            &mut motion,
+            &mut log,
+            &mut contact,
+            &wall,
+            input(1.0, 0.0),
+            166,
+        );
+        drive_among(
+            &mut state,
+            &mut motion,
+            &mut log,
+            &mut contact,
+            &wall,
+            input(0.0, 1.0),
+            64 * 2,
+        );
+        assert_eq!(contact.reported, [0], "the wall should have been hit");
+        assert_eq!(log.last_stop(), None);
+        assert_eq!(log.trial_counts(), (0, 1), "only the released accel counts");
+
+        // 이미 충돌을 보고한 벽을 정지 상태에서 계속 밀면 이동이 매 단계 막혀 가속 시험이 남지 않는다.
+        let before = log.last_accel();
+        drive_among(
+            &mut state,
+            &mut motion,
+            &mut log,
+            &mut contact,
+            &wall,
+            input(1.0, 0.0),
+            64,
+        );
+        assert!(contact.blocked);
+        assert_eq!(log.last_accel(), before);
+        assert_eq!(log.active(), None);
+    }
+
+    /// 정지 직전에 제동을 풀어 관성 감속으로 멈추면 제동 시험 결과를 남기지 않는지 확인한다.
+    #[test]
+    fn release_just_before_stop_discards_trial() {
+        let params = DynamicsParams::default();
+        let mut state = ready_in_drive();
+        let mut motion = Motion::default();
+        let mut log = CalibrationLog::default();
+        drive(&mut state, &mut motion, &mut log, input(1.0, 0.0), 96);
+        assert!((state.speed_mps() - 1.5).abs() < 1e-3);
+        state.set_input(input(0.0, 1.0));
+        // 다음 관성 감속 한 단계로 멈출 만큼 느려질 때까지 제동한다.
+        while state.speed_mps() > params.coast_decel_mps2 * DT {
+            step(&mut state, &mut motion, &params, DT);
+            log.observe(&state, &motion, &params, false, DT);
+        }
+        assert!(
+            state.speed_mps() > 0.0,
+            "must still be moving before release"
+        );
+        drive(&mut state, &mut motion, &mut log, input(0.0, 0.0), 1);
+        assert_eq!(state.speed_mps(), 0.0);
+        assert_eq!(log.last_stop(), None);
+        assert_eq!(log.active(), None);
+        assert_eq!(log.trial_counts().0, 0);
+    }
+
+    /// 이동이 막힌 단계로 멈추면 제동 시험 결과를 남기지 않는지 확인한다.
     #[test]
     fn stop_against_obstacle_is_not_recorded() {
         let params = DynamicsParams::default();
@@ -525,7 +671,7 @@ mod tests {
         state.set_input(input(0.0, 1.0));
         step(&mut state, &mut motion, &params, DT);
         log.observe(&state, &motion, &params, false, DT);
-        // 충돌로 막힌 것처럼 속도가 0이 되고 접촉 상태다.
+        // 충돌로 막힌 것처럼 속도가 0이 되고 이동이 막힌 단계다.
         state.set_speed_mps(0.0);
         log.observe(&state, &motion, &params, true, DT);
         assert_eq!(log.last_stop(), None);
