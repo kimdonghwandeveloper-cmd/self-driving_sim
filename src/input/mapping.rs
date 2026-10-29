@@ -23,11 +23,13 @@ pub enum KeyAction {
     EngineToggle,
     EmergencyStop,
     EmergencyRelease,
+    /// 정지 상태에서 시작 위치로 복귀(보정 시험 반복용).
+    ResetCourse,
 }
 
 impl KeyAction {
     /// 매핑 검증과 HUD 표시에 사용하는 전체 동작 목록.
-    pub const ALL: [KeyAction; 11] = [
+    pub const ALL: [KeyAction; 12] = [
         KeyAction::Throttle,
         KeyAction::Brake,
         KeyAction::SteerLeft,
@@ -39,6 +41,7 @@ impl KeyAction {
         KeyAction::EngineToggle,
         KeyAction::EmergencyStop,
         KeyAction::EmergencyRelease,
+        KeyAction::ResetCourse,
     ];
 
     /// 동작에 대응하는 설정 파일 필드 이름을 반환한다.
@@ -55,6 +58,7 @@ impl KeyAction {
             KeyAction::EngineToggle => "engine_toggle",
             KeyAction::EmergencyStop => "emergency_stop",
             KeyAction::EmergencyRelease => "emergency_release",
+            KeyAction::ResetCourse => "reset_course",
         }
     }
 }
@@ -74,6 +78,7 @@ pub struct KeyboardMapping {
     pub engine_toggle: Vec<String>,
     pub emergency_stop: Vec<String>,
     pub emergency_release: Vec<String>,
+    pub reset_course: Vec<String>,
 }
 
 impl Default for KeyboardMapping {
@@ -95,6 +100,7 @@ impl Default for KeyboardMapping {
             engine_toggle: names(&["Enter"]),
             emergency_stop: names(&["Space"]),
             emergency_release: names(&["Backspace"]),
+            reset_course: names(&["KeyR"]),
         }
     }
 }
@@ -114,6 +120,7 @@ impl KeyboardMapping {
             KeyAction::EngineToggle => &self.engine_toggle,
             KeyAction::EmergencyStop => &self.emergency_stop,
             KeyAction::EmergencyRelease => &self.emergency_release,
+            KeyAction::ResetCourse => &self.reset_course,
         }
     }
 
@@ -342,6 +349,7 @@ mod tests {
             [KeyCode::KeyW, KeyCode::ArrowUp]
         );
         assert_eq!(bindings.label(KeyAction::Gear(Gear::Drive)), "KeyJ");
+        assert_eq!(bindings.keys(KeyAction::ResetCourse), [KeyCode::KeyR]);
     }
 
     /// 지원하지 않는 키 이름을 거부하는지 확인한다.

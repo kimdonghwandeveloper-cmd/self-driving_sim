@@ -10,6 +10,7 @@ use bevy::prelude::*;
 use bevy::app::RunFixedMainLoop;
 
 use crate::SimSet;
+use crate::calibration::ResetCourseRequest;
 use crate::vehicle::{Gear, VehicleCommand, VehicleInput};
 
 pub use mapping::{KeyBindings, KeyboardMapping};
@@ -35,6 +36,7 @@ impl Plugin for InputPlugin {
         app.init_resource::<DriverInput>()
             .init_resource::<KeyBindings>()
             .add_message::<ControlRequest>()
+            .add_message::<ResetCourseRequest>()
             .add_systems(
                 RunFixedMainLoop,
                 keyboard::read_keyboard.in_set(SimSet::Input),

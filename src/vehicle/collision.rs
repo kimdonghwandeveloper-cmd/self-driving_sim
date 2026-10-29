@@ -145,6 +145,9 @@ impl Sweep {
 pub struct ContactState {
     /// 장애물과 접촉 거리([`CONTACT_MARGIN_M`]) 안에 있는지. HUD 표시용이며 충돌 기록 기준이 아니다.
     pub touching: bool,
+    /// 마지막 단계에서 장애물에 막혀 이동이 잘렸는지. 이미 충돌을 보고한 장애물을 계속 미는 경우도 포함한다.
+    /// 근접(`touching`)과 달리 실제 이동 막힘만 뜻하며, 보정 시험의 유효성 판정에 쓴다.
+    pub blocked: bool,
     /// 현재 접촉 중이며 이미 충돌을 보고한 장애물 번호(`obstacles` 순서).
     /// 그 장애물의 접촉 거리 밖으로 벗어나면 빠지므로, 다른 장애물 옆에 붙어 있어도 재충돌을 놓치지 않는다.
     /// 장애물 목록의 순서는 단계마다 같다고 가정한다.
@@ -389,6 +392,7 @@ pub fn step_with_obstacles(
             .is_some_and(|obstacle| body.overlaps(obstacle, CONTACT_MARGIN_M))
     };
     contact.touching = (0..obstacles.len()).any(near);
+    contact.blocked = result.blocked();
     contact.reported.retain(|&index| near(index));
     let new_impact = match result.blocked_by {
         Some(index) if !contact.reported.contains(&index) => {

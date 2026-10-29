@@ -4,14 +4,18 @@ use bevy::prelude::*;
 
 use super::mapping::{GearSelection, KeyAction, KeyBindings, gears, resolve_gear_selection};
 use super::{ControlRequest, DriverInput};
+use crate::calibration::ResetCourseRequest;
 use crate::vehicle::{VehicleCommand, VehicleInput};
 
-/// 키보드 상태를 읽어 연속 입력을 갱신하고 명령 요청을 보낸다.
+/// 키보드 상태를 읽어 연속 입력을 갱신하고 명령·시작 위치 복귀 요청을 보낸다.
+///
+/// 비상 정지 키를 누르고 있는 동안에는 다른 명령처럼 복귀 요청도 보내지 않는다.
 pub fn read_keyboard(
     keys: Res<ButtonInput<KeyCode>>,
     bindings: Res<KeyBindings>,
     mut driver: ResMut<DriverInput>,
     mut requests: MessageWriter<ControlRequest>,
+    mut resets: MessageWriter<ResetCourseRequest>,
 ) {
     let pressed = |action| bindings.keys(action).iter().any(|key| keys.pressed(*key));
     let just_pressed = |action| {
@@ -43,7 +47,11 @@ pub fn read_keyboard(
         engine_toggle_pressed: just_pressed(KeyAction::EngineToggle),
         gear: resolve_gear_selection(&just, &held),
     };
+    let reset = just_pressed(KeyAction::ResetCourse) && !frame.emergency_stop_held;
     requests.write_batch(command_requests(frame));
+    if reset {
+        resets.write(ResetCourseRequest);
+    }
 }
 
 /// 한 프레임의 단발성 키 입력 상태.
