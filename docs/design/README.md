@@ -1,6 +1,6 @@
 # Phase 3 구현용 설계 이미지
 
-![Phase 3 visual guide](phase3-visual-guide-v1.png)
+![Phase 3 visual guide](../../../self-driving_sim/Car_photo/phase3-visual-guide-v1.png)
 
 - 생성 방식: 내장 image_gen, 원본 사진 61/71/01/11을 참조하여 생성.
 - A: 기본 시야 구현 목표. 61.jpg 원본을 우선하며 창·좌우 내장재·하단 선반 구도를 맞춘다.
