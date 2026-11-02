@@ -27,12 +27,14 @@ pub fn run(smoke_test: bool) -> AppExit {
     // 로그 플러그인이 등록된 뒤에 설정을 읽어 로드 결과가 로그에 남도록 한다.
     let vehicle_config = config::load_vehicle_config(Path::new(config::VEHICLE_CONFIG_PATH));
     let key_bindings = config::load_key_bindings(Path::new(config::INPUT_CONFIG_PATH));
+    let gamepad_bindings = config::load_gamepad_bindings(Path::new(config::INPUT_CONFIG_PATH));
     configure_sim_sets(&mut app);
     app.insert_resource(Vehicle(VehicleState::new(
         vehicle_config.state_machine.stop_threshold_mps,
     )))
     .insert_resource(VehicleDynamics(vehicle_config.dynamics))
     .insert_resource(key_bindings)
+    .insert_resource(gamepad_bindings)
     .add_plugins((
         InputPlugin,
         VehiclePlugin,

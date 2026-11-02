@@ -2,20 +2,16 @@
 
 use bevy::prelude::*;
 
-use super::mapping::{GearSelection, KeyAction, KeyBindings, gears, resolve_gear_selection};
-use super::{ControlRequest, DriverInput};
-use crate::calibration::ResetCourseRequest;
+use super::ControlRequest;
+use super::mapping::{GearSelection, KeyAction, KeyBindings, gears};
+use super::merge::{DeviceFrame, DeviceFrames};
 use crate::vehicle::{VehicleCommand, VehicleInput};
 
-/// 키보드 상태를 읽어 연속 입력을 갱신하고 명령·시작 위치 복귀 요청을 보낸다.
-///
-/// 비상 정지 키를 누르고 있는 동안에는 다른 명령처럼 복귀 요청도 보내지 않는다.
+/// 키보드 상태를 읽어 이번 프레임의 키보드 입력을 기록한다.
 pub fn read_keyboard(
     keys: Res<ButtonInput<KeyCode>>,
     bindings: Res<KeyBindings>,
-    mut driver: ResMut<DriverInput>,
-    mut requests: MessageWriter<ControlRequest>,
-    mut resets: MessageWriter<ResetCourseRequest>,
+    mut frames: ResMut<DeviceFrames>,
 ) {
     let pressed = |action| bindings.keys(action).iter().any(|key| keys.pressed(*key));
     let just_pressed = |action| {
@@ -25,36 +21,30 @@ pub fn read_keyboard(
             .any(|key| keys.just_pressed(*key))
     };
 
-    driver.0 = keyboard_vehicle_input(
-        pressed(KeyAction::Throttle),
-        pressed(KeyAction::Brake),
-        pressed(KeyAction::SteerLeft),
-        pressed(KeyAction::SteerRight),
-    );
-
-    let just: Vec<_> = gears()
-        .into_iter()
-        .filter(|gear| just_pressed(KeyAction::Gear(*gear)))
-        .collect();
-    let held: Vec<_> = gears()
-        .into_iter()
-        .filter(|gear| pressed(KeyAction::Gear(*gear)))
-        .collect();
-    let frame = KeyFrame {
+    frames.keyboard = DeviceFrame {
+        input: keyboard_vehicle_input(
+            pressed(KeyAction::Throttle),
+            pressed(KeyAction::Brake),
+            pressed(KeyAction::SteerLeft),
+            pressed(KeyAction::SteerRight),
+        ),
         emergency_stop_pressed: just_pressed(KeyAction::EmergencyStop),
         emergency_stop_held: pressed(KeyAction::EmergencyStop),
         emergency_release_pressed: just_pressed(KeyAction::EmergencyRelease),
         engine_toggle_pressed: just_pressed(KeyAction::EngineToggle),
-        gear: resolve_gear_selection(&just, &held),
+        gears_just_pressed: gears()
+            .into_iter()
+            .filter(|gear| just_pressed(KeyAction::Gear(*gear)))
+            .collect(),
+        gears_held: gears()
+            .into_iter()
+            .filter(|gear| pressed(KeyAction::Gear(*gear)))
+            .collect(),
+        reset_pressed: just_pressed(KeyAction::ResetCourse),
     };
-    let reset = just_pressed(KeyAction::ResetCourse) && !frame.emergency_stop_held;
-    requests.write_batch(command_requests(frame));
-    if reset {
-        resets.write(ResetCourseRequest);
-    }
 }
 
-/// 한 프레임의 단발성 키 입력 상태.
+/// 모든 입력 장치를 합친 한 프레임의 단발성 입력 상태.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KeyFrame {
     /// 비상 정지 키가 이번 프레임에 새로 눌림.

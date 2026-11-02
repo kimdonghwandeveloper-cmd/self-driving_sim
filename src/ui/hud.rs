@@ -6,8 +6,8 @@ use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 
 use crate::calibration::{ActiveTrial, CalibrationLog, CalibrationReadout};
-use crate::input::KeyBindings;
 use crate::input::mapping::KeyAction;
+use crate::input::{GamepadBindings, InputStatus, KeyBindings};
 use crate::training::TrainingLog;
 use crate::vehicle::controller::{
     ControlFeedback, Vehicle, VehicleDynamics, engine_label, gear_label,
@@ -65,8 +65,8 @@ impl CollisionSources<'_> {
 /// `update_hud`가 프레임 사이에 재사용하는 문자열.
 #[derive(Default)]
 pub struct HudCache {
-    /// 키 매핑이 바뀔 때만 다시 만드는 키 안내.
-    key_guide: String,
+    /// 매핑이 바뀔 때만 다시 만드는 키보드·게임패드 조작 안내.
+    control_guide: String,
     /// 매 프레임 상태 문자열을 쓰는 버퍼. 할당을 재사용한다.
     buffer: String,
 }
@@ -94,12 +94,14 @@ pub fn update_hud(
     collision: CollisionSources,
     calibration: CalibrationSources,
     bindings: Res<KeyBindings>,
+    gamepad: Res<GamepadBindings>,
+    input: Res<InputStatus>,
     mut cache: Local<HudCache>,
     mut query: Query<&mut Text, With<VehicleHud>>,
 ) {
     let cache = &mut *cache;
-    if bindings.is_changed() || cache.key_guide.is_empty() {
-        cache.key_guide = key_guide_text(&bindings);
+    if bindings.is_changed() || gamepad.is_changed() || cache.control_guide.is_empty() {
+        cache.control_guide = control_guide_text(&bindings, &gamepad);
     }
     write_hud(
         &mut cache.buffer,
@@ -108,7 +110,8 @@ pub fn update_hud(
         collision.status(),
         &calibration.readout(&vehicle.0, &motion.0),
         &feedback,
-        &cache.key_guide,
+        &input,
+        &cache.control_guide,
     );
     for mut text in &mut query {
         if text.0 != cache.buffer {
@@ -124,7 +127,8 @@ pub fn hud_text(
     collision: CollisionStatus,
     calibration: &CalibrationReadout,
     feedback: &ControlFeedback,
-    bindings: &KeyBindings,
+    input: &InputStatus,
+    control_guide: &str,
 ) -> String {
     let mut out = String::new();
     write_hud(
@@ -134,12 +138,14 @@ pub fn hud_text(
         collision,
         calibration,
         feedback,
-        &key_guide_text(bindings),
+        input,
+        control_guide,
     );
     out
 }
 
-/// `out`을 비우고 상태 줄, 보정 측정 줄, 키 안내를 이어 쓴다.
+/// `out`을 비우고 상태 줄, 보정 측정 줄, 조작 안내를 이어 쓴다.
+#[allow(clippy::too_many_arguments)]
 fn write_hud(
     out: &mut String,
     state: &VehicleState,
@@ -147,23 +153,26 @@ fn write_hud(
     collision: CollisionStatus,
     calibration: &CalibrationReadout,
     feedback: &ControlFeedback,
-    key_guide: &str,
+    input: &InputStatus,
+    control_guide: &str,
 ) {
     out.clear();
-    write_status(out, state, motion, collision, feedback).expect("writing to a String cannot fail");
+    write_status(out, state, motion, collision, feedback, input)
+        .expect("writing to a String cannot fail");
     out.push_str("\n\n");
     write_calibration(out, calibration).expect("writing to a String cannot fail");
     out.push_str("\n\n");
-    out.push_str(key_guide);
+    out.push_str(control_guide);
 }
 
-/// 차량 상태·운동·충돌·입력·마지막 명령 결과 줄을 쓴다.
+/// 차량 상태·운동·충돌·입력·입력 장치·마지막 명령 결과 줄을 쓴다.
 fn write_status(
     out: &mut String,
     state: &VehicleState,
     motion: &Motion,
     collision: CollisionStatus,
     feedback: &ControlFeedback,
+    status: &InputStatus,
 ) -> fmt::Result {
     let input = state.input();
     let moving = if !state.speed_valid() {
@@ -215,6 +224,16 @@ fn write_status(
         input.steering
     )?;
     writeln!(out, "Drive permitted: {drive}")?;
+    match &status.gamepad {
+        Some(gamepad) if gamepad.ready => write!(out, "Gamepad: connected ({})", gamepad.name)?,
+        Some(gamepad) => write!(
+            out,
+            "Gamepad: connected ({}) - release all inputs to activate",
+            gamepad.name
+        )?,
+        None => write!(out, "Gamepad: not connected")?,
+    }
+    writeln!(out, "   Active input: {}", status.source.label())?;
     match &feedback.last {
         Some(entry) if entry.accepted => write!(out, "Last: [OK] {}", entry.message),
         Some(entry) => write!(out, "Last: [REJECTED] {}", entry.message),
@@ -305,10 +324,45 @@ pub fn key_guide_text(bindings: &KeyBindings) -> String {
     .join("\n")
 }
 
+/// 게임패드 매핑으로 HUD 아래쪽 게임패드 안내 세 줄을 만든다.
+pub fn gamepad_guide_text(bindings: &GamepadBindings) -> String {
+    let button = |action| bindings.label(action);
+    let (throttle, brake, steering) = bindings.drive_labels();
+    [
+        format!("Pad   throttle {throttle} | brake {brake} | steer {steering}"),
+        format!(
+            "      gear P {} | R {} | N {} | D {}",
+            button(KeyAction::Gear(Gear::Park)),
+            button(KeyAction::Gear(Gear::Reverse)),
+            button(KeyAction::Gear(Gear::Neutral)),
+            button(KeyAction::Gear(Gear::Drive))
+        ),
+        format!(
+            "      engine {} | e-stop {} | release {}",
+            button(KeyAction::EngineToggle),
+            button(KeyAction::EmergencyStop),
+            button(KeyAction::EmergencyRelease)
+        ),
+    ]
+    .join("\n")
+}
+
+/// 키보드·게임패드 안내를 이어 HUD 조작 안내를 만든다.
+pub fn control_guide_text(keys: &KeyBindings, gamepad: &GamepadBindings) -> String {
+    format!("{}\n{}", key_guide_text(keys), gamepad_guide_text(gamepad))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::input::InputSource;
+    use crate::input::merge::ConnectedGamepad;
     use crate::vehicle::controller::Feedback;
+
+    /// 기본 매핑의 조작 안내를 만든다.
+    fn default_guide() -> String {
+        control_guide_text(&KeyBindings::default(), &GamepadBindings::default())
+    }
 
     /// HUD 문자열에 상태·마지막 거부 사유·키 안내·임시값 경고가 들어가는지 확인한다.
     #[test]
@@ -326,12 +380,58 @@ mod tests {
             CollisionStatus::default(),
             &CalibrationReadout::default(),
             &feedback,
-            &KeyBindings::default(),
+            &InputStatus::default(),
+            &default_guide(),
         );
         assert!(text.contains("Engine: OFF   Gear: P"));
         assert!(text.contains("Last: [REJECTED] gear D: engine is off"));
         assert!(text.contains("e-stop Space"));
         assert!(text.contains("not verified"));
+    }
+
+    /// 게임패드 연결 상태·선택 장치와 게임패드 조작 안내를 표시하는지 확인한다.
+    #[test]
+    fn hud_shows_gamepad_status_and_guide() {
+        let text = |input: &InputStatus| {
+            hud_text(
+                &VehicleState::default(),
+                &Motion::default(),
+                CollisionStatus::default(),
+                &CalibrationReadout::default(),
+                &ControlFeedback::default(),
+                input,
+                &default_guide(),
+            )
+        };
+        let disconnected = text(&InputStatus::default());
+        assert!(disconnected.contains("Gamepad: not connected   Active input: Keyboard"));
+        assert!(
+            disconnected.contains(
+                "Pad   throttle left stick up | brake left stick down | steer right stick"
+            )
+        );
+        assert!(disconnected.contains("gear P Y | R B | N A | D X"));
+        assert!(disconnected.contains("engine Start | e-stop RB | release Back"));
+
+        let connected = text(&InputStatus {
+            gamepad: Some(ConnectedGamepad {
+                entity: Entity::PLACEHOLDER,
+                name: "Xbox Controller".to_owned(),
+                ready: true,
+            }),
+            source: InputSource::Gamepad,
+        });
+        assert!(connected.contains("Gamepad: connected (Xbox Controller)   Active input: Gamepad"));
+
+        let waiting = text(&InputStatus {
+            gamepad: Some(ConnectedGamepad {
+                entity: Entity::PLACEHOLDER,
+                name: "Xbox Controller".to_owned(),
+                ready: false,
+            }),
+            source: InputSource::Keyboard,
+        });
+        assert!(waiting.contains("release all inputs to activate"));
     }
 
     /// 속도가 잘못된 값이면 HUD에 INVALID로 표시하는지 확인한다.
@@ -345,7 +445,8 @@ mod tests {
             CollisionStatus::default(),
             &CalibrationReadout::default(),
             &ControlFeedback::default(),
-            &KeyBindings::default(),
+            &InputStatus::default(),
+            &default_guide(),
         );
         assert!(text.contains("INVALID"));
     }
@@ -362,7 +463,8 @@ mod tests {
             },
             &CalibrationReadout::default(),
             &ControlFeedback::default(),
-            &KeyBindings::default(),
+            &InputStatus::default(),
+            &default_guide(),
         );
         assert!(text.contains("Obstacle contact: YES   Collisions: 2"));
     }
@@ -399,7 +501,8 @@ mod tests {
             CollisionStatus::default(),
             &readout,
             &ControlFeedback::default(),
-            &KeyBindings::default(),
+            &InputStatus::default(),
+            &default_guide(),
         );
         assert!(text.contains("Turn radius (rear axle): 9.50 m   Min at full lock: 4.85 m"));
         assert!(text.contains("Full-brake stop estimate: 1.25 m"));
@@ -414,7 +517,8 @@ mod tests {
             CollisionStatus::default(),
             &CalibrationReadout::default(),
             &ControlFeedback::default(),
-            &KeyBindings::default(),
+            &InputStatus::default(),
+            &default_guide(),
         );
         assert!(straight.contains("Turn radius (rear axle): straight"));
         assert!(straight.contains("Last stop: -"));

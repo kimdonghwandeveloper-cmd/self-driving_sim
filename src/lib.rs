@@ -38,15 +38,20 @@ mod tests {
     use std::time::Duration;
 
     use bevy::input::ButtonState;
+    use bevy::input::gamepad::{
+        GamepadConnection, GamepadConnectionEvent, RawGamepadAxisChangedEvent,
+        RawGamepadButtonChangedEvent, RawGamepadEvent,
+    };
     use bevy::input::keyboard::{Key, KeyboardInput, NativeKey};
     use bevy::time::TimeUpdateStrategy;
 
     use super::*;
     use crate::calibration::{CalibrationLog, CalibrationPlugin};
+    use crate::input::{DriverInput, InputSource, InputStatus};
     use crate::training::{TrainingLog, TrainingPlugin};
     use crate::vehicle::{
         DynamicsParams, EngineState, Gear, GroundRect, Obstacle, Vehicle, VehicleCommand,
-        VehicleContact, VehicleMotion, VehiclePlugin,
+        VehicleContact, VehicleInput, VehicleMotion, VehiclePlugin,
     };
 
     /// 키보드 입력과 차량 시스템만 있는 창 없는 앱을 만든다. 한 번 갱신할 때마다 고정 주기 1단계가 돈다.
@@ -261,6 +266,271 @@ mod tests {
         assert_eq!(world.resource::<Vehicle>().0.speed_mps(), 0.0);
         assert!(world.resource::<VehicleContact>().0.touching);
         assert_eq!(world.resource::<TrainingLog>().collision_count(), 1);
+    }
+
+    /// 게임패드 연결 메시지를 보내고 앱을 한 번 갱신해 게임패드 엔티티를 만든다.
+    fn connect_gamepad(app: &mut App) -> Entity {
+        let gamepad = app.world_mut().spawn_empty().id();
+        app.world_mut().write_message(GamepadConnectionEvent::new(
+            gamepad,
+            GamepadConnection::Connected {
+                name: "Test Pad".to_owned(),
+                vendor_id: None,
+                product_id: None,
+            },
+        ));
+        app.update();
+        gamepad
+    }
+
+    /// 게임패드 연결 해제 메시지를 보낸다.
+    fn disconnect_gamepad(app: &mut App, gamepad: Entity) {
+        app.world_mut().write_message(GamepadConnectionEvent::new(
+            gamepad,
+            GamepadConnection::Disconnected,
+        ));
+    }
+
+    /// 아날로그 축 값 변화를 실제 장치와 같은 원시 메시지 경로로 보낸다.
+    fn set_pad_axis(app: &mut App, gamepad: Entity, axis: GamepadAxis, value: f32) {
+        app.world_mut()
+            .write_message(RawGamepadEvent::Axis(RawGamepadAxisChangedEvent::new(
+                gamepad, axis, value,
+            )));
+    }
+
+    /// 버튼·트리거 값 변화를 실제 장치와 같은 원시 메시지 경로로 보낸다.
+    fn set_pad_button(app: &mut App, gamepad: Entity, button: GamepadButton, value: f32) {
+        app.world_mut()
+            .write_message(RawGamepadEvent::Button(RawGamepadButtonChangedEvent::new(
+                gamepad, button, value,
+            )));
+    }
+
+    /// 게임패드 Start로 시동, X로 D를 넣고 왼쪽 스틱 위·오른쪽 스틱으로 주행하며,
+    /// 왼쪽 스틱 아래로 멈추는지 앱 전체 경로로 확인한다.
+    #[test]
+    fn gamepad_starts_engine_and_drives() {
+        let mut app = headless_app();
+        let gamepad = connect_gamepad(&mut app);
+        assert!(app.world().resource::<InputStatus>().gamepad.is_some());
+
+        set_pad_button(&mut app, gamepad, GamepadButton::Start, 1.0);
+        app.update();
+        set_pad_button(&mut app, gamepad, GamepadButton::Start, 0.0);
+        set_pad_button(&mut app, gamepad, GamepadButton::West, 1.0);
+        app.update();
+        let state = &app.world().resource::<Vehicle>().0;
+        assert_eq!(state.engine(), EngineState::Ready);
+        assert_eq!(state.gear(), Gear::Drive);
+
+        set_pad_button(&mut app, gamepad, GamepadButton::West, 0.0);
+        set_pad_axis(&mut app, gamepad, GamepadAxis::LeftStickY, 1.0);
+        set_pad_axis(&mut app, gamepad, GamepadAxis::RightStickX, 1.0);
+        for _ in 0..64 {
+            app.update();
+        }
+        let world = app.world();
+        assert!(world.resource::<Vehicle>().0.speed_mps() > 0.5);
+        assert_eq!(world.resource::<DriverInput>().0.steering, 1.0);
+        assert_eq!(world.resource::<InputStatus>().source, InputSource::Gamepad);
+
+        set_pad_axis(&mut app, gamepad, GamepadAxis::LeftStickY, -1.0);
+        for _ in 0..128 {
+            app.update();
+        }
+        assert_eq!(app.world().resource::<Vehicle>().0.speed_mps(), 0.0);
+    }
+
+    /// 주행 중 게임패드 연결이 끊기면 입력이 그 프레임에 사라지고 비상 정지로 멈추는지 확인한다.
+    #[test]
+    fn gamepad_disconnect_while_driving_clears_input_and_stops() {
+        let mut app = headless_app();
+        engine_on_in_drive(&mut app);
+        let gamepad = connect_gamepad(&mut app);
+        set_pad_axis(&mut app, gamepad, GamepadAxis::LeftStickY, 1.0);
+        set_pad_axis(&mut app, gamepad, GamepadAxis::RightStickX, -1.0);
+        for _ in 0..64 {
+            app.update();
+        }
+        assert!(app.world().resource::<Vehicle>().0.speed_mps() > 0.5);
+
+        disconnect_gamepad(&mut app, gamepad);
+        app.update();
+        let world = app.world();
+        assert_eq!(world.resource::<DriverInput>().0, VehicleInput::default());
+        let status = world.resource::<InputStatus>();
+        assert_eq!(status.gamepad, None);
+        assert_eq!(status.source, InputSource::Keyboard);
+        assert_eq!(
+            world.resource::<Vehicle>().0.engine(),
+            EngineState::EmergencyStop
+        );
+
+        for _ in 0..128 {
+            app.update();
+        }
+        assert_eq!(app.world().resource::<Vehicle>().0.speed_mps(), 0.0);
+    }
+
+    /// 중간 입력이 설정한 데드존 그대로 적용되어 Bevy 필터와 이중으로 줄어들지 않는지 앱 전체 경로로 확인한다.
+    #[test]
+    fn analog_values_use_only_configured_deadzone() {
+        /// 원시 값을 넣고 앱을 한 번 갱신한 뒤 차량 입력을 반환한다.
+        fn input_after(
+            app: &mut App,
+            gamepad: Entity,
+            steering: f32,
+            throttle: f32,
+        ) -> VehicleInput {
+            set_pad_axis(app, gamepad, GamepadAxis::RightStickX, steering);
+            set_pad_axis(app, gamepad, GamepadAxis::LeftStickY, throttle);
+            app.update();
+            app.world().resource::<DriverInput>().0
+        }
+        let mut app = headless_app();
+        let gamepad = connect_gamepad(&mut app);
+
+        let inside = input_after(&mut app, gamepad, 0.11, 0.11);
+        assert_eq!(inside, VehicleInput::default());
+
+        // 이중 적용이면 원시 0.14는 데드존 안(약 0.164)이라 0이 된다.
+        let just_outside = input_after(&mut app, gamepad, 0.14, 0.14);
+        assert!((just_outside.steering - 0.02 / 0.88).abs() < 1e-4);
+        assert!((just_outside.throttle - 0.02 / 0.88).abs() < 1e-4);
+
+        let middle = input_after(&mut app, gamepad, -0.56, 0.56);
+        assert!((middle.steering + 0.5).abs() < 1e-4);
+        assert!((middle.throttle - 0.5).abs() < 1e-4);
+    }
+
+    /// 대체 게임패드에 가속·조향이 눌려 있으면 연결 해제 프레임과 이후에도 입력이 없고,
+    /// 모든 입력을 놓은 뒤에야 조작할 수 있는지 확인한다.
+    #[test]
+    fn replacement_gamepad_needs_neutral_before_driving() {
+        let mut app = headless_app();
+        engine_on_in_drive(&mut app);
+        let first = connect_gamepad(&mut app);
+        let second = connect_gamepad(&mut app);
+        set_pad_axis(&mut app, second, GamepadAxis::LeftStickY, 1.0);
+        set_pad_axis(&mut app, second, GamepadAxis::RightStickX, 1.0);
+        app.update();
+
+        disconnect_gamepad(&mut app, first);
+        for _ in 0..32 {
+            app.update();
+            let world = app.world();
+            assert_eq!(world.resource::<DriverInput>().0, VehicleInput::default());
+            assert_eq!(world.resource::<Vehicle>().0.speed_mps(), 0.0);
+        }
+        let status = app.world().resource::<InputStatus>();
+        let pad = status.gamepad.as_ref().expect("second pad selected");
+        assert_eq!(pad.entity, second);
+        assert!(!pad.ready);
+
+        set_pad_axis(&mut app, second, GamepadAxis::RightStickX, 0.0);
+        app.update();
+        assert_eq!(
+            app.world().resource::<DriverInput>().0,
+            VehicleInput::default(),
+            "left stick still pushed"
+        );
+        set_pad_axis(&mut app, second, GamepadAxis::LeftStickY, 0.0);
+        app.update();
+        set_pad_axis(&mut app, second, GamepadAxis::LeftStickY, 1.0);
+        app.update();
+        assert_eq!(app.world().resource::<DriverInput>().0.throttle, 1.0);
+    }
+
+    /// 대체 게임패드가 중립 대기 중이어도 비상 정지는 바로 적용되는지 확인한다.
+    #[test]
+    fn waiting_gamepad_can_still_emergency_stop() {
+        let mut app = headless_app();
+        engine_on_in_drive(&mut app);
+        let first = connect_gamepad(&mut app);
+        let second = connect_gamepad(&mut app);
+        set_pad_axis(&mut app, second, GamepadAxis::LeftStickY, 1.0);
+        app.update();
+        disconnect_gamepad(&mut app, first);
+        app.update();
+
+        set_pad_button(&mut app, second, GamepadButton::RightTrigger, 1.0);
+        app.update();
+        assert_eq!(
+            app.world().resource::<Vehicle>().0.engine(),
+            EngineState::EmergencyStop
+        );
+    }
+
+    /// 같은 게임패드가 다시 연결되어도 중립 전에는 입력이 쓰이지 않는지 확인한다.
+    #[test]
+    fn reconnected_gamepad_needs_neutral_before_driving() {
+        let mut app = headless_app();
+        engine_on_in_drive(&mut app);
+        let gamepad = connect_gamepad(&mut app);
+        disconnect_gamepad(&mut app, gamepad);
+        app.update();
+        assert_eq!(app.world().resource::<InputStatus>().gamepad, None);
+
+        // 재연결 메시지와 밀린 스틱 값이 같은 프레임에 도착하는 경우.
+        app.world_mut().write_message(GamepadConnectionEvent::new(
+            gamepad,
+            GamepadConnection::Connected {
+                name: "Test Pad".to_owned(),
+                vendor_id: None,
+                product_id: None,
+            },
+        ));
+        set_pad_axis(&mut app, gamepad, GamepadAxis::LeftStickY, 1.0);
+        app.update();
+        app.update();
+        assert_eq!(
+            app.world().resource::<DriverInput>().0,
+            VehicleInput::default()
+        );
+    }
+
+    /// 키보드로 주행 중이면 게임패드가 끊겨도 비상 정지하지 않고 키보드 입력이 유지되는지 확인한다.
+    #[test]
+    fn gamepad_disconnect_while_keyboard_driving_keeps_engine_state() {
+        let mut app = headless_app();
+        engine_on_in_drive(&mut app);
+        let gamepad = connect_gamepad(&mut app);
+        for _ in 0..64 {
+            update_with_keys(&mut app, &[KeyCode::KeyW]);
+        }
+        disconnect_gamepad(&mut app, gamepad);
+        update_with_keys(&mut app, &[KeyCode::KeyW]);
+        let world = app.world();
+        assert_eq!(world.resource::<Vehicle>().0.engine(), EngineState::Ready);
+        assert_eq!(world.resource::<DriverInput>().0.throttle, 1.0);
+    }
+
+    /// 게임패드 비상 정지와 키보드 해제가 같은 프레임에 들어와도 비상 정지가 유지되는지 확인한다.
+    #[test]
+    fn gamepad_emergency_stop_beats_keyboard_release() {
+        let mut app = headless_app();
+        engine_on_in_drive(&mut app);
+        let gamepad = connect_gamepad(&mut app);
+        set_pad_button(&mut app, gamepad, GamepadButton::RightTrigger, 1.0);
+        update_with_keys(&mut app, &[KeyCode::Backspace]);
+        assert_eq!(
+            app.world().resource::<Vehicle>().0.engine(),
+            EngineState::EmergencyStop
+        );
+    }
+
+    /// 키보드와 게임패드의 시동 입력이 같은 프레임에 겹치면 토글이 한 번만 적용되는지 확인한다.
+    #[test]
+    fn simultaneous_engine_toggle_applies_once() {
+        let mut app = headless_app();
+        let gamepad = connect_gamepad(&mut app);
+        set_pad_button(&mut app, gamepad, GamepadButton::Start, 1.0);
+        update_with_keys(&mut app, &[KeyCode::Enter]);
+        assert_eq!(
+            app.world().resource::<Vehicle>().0.engine(),
+            EngineState::Ready
+        );
     }
 
     /// 키보드 경로로 가속→최대 제동→시작 위치 복귀를 두 번 반복하면, 매번 같은 출발점에서
