@@ -9,6 +9,7 @@
 //! - 단발 명령: 하나의 프레임으로 합쳐 `command_requests` 규칙을 그대로 따른다. 비상 정지는 어느
 //!   장치든 우선하고, 시동 토글은 두 장치가 함께 눌러도 한 번이며, 기어가 다르면 동시 요청으로 거부한다.
 //! - 연결 해제: 게임패드로 주행 중 연결이 끊기면 비상 정지를 요청한다.
+//! - 새 게임패드: 입력이 중립이 된 뒤에 활성화한다. 그 전에는 비상 정지만 받는다.
 
 use bevy::prelude::*;
 
@@ -31,6 +32,17 @@ pub struct DeviceFrame {
     pub gears_just_pressed: Vec<Gear>,
     pub gears_held: Vec<Gear>,
     pub reset_pressed: bool,
+}
+
+impl DeviceFrame {
+    /// 비상 정지 입력만 남긴 프레임을 반환한다.
+    pub fn emergency_only(&self) -> Self {
+        Self {
+            emergency_stop_pressed: self.emergency_stop_pressed,
+            emergency_stop_held: self.emergency_stop_held,
+            ..Self::default()
+        }
+    }
 }
 
 /// 장치별 입력 시스템이 기록하고 [`combine_inputs`]가 읽는 이번 프레임 입력.
@@ -65,6 +77,8 @@ impl InputSource {
 pub struct ConnectedGamepad {
     pub entity: Entity,
     pub name: String,
+    /// 선택된 뒤 입력이 중립이 된 적이 있어 조작에 쓸 수 있음.
+    pub ready: bool,
 }
 
 /// 입력 장치 연결·선택 상태. HUD에 표시한다.

@@ -270,7 +270,10 @@ pub fn gamepad_frame(gamepad: &Gamepad, bindings: &GamepadBindings) -> DeviceFra
 /// 조작에 쓸 게임패드를 고르고 이번 프레임의 게임패드 입력을 갱신한다.
 ///
 /// 쓰던 게임패드가 있으면 유지하고, 없으면 연결된 것 중 하나를 고른다. 게임패드가 사라지면
-/// `Gamepad` 컴포넌트가 제거되어 조회되지 않으므로 빈 프레임이 되고, 이전 입력은 남지 않는다.
+/// `Gamepad` 컴포넌트가 제거되어 조회되지 않으므로 이전 입력은 남지 않는다.
+///
+/// 새로 고른 게임패드는 모든 입력이 중립이 될 때까지 비상 정지 외의 입력을 쓰지 않는다.
+/// 따라서 대체 게임패드의 눌려 있던 트리거·스틱으로 차량이 갑자기 움직이지 않는다.
 pub fn read_gamepad(
     gamepads: Query<(Entity, &Gamepad, Option<&Name>)>,
     bindings: Res<GamepadBindings>,
@@ -290,13 +293,21 @@ pub fn read_gamepad(
                     entity,
                     name: name
                         .map_or_else(|| "unnamed".to_owned(), |name| name.as_str().to_owned()),
+                    ready: false,
                 });
     }
-    frames.gamepad = selected
+    let frame = selected
         .and_then(|entity| gamepads.get(entity).ok())
         .map_or_else(DeviceFrame::default, |(_, gamepad, _)| {
             gamepad_frame(gamepad, &bindings)
         });
+    let emergency_only = frame.emergency_only();
+    let neutral = frame == emergency_only;
+    let ready = status.gamepad.as_mut().is_some_and(|pad| {
+        pad.ready |= neutral;
+        pad.ready
+    });
+    frames.gamepad = if ready { frame } else { emergency_only };
 }
 
 #[cfg(test)]

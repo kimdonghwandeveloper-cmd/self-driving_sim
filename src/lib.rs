@@ -373,6 +373,123 @@ mod tests {
         assert_eq!(app.world().resource::<Vehicle>().0.speed_mps(), 0.0);
     }
 
+    /// 중간 입력이 설정한 데드존 그대로 적용되어 Bevy 필터와 이중으로 줄어들지 않는지 앱 전체 경로로 확인한다.
+    #[test]
+    fn analog_values_use_only_configured_deadzone() {
+        /// 원시 값을 넣고 앱을 한 번 갱신한 뒤 차량 입력을 반환한다.
+        fn input_after(
+            app: &mut App,
+            gamepad: Entity,
+            steering: f32,
+            throttle: f32,
+        ) -> VehicleInput {
+            set_pad_axis(app, gamepad, GamepadAxis::LeftStickX, steering);
+            set_pad_button(app, gamepad, GamepadButton::RightTrigger2, throttle);
+            app.update();
+            app.world().resource::<DriverInput>().0
+        }
+        let mut app = headless_app();
+        let gamepad = connect_gamepad(&mut app);
+
+        let inside = input_after(&mut app, gamepad, 0.11, 0.04);
+        assert_eq!(inside, VehicleInput::default());
+
+        // 이중 적용이면 원시 0.14/0.08은 데드존 안(약 0.164/0.095)이라 0이 된다.
+        let just_outside = input_after(&mut app, gamepad, 0.14, 0.08);
+        assert!((just_outside.steering - 0.02 / 0.88).abs() < 1e-4);
+        assert!((just_outside.throttle - 0.03 / 0.95).abs() < 1e-4);
+
+        let middle = input_after(&mut app, gamepad, -0.56, 0.525);
+        assert!((middle.steering + 0.5).abs() < 1e-4);
+        assert!((middle.throttle - 0.5).abs() < 1e-4);
+    }
+
+    /// 대체 게임패드에 가속·조향이 눌려 있으면 연결 해제 프레임과 이후에도 입력이 없고,
+    /// 모든 입력을 놓은 뒤에야 조작할 수 있는지 확인한다.
+    #[test]
+    fn replacement_gamepad_needs_neutral_before_driving() {
+        let mut app = headless_app();
+        engine_on_in_drive(&mut app);
+        let first = connect_gamepad(&mut app);
+        let second = connect_gamepad(&mut app);
+        set_pad_button(&mut app, second, GamepadButton::RightTrigger2, 1.0);
+        set_pad_axis(&mut app, second, GamepadAxis::LeftStickX, 1.0);
+        app.update();
+
+        disconnect_gamepad(&mut app, first);
+        for _ in 0..32 {
+            app.update();
+            let world = app.world();
+            assert_eq!(world.resource::<DriverInput>().0, VehicleInput::default());
+            assert_eq!(world.resource::<Vehicle>().0.speed_mps(), 0.0);
+        }
+        let status = app.world().resource::<InputStatus>();
+        let pad = status.gamepad.as_ref().expect("second pad selected");
+        assert_eq!(pad.entity, second);
+        assert!(!pad.ready);
+
+        set_pad_axis(&mut app, second, GamepadAxis::LeftStickX, 0.0);
+        app.update();
+        assert_eq!(
+            app.world().resource::<DriverInput>().0,
+            VehicleInput::default(),
+            "trigger still held"
+        );
+        set_pad_button(&mut app, second, GamepadButton::RightTrigger2, 0.0);
+        app.update();
+        set_pad_button(&mut app, second, GamepadButton::RightTrigger2, 1.0);
+        app.update();
+        assert_eq!(app.world().resource::<DriverInput>().0.throttle, 1.0);
+    }
+
+    /// 대체 게임패드가 중립 대기 중이어도 비상 정지는 바로 적용되는지 확인한다.
+    #[test]
+    fn waiting_gamepad_can_still_emergency_stop() {
+        let mut app = headless_app();
+        engine_on_in_drive(&mut app);
+        let first = connect_gamepad(&mut app);
+        let second = connect_gamepad(&mut app);
+        set_pad_button(&mut app, second, GamepadButton::RightTrigger2, 1.0);
+        app.update();
+        disconnect_gamepad(&mut app, first);
+        app.update();
+
+        set_pad_button(&mut app, second, GamepadButton::RightTrigger, 1.0);
+        app.update();
+        assert_eq!(
+            app.world().resource::<Vehicle>().0.engine(),
+            EngineState::EmergencyStop
+        );
+    }
+
+    /// 같은 게임패드가 다시 연결되어도 중립 전에는 입력이 쓰이지 않는지 확인한다.
+    #[test]
+    fn reconnected_gamepad_needs_neutral_before_driving() {
+        let mut app = headless_app();
+        engine_on_in_drive(&mut app);
+        let gamepad = connect_gamepad(&mut app);
+        disconnect_gamepad(&mut app, gamepad);
+        app.update();
+        assert_eq!(app.world().resource::<InputStatus>().gamepad, None);
+
+        // 재연결 메시지와 눌린 트리거 값이 같은 프레임에 도착하는 경우.
+        app.world_mut().write_message(GamepadConnectionEvent::new(
+            gamepad,
+            GamepadConnection::Connected {
+                name: "Test Pad".to_owned(),
+                vendor_id: None,
+                product_id: None,
+            },
+        ));
+        set_pad_button(&mut app, gamepad, GamepadButton::RightTrigger2, 1.0);
+        app.update();
+        app.update();
+        assert_eq!(
+            app.world().resource::<DriverInput>().0,
+            VehicleInput::default()
+        );
+    }
+
     /// 키보드로 주행 중이면 게임패드가 끊겨도 비상 정지하지 않고 키보드 입력이 유지되는지 확인한다.
     #[test]
     fn gamepad_disconnect_while_keyboard_driving_keeps_engine_state() {

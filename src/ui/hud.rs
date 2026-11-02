@@ -225,7 +225,12 @@ fn write_status(
     )?;
     writeln!(out, "Drive permitted: {drive}")?;
     match &status.gamepad {
-        Some(gamepad) => write!(out, "Gamepad: connected ({})", gamepad.name)?,
+        Some(gamepad) if gamepad.ready => write!(out, "Gamepad: connected ({})", gamepad.name)?,
+        Some(gamepad) => write!(
+            out,
+            "Gamepad: connected ({}) - release all inputs to activate",
+            gamepad.name
+        )?,
         None => write!(out, "Gamepad: not connected")?,
     }
     writeln!(out, "   Active input: {}", status.source.label())?;
@@ -408,10 +413,21 @@ mod tests {
             gamepad: Some(ConnectedGamepad {
                 entity: Entity::PLACEHOLDER,
                 name: "Xbox Controller".to_owned(),
+                ready: true,
             }),
             source: InputSource::Gamepad,
         });
         assert!(connected.contains("Gamepad: connected (Xbox Controller)   Active input: Gamepad"));
+
+        let waiting = text(&InputStatus {
+            gamepad: Some(ConnectedGamepad {
+                entity: Entity::PLACEHOLDER,
+                name: "Xbox Controller".to_owned(),
+                ready: false,
+            }),
+            source: InputSource::Keyboard,
+        });
+        assert!(waiting.contains("release all inputs to activate"));
     }
 
     /// 속도가 잘못된 값이면 HUD에 INVALID로 표시하는지 확인한다.
