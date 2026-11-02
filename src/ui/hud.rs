@@ -405,7 +405,11 @@ mod tests {
         };
         let disconnected = text(&InputStatus::default());
         assert!(disconnected.contains("Gamepad: not connected   Active input: Keyboard"));
-        assert!(disconnected.contains("Pad   throttle RT | brake LT | steer left stick"));
+        assert!(
+            disconnected.contains(
+                "Pad   throttle left stick up | brake left stick down | steer right stick"
+            )
+        );
         assert!(disconnected.contains("gear P Y | R B | N A | D X"));
         assert!(disconnected.contains("engine Start | e-stop RB | release Back"));
 

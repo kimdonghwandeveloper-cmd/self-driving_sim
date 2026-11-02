@@ -25,9 +25,9 @@ reset_course = ["KeyR"]
 #   DPadUp/DPadDown/DPadLeft/DPadRight (LT/RT는 아날로그 축이라 버튼 동작에 쓸 수 없습니다)
 # 한 버튼을 두 동작에 지정할 수 없고, 잘못된 값이 있으면 기본 게임패드 매핑을 사용합니다.
 [gamepad]
+# "sticks": 왼쪽 스틱 위=가속, 아래=제동, 오른쪽 스틱 좌우=조향 (기본값, PLAN.md 0-1절)
 # "triggers": 왼쪽 스틱 좌우=조향, RT=가속, LT=제동
-# "sticks": 왼쪽 스틱 위=가속, 아래=제동, 오른쪽 스틱 좌우=조향 (PLAN.md 0-1절)
-layout = "triggers"
+layout = "sticks"
 # 데드존(0..=0.9). 이 값 이하의 입력은 0이며, 바깥 범위는 0..1로 다시 늘립니다.
 stick_deadzone = 0.12
 trigger_deadzone = 0.05

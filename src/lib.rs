@@ -307,7 +307,8 @@ mod tests {
             )));
     }
 
-    /// 게임패드 Start로 시동, X로 D를 넣고 RT·왼쪽 스틱으로 주행하는지 앱 전체 경로로 확인한다.
+    /// 게임패드 Start로 시동, X로 D를 넣고 왼쪽 스틱 위·오른쪽 스틱으로 주행하며,
+    /// 왼쪽 스틱 아래로 멈추는지 앱 전체 경로로 확인한다.
     #[test]
     fn gamepad_starts_engine_and_drives() {
         let mut app = headless_app();
@@ -324,8 +325,8 @@ mod tests {
         assert_eq!(state.gear(), Gear::Drive);
 
         set_pad_button(&mut app, gamepad, GamepadButton::West, 0.0);
-        set_pad_button(&mut app, gamepad, GamepadButton::RightTrigger2, 1.0);
-        set_pad_axis(&mut app, gamepad, GamepadAxis::LeftStickX, 1.0);
+        set_pad_axis(&mut app, gamepad, GamepadAxis::LeftStickY, 1.0);
+        set_pad_axis(&mut app, gamepad, GamepadAxis::RightStickX, 1.0);
         for _ in 0..64 {
             app.update();
         }
@@ -334,8 +335,7 @@ mod tests {
         assert_eq!(world.resource::<DriverInput>().0.steering, 1.0);
         assert_eq!(world.resource::<InputStatus>().source, InputSource::Gamepad);
 
-        set_pad_button(&mut app, gamepad, GamepadButton::RightTrigger2, 0.0);
-        set_pad_button(&mut app, gamepad, GamepadButton::LeftTrigger2, 1.0);
+        set_pad_axis(&mut app, gamepad, GamepadAxis::LeftStickY, -1.0);
         for _ in 0..128 {
             app.update();
         }
@@ -348,8 +348,8 @@ mod tests {
         let mut app = headless_app();
         engine_on_in_drive(&mut app);
         let gamepad = connect_gamepad(&mut app);
-        set_pad_button(&mut app, gamepad, GamepadButton::RightTrigger2, 1.0);
-        set_pad_axis(&mut app, gamepad, GamepadAxis::LeftStickX, -1.0);
+        set_pad_axis(&mut app, gamepad, GamepadAxis::LeftStickY, 1.0);
+        set_pad_axis(&mut app, gamepad, GamepadAxis::RightStickX, -1.0);
         for _ in 0..64 {
             app.update();
         }
@@ -383,23 +383,23 @@ mod tests {
             steering: f32,
             throttle: f32,
         ) -> VehicleInput {
-            set_pad_axis(app, gamepad, GamepadAxis::LeftStickX, steering);
-            set_pad_button(app, gamepad, GamepadButton::RightTrigger2, throttle);
+            set_pad_axis(app, gamepad, GamepadAxis::RightStickX, steering);
+            set_pad_axis(app, gamepad, GamepadAxis::LeftStickY, throttle);
             app.update();
             app.world().resource::<DriverInput>().0
         }
         let mut app = headless_app();
         let gamepad = connect_gamepad(&mut app);
 
-        let inside = input_after(&mut app, gamepad, 0.11, 0.04);
+        let inside = input_after(&mut app, gamepad, 0.11, 0.11);
         assert_eq!(inside, VehicleInput::default());
 
-        // 이중 적용이면 원시 0.14/0.08은 데드존 안(약 0.164/0.095)이라 0이 된다.
-        let just_outside = input_after(&mut app, gamepad, 0.14, 0.08);
+        // 이중 적용이면 원시 0.14는 데드존 안(약 0.164)이라 0이 된다.
+        let just_outside = input_after(&mut app, gamepad, 0.14, 0.14);
         assert!((just_outside.steering - 0.02 / 0.88).abs() < 1e-4);
-        assert!((just_outside.throttle - 0.03 / 0.95).abs() < 1e-4);
+        assert!((just_outside.throttle - 0.02 / 0.88).abs() < 1e-4);
 
-        let middle = input_after(&mut app, gamepad, -0.56, 0.525);
+        let middle = input_after(&mut app, gamepad, -0.56, 0.56);
         assert!((middle.steering + 0.5).abs() < 1e-4);
         assert!((middle.throttle - 0.5).abs() < 1e-4);
     }
@@ -412,8 +412,8 @@ mod tests {
         engine_on_in_drive(&mut app);
         let first = connect_gamepad(&mut app);
         let second = connect_gamepad(&mut app);
-        set_pad_button(&mut app, second, GamepadButton::RightTrigger2, 1.0);
-        set_pad_axis(&mut app, second, GamepadAxis::LeftStickX, 1.0);
+        set_pad_axis(&mut app, second, GamepadAxis::LeftStickY, 1.0);
+        set_pad_axis(&mut app, second, GamepadAxis::RightStickX, 1.0);
         app.update();
 
         disconnect_gamepad(&mut app, first);
@@ -428,16 +428,16 @@ mod tests {
         assert_eq!(pad.entity, second);
         assert!(!pad.ready);
 
-        set_pad_axis(&mut app, second, GamepadAxis::LeftStickX, 0.0);
+        set_pad_axis(&mut app, second, GamepadAxis::RightStickX, 0.0);
         app.update();
         assert_eq!(
             app.world().resource::<DriverInput>().0,
             VehicleInput::default(),
-            "trigger still held"
+            "left stick still pushed"
         );
-        set_pad_button(&mut app, second, GamepadButton::RightTrigger2, 0.0);
+        set_pad_axis(&mut app, second, GamepadAxis::LeftStickY, 0.0);
         app.update();
-        set_pad_button(&mut app, second, GamepadButton::RightTrigger2, 1.0);
+        set_pad_axis(&mut app, second, GamepadAxis::LeftStickY, 1.0);
         app.update();
         assert_eq!(app.world().resource::<DriverInput>().0.throttle, 1.0);
     }
@@ -449,7 +449,7 @@ mod tests {
         engine_on_in_drive(&mut app);
         let first = connect_gamepad(&mut app);
         let second = connect_gamepad(&mut app);
-        set_pad_button(&mut app, second, GamepadButton::RightTrigger2, 1.0);
+        set_pad_axis(&mut app, second, GamepadAxis::LeftStickY, 1.0);
         app.update();
         disconnect_gamepad(&mut app, first);
         app.update();
@@ -472,7 +472,7 @@ mod tests {
         app.update();
         assert_eq!(app.world().resource::<InputStatus>().gamepad, None);
 
-        // 재연결 메시지와 눌린 트리거 값이 같은 프레임에 도착하는 경우.
+        // 재연결 메시지와 밀린 스틱 값이 같은 프레임에 도착하는 경우.
         app.world_mut().write_message(GamepadConnectionEvent::new(
             gamepad,
             GamepadConnection::Connected {
@@ -481,7 +481,7 @@ mod tests {
                 product_id: None,
             },
         ));
-        set_pad_button(&mut app, gamepad, GamepadButton::RightTrigger2, 1.0);
+        set_pad_axis(&mut app, gamepad, GamepadAxis::LeftStickY, 1.0);
         app.update();
         app.update();
         assert_eq!(

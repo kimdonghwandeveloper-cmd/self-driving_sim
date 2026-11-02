@@ -253,9 +253,9 @@ mod tests {
     #[test]
     fn gamepad_section_is_parsed_and_validated() {
         let bindings =
-            parse_gamepad_bindings("[gamepad]\nlayout = \"sticks\"\nemergency_stop = \"LB\"\n")
+            parse_gamepad_bindings("[gamepad]\nlayout = \"triggers\"\nemergency_stop = \"LB\"\n")
                 .unwrap();
-        assert_eq!(bindings.drive_labels().2, "right stick");
+        assert_eq!(bindings.drive_labels().2, "left stick");
         assert_eq!(bindings.label(KeyAction::EmergencyStop), "LB");
 
         let invalid = "[gamepad]\nstick_deadzone = 2.0\n";

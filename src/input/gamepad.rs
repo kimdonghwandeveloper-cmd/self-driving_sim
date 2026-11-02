@@ -17,10 +17,10 @@ const MAX_DEADZONE: f32 = 0.9;
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum DriveLayout {
-    /// 왼쪽 스틱 좌우=조향, RT=가속, LT=제동(기본값).
-    #[default]
+    /// 왼쪽 스틱 좌우=조향, RT=가속, LT=제동.
     Triggers,
-    /// 왼쪽 스틱 위=가속, 아래=제동, 오른쪽 스틱 좌우=조향(PLAN.md 0-1절).
+    /// 왼쪽 스틱 위=가속, 아래=제동, 오른쪽 스틱 좌우=조향(기본값, PLAN.md 0-1절).
+    #[default]
     Sticks,
 }
 
@@ -333,7 +333,10 @@ mod tests {
             GamepadButton::West
         );
         assert_eq!(bindings.label(KeyAction::EmergencyStop), "RB");
-        assert_eq!(bindings.drive_labels(), ("RT", "LT", "left stick"));
+        assert_eq!(
+            bindings.drive_labels(),
+            ("left stick up", "left stick down", "right stick")
+        );
     }
 
     /// 지원하지 않는 버튼 이름과 아날로그 축으로 쓰는 LT/RT 할당을 거부하는지 확인한다.
