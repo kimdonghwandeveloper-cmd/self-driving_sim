@@ -9,7 +9,7 @@ use bevy::prelude::*;
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 
-use crate::input::{KeyBindings, KeyboardMapping};
+use crate::input::{GamepadBindings, GamepadMapping, KeyBindings, KeyboardMapping};
 use crate::vehicle::dynamics::DynamicsParams;
 use crate::vehicle::state::{DEFAULT_STOP_THRESHOLD_MPS, MAX_STOP_THRESHOLD_MPS};
 
@@ -56,10 +56,11 @@ impl VehicleConfig {
 }
 
 /// `config/input.toml` 전체 구조.
-#[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct InputConfig {
     pub keyboard: KeyboardMapping,
+    pub gamepad: GamepadMapping,
 }
 
 /// 설정 파일 처리 실패 사유.
@@ -116,6 +117,12 @@ pub fn parse_key_bindings(text: &str) -> Result<KeyBindings, ConfigError> {
         .map_err(|error| ConfigError::Invalid(error.to_string()))
 }
 
+/// 입력 설정 문자열을 변환하고 게임패드 매핑을 검증한다. 파일 로더도 이 함수를 쓴다.
+pub fn parse_gamepad_bindings(text: &str) -> Result<GamepadBindings, ConfigError> {
+    let config: InputConfig = parse_toml(text)?;
+    config.gamepad.resolve().map_err(ConfigError::Invalid)
+}
+
 /// 차량 설정 파일을 읽는다. 실패하면 경고 후 기본값을 반환한다.
 pub fn load_vehicle_config(path: &Path) -> VehicleConfig {
     finish_load(path, read_config(path, parse_vehicle_config))
@@ -124,6 +131,11 @@ pub fn load_vehicle_config(path: &Path) -> VehicleConfig {
 /// 입력 설정 파일을 읽어 키 매핑을 검증한다. 실패하면 경고 후 기본 매핑을 반환한다.
 pub fn load_key_bindings(path: &Path) -> KeyBindings {
     finish_load(path, read_config(path, parse_key_bindings))
+}
+
+/// 입력 설정 파일을 읽어 게임패드 매핑을 검증한다. 실패하면 경고 후 기본 매핑을 반환한다.
+pub fn load_gamepad_bindings(path: &Path) -> GamepadBindings {
+    finish_load(path, read_config(path, parse_gamepad_bindings))
 }
 
 /// 로드 결과를 로그로 남기고, 없거나 실패하면 기본값을 반환한다.
@@ -167,6 +179,9 @@ mod tests {
         if let Err(error) = parse_key_bindings(&input) {
             panic!("{INPUT_CONFIG_PATH}: {error}");
         }
+        if let Err(error) = parse_gamepad_bindings(&input) {
+            panic!("{INPUT_CONFIG_PATH}: {error}");
+        }
     }
 
     /// 빈 설정 문자열은 코드에 정의된 기본값과 같은 결과가 되는지 확인한다.
@@ -174,6 +189,10 @@ mod tests {
     fn empty_config_uses_defaults() {
         assert_eq!(parse_vehicle_config("").unwrap(), VehicleConfig::default());
         assert_eq!(parse_key_bindings("").unwrap(), KeyBindings::default());
+        assert_eq!(
+            parse_gamepad_bindings("").unwrap(),
+            GamepadBindings::default()
+        );
     }
 
     /// 허용 범위를 벗어난 정지 임계값을 거부하는지 확인한다.
@@ -228,6 +247,25 @@ mod tests {
             bindings.keys(KeyAction::Throttle),
             [KeyCode::KeyW, KeyCode::ArrowUp]
         );
+    }
+
+    /// 게임패드 설정의 배치·버튼을 읽고, 잘못된 값은 키보드 매핑과 별도로 거부하는지 확인한다.
+    #[test]
+    fn gamepad_section_is_parsed_and_validated() {
+        let bindings =
+            parse_gamepad_bindings("[gamepad]\nlayout = \"sticks\"\nemergency_stop = \"LB\"\n")
+                .unwrap();
+        assert_eq!(bindings.drive_labels().2, "right stick");
+        assert_eq!(bindings.label(KeyAction::EmergencyStop), "LB");
+
+        let invalid = "[gamepad]\nstick_deadzone = 2.0\n";
+        assert!(matches!(
+            parse_gamepad_bindings(invalid),
+            Err(ConfigError::Invalid(_))
+        ));
+        assert!(parse_key_bindings(invalid).is_ok());
+        let result = parse_gamepad_bindings("[gamepad]\nlayout = \"wheel\"\n");
+        assert!(matches!(result, Err(ConfigError::Parse(_))));
     }
 
     /// 다른 동작과 겹치는 키 매핑을 검증 오류로 거부하는지 확인한다.
