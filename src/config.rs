@@ -9,6 +9,7 @@ use bevy::prelude::*;
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 
+use crate::camera::{CameraSettings, OperatorView};
 use crate::input::{GamepadBindings, GamepadMapping, KeyBindings, KeyboardMapping};
 use crate::vehicle::dynamics::DynamicsParams;
 use crate::vehicle::state::{DEFAULT_STOP_THRESHOLD_MPS, MAX_STOP_THRESHOLD_MPS};
@@ -17,6 +18,8 @@ use crate::vehicle::state::{DEFAULT_STOP_THRESHOLD_MPS, MAX_STOP_THRESHOLD_MPS};
 pub const VEHICLE_CONFIG_PATH: &str = "config/vehicle.toml";
 /// 입력 설정 파일 경로(저장소 루트 기준).
 pub const INPUT_CONFIG_PATH: &str = "config/input.toml";
+/// 카메라 설정 파일 경로(저장소 루트 기준).
+pub const CAMERA_CONFIG_PATH: &str = "config/camera.toml";
 
 /// `config/vehicle.toml` 전체 구조.
 #[derive(Debug, Clone, PartialEq, Default, Deserialize)]
@@ -61,6 +64,13 @@ impl VehicleConfig {
 pub struct InputConfig {
     pub keyboard: KeyboardMapping,
     pub gamepad: GamepadMapping,
+}
+
+/// `config/camera.toml` 전체 구조.
+#[derive(Debug, Clone, PartialEq, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct CameraConfig {
+    pub operator_view: OperatorView,
 }
 
 /// 설정 파일 처리 실패 사유.
@@ -123,6 +133,16 @@ pub fn parse_gamepad_bindings(text: &str) -> Result<GamepadBindings, ConfigError
     config.gamepad.resolve().map_err(ConfigError::Invalid)
 }
 
+/// 카메라 설정 문자열을 변환하고 검증한다. 파일 로더도 이 함수를 쓴다.
+pub fn parse_camera_config(text: &str) -> Result<CameraSettings, ConfigError> {
+    let config: CameraConfig = parse_toml(text)?;
+    config
+        .operator_view
+        .validate()
+        .map_err(ConfigError::Invalid)?;
+    Ok(CameraSettings(config.operator_view))
+}
+
 /// 차량 설정 파일을 읽는다. 실패하면 경고 후 기본값을 반환한다.
 pub fn load_vehicle_config(path: &Path) -> VehicleConfig {
     finish_load(path, read_config(path, parse_vehicle_config))
@@ -136,6 +156,11 @@ pub fn load_key_bindings(path: &Path) -> KeyBindings {
 /// 입력 설정 파일을 읽어 게임패드 매핑을 검증한다. 실패하면 경고 후 기본 매핑을 반환한다.
 pub fn load_gamepad_bindings(path: &Path) -> GamepadBindings {
     finish_load(path, read_config(path, parse_gamepad_bindings))
+}
+
+/// 카메라 설정 파일을 읽는다. 실패하면 경고 후 기본값을 반환한다.
+pub fn load_camera_config(path: &Path) -> CameraSettings {
+    finish_load(path, read_config(path, parse_camera_config))
 }
 
 /// 로드 결과를 로그로 남기고, 없거나 실패하면 기본값을 반환한다.
@@ -182,6 +207,11 @@ mod tests {
         if let Err(error) = parse_gamepad_bindings(&input) {
             panic!("{INPUT_CONFIG_PATH}: {error}");
         }
+
+        let camera = fs::read_to_string(repo_file(CAMERA_CONFIG_PATH)).unwrap();
+        if let Err(error) = parse_camera_config(&camera) {
+            panic!("{CAMERA_CONFIG_PATH}: {error}");
+        }
     }
 
     /// 빈 설정 문자열은 코드에 정의된 기본값과 같은 결과가 되는지 확인한다.
@@ -193,6 +223,45 @@ mod tests {
             parse_gamepad_bindings("").unwrap(),
             GamepadBindings::default()
         );
+        assert_eq!(parse_camera_config("").unwrap(), CameraSettings::default());
+    }
+
+    /// 카메라 설정 일부만 지정하면 나머지는 기본값을 유지하고, 잘못된 값·필드는 거부하는지 확인한다.
+    #[test]
+    fn camera_section_is_parsed_and_validated() {
+        let settings = parse_camera_config("[operator_view]\nvertical_fov_deg = 70.0\n").unwrap();
+        assert_eq!(settings.0.vertical_fov_deg, 70.0);
+        assert_eq!(settings.0.eye_m, OperatorView::default().eye_m);
+
+        for invalid in [
+            "[operator_view]\nvertical_fov_deg = 120.0\n",
+            "[operator_view]\nnear_clip_m = 0.0\n",
+            "[operator_view]\neye_m = [0.0, nan, -1.0]\n",
+            "[operator_view]\neye_m = [0.0, inf, -1.0]\n",
+            "[operator_view]\npitch_deg = -90.0\n",
+        ] {
+            assert!(
+                matches!(parse_camera_config(invalid), Err(ConfigError::Invalid(_))),
+                "{invalid}"
+            );
+        }
+        for malformed in [
+            "[operator_view]\nfov = 70.0\n",
+            "[operator_view]\neye_m = [0.0, 1.6]\n",
+            "[operator_view\n",
+        ] {
+            assert!(
+                matches!(parse_camera_config(malformed), Err(ConfigError::Parse(_))),
+                "{malformed}"
+            );
+        }
+    }
+
+    /// 카메라 설정 파일이 없으면 기본값을 쓰는지 확인한다.
+    #[test]
+    fn missing_camera_file_uses_defaults() {
+        let path = repo_file("config/does-not-exist-camera.toml");
+        assert_eq!(load_camera_config(&path), CameraSettings::default());
     }
 
     /// 허용 범위를 벗어난 정지 임계값을 거부하는지 확인한다.

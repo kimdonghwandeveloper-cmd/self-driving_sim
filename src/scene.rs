@@ -1,11 +1,15 @@
-//! 개발용 3D 장면: 격자 바닥, 고정 장애물, 움직이는 차량 도형, 차량을 따라가는 카메라.
+//! 개발용 3D 장면: 격자 바닥, 고정 장애물, 움직이는 차량 도형(외관 + 최소 실내).
 //!
-//! Phase 3의 입석 조작자 카메라·테스트맵이 생기기 전까지 운동 모델을 눈으로 확인하는 용도다.
-//! 차체 크기, 장애물 배치, 카메라 위치는 모두 **시뮬레이터 임시값**이다.
+//! 외관 차체는 [`EXTERIOR_LAYER`]에 두어 입석 조작자 시점에서 보이지 않게 하고,
+//! 기준 시야용 최소 실내 형상은 기본 레이어에 둔다. 카메라는 [`crate::camera`]가 만든다.
+//! 차체 크기, 장애물 배치, 외부 디버그 카메라 위치는 모두 **시뮬레이터 임시값**이다.
 
+use bevy::camera::visibility::RenderLayers;
 use bevy::prelude::*;
 
 use crate::SimSet;
+use crate::camera::EXTERIOR_LAYER;
+use crate::camera::interior::{BODY_HEIGHT_M, spawn_interior};
 use crate::vehicle::{GroundRect, Motion, Obstacle, VEHICLE_FOOTPRINT, VehicleMotion};
 
 /// 바닥 한 변 길이(m).
@@ -13,7 +17,11 @@ const GROUND_SIZE_M: f32 = 200.0;
 /// 격자선 간격(m). 이동 거리를 눈으로 가늠하는 기준이다.
 const GRID_SPACING_M: f32 = 5.0;
 /// 차체 크기(폭, 높이, 길이; m). 폭·길이는 충돌 박스와 같다. 실차 치수 미확인 임시값.
-const BODY_SIZE_M: Vec3 = Vec3::new(VEHICLE_FOOTPRINT.width_m, 2.2, VEHICLE_FOOTPRINT.length_m);
+const BODY_SIZE_M: Vec3 = Vec3::new(
+    VEHICLE_FOOTPRINT.width_m,
+    BODY_HEIGHT_M,
+    VEHICLE_FOOTPRINT.length_m,
+);
 /// 후륜축 중심에서 차체 중심까지의 전방 거리(m).
 const REAR_AXLE_TO_CENTER_M: f32 = VEHICLE_FOOTPRINT.rear_axle_to_center_m;
 /// 장애물 표시 높이(m). 충돌 판정은 높이를 보지 않는다.
@@ -29,35 +37,27 @@ const OBSTACLES: [(Vec2, Vec2); 4] = [
     // 후진 시험용 뒤쪽 벽
     (Vec2::new(0.0, 15.0), Vec2::new(8.0, 0.5)),
 ];
-/// 차량 기준 카메라 위치(오른쪽, 위, 뒤; m).
-const CAMERA_OFFSET_M: Vec3 = Vec3::new(0.0, 5.0, 11.0);
-/// 카메라가 차량을 따라가는 빠르기(1/s). 클수록 바로 붙는다.
-const CAMERA_FOLLOW_RATE: f32 = 4.0;
+/// 보조광 조도(lux). 주광(기본값)보다 훨씬 약하게 둔다.
+const FILL_LIGHT_LUX: f32 = 1500.0;
+/// 개발용 외부 디버그 카메라의 차량 기준 위치(오른쪽, 위, 뒤; m).
+const EXTERNAL_CAMERA_OFFSET_M: Vec3 = Vec3::new(0.0, 5.0, 11.0);
 
 /// 차량 도형 루트 엔티티 표시용 마커. Transform 원점은 후륜축 중심이다.
 #[derive(Component)]
 pub struct VehicleBody;
 
-/// 차량을 따라가는 개발용 카메라 마커.
-#[derive(Component)]
-pub struct FollowCamera;
-
-/// 장면 생성과 차량 도형·카메라 동기화 시스템을 등록하는 플러그인.
+/// 장면 생성과 차량 도형 동기화 시스템을 등록하는 플러그인.
 pub struct ScenePlugin;
 
 impl Plugin for ScenePlugin {
-    /// 장면 생성(시작 시)과 매 프레임 차량 도형·카메라 갱신 시스템을 등록한다.
+    /// 장면 생성(시작 시)과 매 프레임 차량 도형 갱신 시스템을 등록한다.
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, setup_scene).add_systems(
-            Update,
-            (sync_vehicle_body, follow_vehicle)
-                .chain()
-                .in_set(SimSet::Display),
-        );
+        app.add_systems(Startup, setup_scene)
+            .add_systems(Update, sync_vehicle_body.in_set(SimSet::Display));
     }
 }
 
-/// 바닥, 격자선, 차량 도형, 조명, 카메라를 배치한다.
+/// 바닥, 격자선, 장애물, 차량 도형(외관·실내), 조명을 배치한다.
 fn setup_scene(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -79,6 +79,7 @@ fn setup_scene(
                 Mesh3d(body),
                 MeshMaterial3d(materials.add(Color::srgb(0.30, 0.65, 0.85))),
                 Transform::from_xyz(0.0, BODY_SIZE_M.y / 2.0, -REAR_AXLE_TO_CENTER_M),
+                RenderLayers::layer(EXTERIOR_LAYER),
             ));
             // 전방(-Z) 위쪽 노란 막대: 차량이 어느 쪽을 보는지 표시한다.
             parent.spawn((
@@ -89,17 +90,25 @@ fn setup_scene(
                     BODY_SIZE_M.y + 0.15,
                     -REAR_AXLE_TO_CENTER_M - BODY_SIZE_M.z / 2.0 + 0.3,
                 ),
+                RenderLayers::layer(EXTERIOR_LAYER),
             ));
+            spawn_interior(parent, &mut meshes, &mut materials);
         });
 
+    // 1인칭(기본 레이어)과 외부 디버그(외관 레이어) 카메라 모두에서 같은 조명을 쓴다.
     commands.spawn((
         DirectionalLight::default(),
         Transform::from_xyz(4.0, 8.0, 4.0).looking_at(Vec3::ZERO, Vec3::Y),
+        RenderLayers::from_layers(&[0, EXTERIOR_LAYER]),
     ));
+    // 반대쪽 약한 보조광: 주광과 반대 방향을 보는 실내 면이 완전히 검게 보이지 않게 한다.
     commands.spawn((
-        Camera3d::default(),
-        camera_transform(&Motion::default()),
-        FollowCamera,
+        DirectionalLight {
+            illuminance: FILL_LIGHT_LUX,
+            ..default()
+        },
+        Transform::from_xyz(-4.0, 6.0, -3.0).looking_at(Vec3::ZERO, Vec3::Y),
+        RenderLayers::from_layers(&[0, EXTERIOR_LAYER]),
     ));
     info!("Development scene ready. Close the window to exit.");
 }
@@ -158,31 +167,18 @@ fn sync_vehicle_body(
     }
 }
 
-/// 카메라를 차량 뒤쪽 위 목표 위치로 부드럽게 옮기고 차량을 바라보게 한다.
-fn follow_vehicle(
-    time: Res<Time>,
-    motion: Res<VehicleMotion>,
-    mut cameras: Query<&mut Transform, With<FollowCamera>>,
-) {
-    let target = camera_transform(&motion.0);
-    let blend = 1.0 - (-CAMERA_FOLLOW_RATE * time.delta_secs()).exp();
-    for mut transform in &mut cameras {
-        transform.translation = transform.translation.lerp(target.translation, blend);
-        transform.rotation = transform.rotation.slerp(target.rotation, blend);
-    }
-}
-
 /// 자세를 후륜축 중심 기준 Transform으로 바꾼다.
 pub fn body_transform(motion: &Motion) -> Transform {
     Transform::from_xyz(motion.x_m, 0.0, motion.z_m)
         .with_rotation(Quat::from_rotation_y(motion.heading_rad))
 }
 
-/// 자세에 대한 카메라 목표 Transform(차량 뒤쪽 위에서 차체 중심을 바라봄)을 만든다.
-pub fn camera_transform(motion: &Motion) -> Transform {
+/// 개발용 외부 디버그 카메라 Transform(차량 뒤쪽 위에서 차체 중심을 바라봄)을 만든다.
+pub fn external_camera_transform(motion: &Motion) -> Transform {
     let body = body_transform(motion);
     let center = body.transform_point(Vec3::new(0.0, 1.0, -REAR_AXLE_TO_CENTER_M));
-    Transform::from_translation(body.transform_point(CAMERA_OFFSET_M)).looking_at(center, Vec3::Y)
+    Transform::from_translation(body.transform_point(EXTERNAL_CAMERA_OFFSET_M))
+        .looking_at(center, Vec3::Y)
 }
 
 #[cfg(test)]
@@ -221,10 +217,10 @@ mod tests {
         ));
     }
 
-    /// 카메라 목표가 차량 뒤쪽 위에 있는지 확인한다.
+    /// 외부 디버그 카메라가 차량 뒤쪽 위에 있는지 확인한다.
     #[test]
-    fn camera_sits_behind_and_above_vehicle() {
-        let camera = camera_transform(&Motion::default());
+    fn external_camera_sits_behind_and_above_vehicle() {
+        let camera = external_camera_transform(&Motion::default());
         assert!(camera.translation.z > 0.0);
         assert!(camera.translation.y > BODY_SIZE_M.y);
     }

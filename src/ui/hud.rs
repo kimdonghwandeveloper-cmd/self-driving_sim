@@ -6,6 +6,7 @@ use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 
 use crate::calibration::{ActiveTrial, CalibrationLog, CalibrationReadout};
+use crate::camera::{ActiveView, ViewDirection};
 use crate::input::mapping::KeyAction;
 use crate::input::{GamepadBindings, InputStatus, KeyBindings};
 use crate::training::TrainingLog;
@@ -96,6 +97,7 @@ pub fn update_hud(
     bindings: Res<KeyBindings>,
     gamepad: Res<GamepadBindings>,
     input: Res<InputStatus>,
+    view: Res<ActiveView>,
     mut cache: Local<HudCache>,
     mut query: Query<&mut Text, With<VehicleHud>>,
 ) {
@@ -111,6 +113,7 @@ pub fn update_hud(
         &calibration.readout(&vehicle.0, &motion.0),
         &feedback,
         &input,
+        *view,
         &cache.control_guide,
     );
     for mut text in &mut query {
@@ -121,6 +124,7 @@ pub fn update_hud(
 }
 
 /// HUD에 표시할 전체 문자열을 만든다.
+#[allow(clippy::too_many_arguments)]
 pub fn hud_text(
     state: &VehicleState,
     motion: &Motion,
@@ -128,6 +132,7 @@ pub fn hud_text(
     calibration: &CalibrationReadout,
     feedback: &ControlFeedback,
     input: &InputStatus,
+    view: ActiveView,
     control_guide: &str,
 ) -> String {
     let mut out = String::new();
@@ -139,6 +144,7 @@ pub fn hud_text(
         calibration,
         feedback,
         input,
+        view,
         control_guide,
     );
     out
@@ -154,10 +160,11 @@ fn write_hud(
     calibration: &CalibrationReadout,
     feedback: &ControlFeedback,
     input: &InputStatus,
+    view: ActiveView,
     control_guide: &str,
 ) {
     out.clear();
-    write_status(out, state, motion, collision, feedback, input)
+    write_status(out, state, motion, collision, feedback, input, view)
         .expect("writing to a String cannot fail");
     out.push_str("\n\n");
     write_calibration(out, calibration).expect("writing to a String cannot fail");
@@ -165,7 +172,38 @@ fn write_hud(
     out.push_str(control_guide);
 }
 
-/// 차량 상태·운동·충돌·입력·입력 장치·마지막 명령 결과 줄을 쓴다.
+/// 실제 부호 있는 속도로 이동 방향(전진/후진/정지)을 판정한다. 정지 판정은 상태 머신 임계값을 쓴다.
+pub fn travel_label(state: &VehicleState) -> &'static str {
+    if !state.speed_valid() {
+        "INVALID"
+    } else if state.is_stopped() {
+        "STOPPED"
+    } else if state.speed_mps() > 0.0 {
+        "FORWARD"
+    } else {
+        "REVERSE"
+    }
+}
+
+/// 시점 줄 문자열을 만든다. 후방을 보면서 전진하는 등 화면과 진행 방향이 다를 때 혼동을 막는다.
+pub fn view_line(view: ActiveView, state: &VehicleState) -> String {
+    let looking = if view.debug_external {
+        "EXTERNAL (debug)".to_owned()
+    } else {
+        format!("{} window", view.direction.label())
+    };
+    let mut line = format!(
+        "View: {looking} | Gear: {} | Moving: {}",
+        gear_label(state.gear()),
+        travel_label(state)
+    );
+    if !view.debug_external && view.direction != ViewDirection::Front {
+        line.push_str("  (not facing vehicle front)");
+    }
+    line
+}
+
+/// 차량 상태·운동·충돌·입력·입력 장치·시점·마지막 명령 결과 줄을 쓴다.
 fn write_status(
     out: &mut String,
     state: &VehicleState,
@@ -173,6 +211,7 @@ fn write_status(
     collision: CollisionStatus,
     feedback: &ControlFeedback,
     status: &InputStatus,
+    view: ActiveView,
 ) -> fmt::Result {
     let input = state.input();
     let moving = if !state.speed_valid() {
@@ -188,6 +227,7 @@ fn write_status(
         out,
         "SIMULATOR ONLY - provisional values, not verified against the real vehicle"
     )?;
+    writeln!(out, "{}", view_line(view, state))?;
     writeln!(
         out,
         "Engine: {}   Gear: {}",
@@ -295,7 +335,7 @@ fn write_calibration(out: &mut String, calibration: &CalibrationReadout) -> fmt:
     }
 }
 
-/// 키 매핑으로 HUD 아래쪽 키 안내 세 줄을 만든다.
+/// 키 매핑으로 HUD 아래쪽 키 안내 네 줄을 만든다.
 pub fn key_guide_text(bindings: &KeyBindings) -> String {
     let key = |action| bindings.label(action);
     [
@@ -319,6 +359,14 @@ pub fn key_guide_text(bindings: &KeyBindings) -> String {
             key(KeyAction::EmergencyStop),
             key(KeyAction::EmergencyRelease),
             key(KeyAction::ResetCourse)
+        ),
+        format!(
+            "      view front {} | rear {} | left {} | right {} | debug ext. camera {}",
+            key(KeyAction::View(ViewDirection::Front)),
+            key(KeyAction::View(ViewDirection::Rear)),
+            key(KeyAction::View(ViewDirection::Left)),
+            key(KeyAction::View(ViewDirection::Right)),
+            key(KeyAction::DebugCamera)
         ),
     ]
     .join("\n")
@@ -381,12 +429,53 @@ mod tests {
             &CalibrationReadout::default(),
             &feedback,
             &InputStatus::default(),
+            ActiveView::default(),
             &default_guide(),
         );
         assert!(text.contains("Engine: OFF   Gear: P"));
         assert!(text.contains("Last: [REJECTED] gear D: engine is off"));
         assert!(text.contains("e-stop Space"));
         assert!(text.contains("not verified"));
+        assert!(text.contains("View: FRONT window | Gear: P | Moving: STOPPED"));
+        assert!(text.contains("view front Digit1 | rear Digit2 | left Digit3 | right Digit4"));
+    }
+
+    /// 시점과 실제 이동 방향을 함께 표시하고, N 관성 이동·후방 시점 전진을 구분하는지 확인한다.
+    #[test]
+    fn hud_view_line_separates_view_and_travel() {
+        use crate::vehicle::{Gear, VehicleCommand};
+        let mut state = VehicleState::default();
+        state.apply(VehicleCommand::ToggleEngine).unwrap();
+        state
+            .apply(VehicleCommand::RequestGear(Gear::Drive))
+            .unwrap();
+        state.set_speed_mps(2.0);
+        let rear = ActiveView {
+            direction: ViewDirection::Rear,
+            debug_external: false,
+        };
+        assert_eq!(
+            view_line(rear, &state),
+            "View: REAR window | Gear: D | Moving: FORWARD  (not facing vehicle front)"
+        );
+
+        state
+            .apply(VehicleCommand::RequestGear(Gear::Neutral))
+            .unwrap();
+        let line = view_line(ActiveView::default(), &state);
+        assert_eq!(line, "View: FRONT window | Gear: N | Moving: FORWARD");
+
+        state.set_speed_mps(-1.0);
+        assert!(view_line(rear, &state).contains("Moving: REVERSE"));
+        state.set_speed_mps(0.0);
+        let debug = ActiveView {
+            debug_external: true,
+            ..rear
+        };
+        assert_eq!(
+            view_line(debug, &state),
+            "View: EXTERNAL (debug) | Gear: N | Moving: STOPPED"
+        );
     }
 
     /// 게임패드 연결 상태·선택 장치와 게임패드 조작 안내를 표시하는지 확인한다.
@@ -400,6 +489,7 @@ mod tests {
                 &CalibrationReadout::default(),
                 &ControlFeedback::default(),
                 input,
+                ActiveView::default(),
                 &default_guide(),
             )
         };
@@ -446,6 +536,7 @@ mod tests {
             &CalibrationReadout::default(),
             &ControlFeedback::default(),
             &InputStatus::default(),
+            ActiveView::default(),
             &default_guide(),
         );
         assert!(text.contains("INVALID"));
@@ -464,6 +555,7 @@ mod tests {
             &CalibrationReadout::default(),
             &ControlFeedback::default(),
             &InputStatus::default(),
+            ActiveView::default(),
             &default_guide(),
         );
         assert!(text.contains("Obstacle contact: YES   Collisions: 2"));
@@ -502,6 +594,7 @@ mod tests {
             &readout,
             &ControlFeedback::default(),
             &InputStatus::default(),
+            ActiveView::default(),
             &default_guide(),
         );
         assert!(text.contains("Turn radius (rear axle): 9.50 m   Min at full lock: 4.85 m"));
@@ -518,6 +611,7 @@ mod tests {
             &CalibrationReadout::default(),
             &ControlFeedback::default(),
             &InputStatus::default(),
+            ActiveView::default(),
             &default_guide(),
         );
         assert!(straight.contains("Turn radius (rear axle): straight"));
