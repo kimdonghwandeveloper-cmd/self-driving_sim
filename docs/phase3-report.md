@@ -13,9 +13,9 @@ PLAN의 Phase 3 체크박스는 사용자 검토 전까지 바꾸지 않았다.
 | 3-4 범용 OSM 변환기 | `feature/phase3-map` | `33488e4`, `687eaf5` | Codex continue(범용 변환기만). 실제 지도 코스 없음 |
 | 3D 이 보고서 | `feature/phase3-map` | 이 커밋 | 검증 요청 예정 |
 
-`feature/phase3-map`은 `feature/phase3-test-course`를 포함한다. main 대비 변경은 14개 파일이다(원본 OSM JSON 4 248줄 포함).
+`feature/phase3-map`은 `feature/phase3-test-course`를 포함한다. main 대비 변경 파일은 이 보고서를 빼면 14개, 포함하면 15개다(원본 OSM JSON 4 248줄 포함).
 
-## 2. 변경 파일 (main `1475f80` 대비)
+## 2. 변경 파일 (main `1475f80` 대비, 이 보고서 제외)
 
 | 파일 | 내용 |
 | --- | --- |
@@ -46,7 +46,7 @@ PLAN의 Phase 3 체크박스는 사용자 검토 전까지 바꾸지 않았다.
 
 3-1(카메라)은 검증 도구가 생기기 전에 test 워크트리에서 fmt/clippy/147 tests/smoke를 확인했고, 사용자가 시야를 검토한 뒤 병합했다.
 
-화면 캡처는 저장소 밖 공유 폴더 `<git 공용 폴더>/verification-signals/`에 있다.
+화면 캡처는 Git 공용 메타데이터 폴더(`.git`) 안의 `verification-signals/`에 있다. Git이 추적하지 않는 공유 자료라서 커밋이나 클론에는 포함되지 않는다.
 - `3-2-1793927583823721800/captures/`: training 코스 정지 상태 4방향·외부·HUD
 - `3-4-1793930061449482200/captures-normal/`: 합성 지도 코스와 출처 안내 패널
 
