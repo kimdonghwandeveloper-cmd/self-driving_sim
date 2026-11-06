@@ -60,7 +60,7 @@ fn protocol_lifecycle() {
     fs::create_dir_all(dev.join("src")).unwrap();
     fs::write(
         dev.join("Cargo.toml"),
-        "[package]\nname = \"self_driving_sim\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        "[package]\nname = \"self-driving_sim\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
     )
     .unwrap();
     fs::write(
@@ -107,6 +107,22 @@ fn protocol_lifecycle() {
     gate(&dev, &["reject", &next, "fixture rejection"], 0);
     gate(&dev, &["wait", &next, "0"], 2);
     gate(&dev, &["list"], 0);
+    fs::write(
+        dev.join("src/main.rs"),
+        "/// Deliberately invalid formatting for the negative check.\nfn main( ){let _x=1;}\n",
+    )
+    .unwrap();
+    command(&dev, "git", &["add", "."]);
+    command(&dev, "git", &["commit", "-m", "negative check"]);
+    let out = gate(&dev, &["request", "protocol-test"], 0);
+    let failed = String::from_utf8(out.stdout).unwrap().trim().to_owned();
+    gate(&dev, &["verify", &failed, test.to_str().unwrap()], 2);
+    gate(&dev, &["status", &failed], 2);
+    gate(
+        &dev,
+        &["approve", &failed, "must fail after failed checks"],
+        1,
+    );
     fs::write(dev.join("dirty.txt"), "do not touch").unwrap();
     gate(&dev, &["request", "protocol-test"], 1);
     assert!(dev.join("dirty.txt").exists());
