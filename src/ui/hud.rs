@@ -289,7 +289,7 @@ fn write_calibration(out: &mut String, calibration: &CalibrationReadout) -> fmt:
     }
     writeln!(
         out,
-        "   Min at full lock: {:.2} m",
+        "   Min at full lock (low speed): {:.2} m",
         calibration.min_turn_radius_m
     )?;
     writeln!(
@@ -597,7 +597,9 @@ mod tests {
             ActiveView::default(),
             &default_guide(),
         );
-        assert!(text.contains("Turn radius (rear axle): 9.50 m   Min at full lock: 4.85 m"));
+        assert!(
+            text.contains("Turn radius (rear axle): 9.50 m   Min at full lock (low speed): 4.85 m")
+        );
         assert!(text.contains("Full-brake stop estimate: 1.25 m"));
         assert!(text.contains("Test: braking 0.50 m / 0.25 s"));
         assert!(text.contains("Last stop #3: 2.42 m from 4.00 m/s in 1.21 s (brake)"));
