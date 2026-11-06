@@ -5,7 +5,8 @@
 //! 실패하면 오류만 반환해 일부만 만든 코스가 남지 않는다.
 //!
 //! 좌표 규칙: 동쪽 +X, 북쪽 -Z, 높이 y=0, 단위 m. 원점은 선택 파일의 기준 위경도다.
-//! 투영은 기준 위도에서의 등장방형 근사이며 원점에서 수 km 안(코스 상한 500 × 300 m)에서만 쓴다.
+//! 투영은 기준 위도에서의 등장방형 근사이며, 모든 점이 원점에서 [`MAX_ORIGIN_DISTANCE_M`] 안에 있어야 한다.
+//! 생성한 코스 전체는 [`MAX_EXTENT_M`](개발상 임시 상한 500 × 300 m) 안에 들어야 한다.
 //! 도로 폭은 OSM에 값이 없으므로 선택 파일의 **훈련용 임시 폭**을 쓴다(실제 폭 아님).
 
 use std::path::Path;
@@ -40,6 +41,10 @@ const END_WALL_HEIGHT_M: f32 = 1.2;
 const START_REAR_CLEARANCE_M: f32 = 5.0;
 /// 노면 직사각형을 구간 양 끝에서 더 늘리는 길이(m). 꺾이는 곳의 노면 틈을 덮는다.
 const SURFACE_OVERLAP_M: f32 = 0.5;
+/// 투영한 점이 원점에서 떨어질 수 있는 최대 거리(m). 이 안에서 등장방형 근사의 거리 오차는 무시할 수 있다.
+pub const MAX_ORIGIN_DISTANCE_M: f32 = 1000.0;
+/// 생성한 코스(연석·끝 벽 포함)의 x·z 축 정렬 범위 상한(긴 변, 짧은 변; m). PLAN 3-3의 개발상 임시 상한.
+pub const MAX_EXTENT_M: (f32, f32) = (500.0, 300.0);
 /// 지도 코스에 늘 표시하는 출처 표기.
 pub const OSM_ATTRIBUTION: &str =
     "Map data (c) OpenStreetMap contributors, ODbL - openstreetmap.org/copyright";
@@ -95,8 +100,11 @@ pub fn parse_overpass_ways(json: &str) -> Result<Vec<OsmWay>, String> {
 
 /// 선택한 way들을 주어진 순서로 이어 하나의 중심선(지역 좌표)으로 만든다.
 ///
-/// 빠진 노드와 유한하지 않은 좌표는 버린다. 각 way는 앞 중심선의 끝에 이어져야 하며,
-/// 필요하면 뒤집어 붙인다(첫 way도 두 번째 way와 맞도록 뒤집을 수 있다). 끊겨 있으면 오류다.
+/// 선택한 way에 빠진 노드(`null`), 유한하지 않거나 위경도 범위를 벗어난 좌표,
+/// 원점에서 [`MAX_ORIGIN_DISTANCE_M`]보다 먼 점이 하나라도 있으면 오류다. 빠진 노드 양옆을 이으면
+/// 원본에 없는 도로가 생기므로 건너뛰지 않는다(원본 추출 범위를 넓혀 다시 받는다).
+/// 각 way는 앞 중심선의 끝에 이어져야 하며, 필요하면 뒤집어 붙인다
+/// (첫 way도 두 번째 way와 맞도록 뒤집을 수 있다). 끊겨 있으면 오류다.
 pub fn chain_ways(ways: &[OsmWay], order: &[u64], origin: LatLon) -> Result<Vec<Vec2>, String> {
     if order.is_empty() {
         return Err("no ways selected".to_owned());
@@ -107,12 +115,25 @@ pub fn chain_ways(ways: &[OsmWay], order: &[u64], origin: LatLon) -> Result<Vec<
             .iter()
             .find(|(way_id, _)| way_id == id)
             .ok_or_else(|| format!("way {id} not found in source data"))?;
-        let mut points: Vec<Vec2> = nodes
-            .iter()
-            .flatten()
-            .filter(|node| node.lat.is_finite() && node.lon.is_finite())
-            .map(|node| project(origin, *node))
-            .collect();
+        let mut points: Vec<Vec2> = Vec::with_capacity(nodes.len());
+        for (position, node) in nodes.iter().enumerate() {
+            let node = node
+                .ok_or_else(|| format!("way {id} node #{position} is missing from source data"))?;
+            if !valid_lat_lon(node) {
+                return Err(format!(
+                    "way {id} node #{position} has invalid coordinates {node:?}"
+                ));
+            }
+            let point = project(origin, node);
+            // 위경도를 이미 검사했으므로 투영 결과는 유한하다.
+            if point.length() > MAX_ORIGIN_DISTANCE_M {
+                return Err(format!(
+                    "way {id} node #{position} is {:.0} m from the origin (limit {MAX_ORIGIN_DISTANCE_M} m)",
+                    point.length()
+                ));
+            }
+            points.push(point);
+        }
         if points.len() < 2 {
             return Err(format!("way {id} has fewer than 2 usable nodes"));
         }
@@ -136,6 +157,14 @@ pub fn chain_ways(ways: &[OsmWay], order: &[u64], origin: LatLon) -> Result<Vec<
         line.extend(points.into_iter().skip(1));
     }
     Ok(line)
+}
+
+/// 위경도가 유한하고 위도 ±90°, 경도 ±180° 안인지 확인한다.
+fn valid_lat_lon(point: LatLon) -> bool {
+    point.lat.is_finite()
+        && point.lon.is_finite()
+        && point.lat.abs() <= 90.0
+        && point.lon.abs() <= 180.0
 }
 
 /// 연속 중복점을 지우고, 점 개수·길이·꺾임 각도를 검사한다.
@@ -199,6 +228,22 @@ fn segment_rect(a: Vec2, b: Vec2, width: f32, lateral: f32, extend: f32) -> Grou
         half_size: Vec2::new(width / 2.0, a.distance(b) / 2.0 + extend),
         heading_rad: heading,
     }
+}
+
+/// 직사각형들의 모든 모서리를 덮는 x·z 축 정렬 범위의 크기(m)를 구한다.
+fn extent_of<'a>(rects: impl Iterator<Item = &'a GroundRect>) -> Vec2 {
+    let (mut low, mut high) = (Vec2::splat(f32::INFINITY), Vec2::splat(f32::NEG_INFINITY));
+    for rect in rects {
+        let (sin, cos) = rect.heading_rad.sin_cos();
+        let (right, forward) = (Vec2::new(cos, -sin), Vec2::new(-sin, -cos));
+        for (sx, sz) in [(1.0, 1.0), (1.0, -1.0), (-1.0, 1.0), (-1.0, -1.0)] {
+            let corner =
+                rect.center + right * sx * rect.half_size.x + forward * sz * rect.half_size.y;
+            low = low.min(corner);
+            high = high.max(corner);
+        }
+    }
+    (high - low).max(Vec2::ZERO)
 }
 
 /// 깨끗한 중심선과 임시 폭으로 노면·연석·끝 벽과 시작 자세를 만든다.
@@ -279,6 +324,14 @@ pub fn build_road_course(
     if crate::vehicle::collision::in_contact(&VEHICLE_FOOTPRINT, &start, &rects) {
         return Err("start pose touches a curb or wall".to_owned());
     }
+    let size = extent_of(surfaces.iter().chain(rects.iter()));
+    let (long, short) = (size.max_element(), size.min_element());
+    if long > MAX_EXTENT_M.0 || short > MAX_EXTENT_M.1 {
+        return Err(format!(
+            "course spans {:.0} x {:.0} m (x by z); limit is {} x {} m",
+            size.x, size.y, MAX_EXTENT_M.0, MAX_EXTENT_M.1
+        ));
+    }
     Ok(CourseDef {
         name: name.to_owned(),
         notices,
@@ -306,7 +359,8 @@ pub struct MapCourseFile {
 /// 선택 파일 내용과 그 파일이 있는 폴더로 지도 코스를 만든다.
 pub fn build_map_course(file: &MapCourseFile, base_dir: &Path) -> Result<CourseDef, String> {
     let [lat, lon] = file.origin;
-    if !(lat.is_finite() && lon.is_finite() && lat.abs() <= 85.0 && lon.abs() <= 180.0) {
+    // 극지방에서는 cos φ0가 0에 가까워 동서 축척이 무너지므로 위도 ±85°까지만 받는다.
+    if !(valid_lat_lon(LatLon { lat, lon }) && lat.abs() <= 85.0) {
         return Err(format!("invalid origin {:?}", file.origin));
     }
     let source = base_dir.join(&file.source);
@@ -402,21 +456,117 @@ mod tests {
         let a = (1, vec![Some(offset(0.0, 0.0)), Some(offset(0.0, 50.0))]);
         let b = (
             2,
-            vec![Some(offset(0.0, 100.0)), None, Some(offset(0.0, 50.0))],
+            vec![
+                Some(offset(0.0, 100.0)),
+                Some(offset(0.0, 75.0)),
+                Some(offset(0.0, 50.0)),
+            ],
         );
         let far = (3, vec![Some(offset(500.0, 0.0)), Some(offset(600.0, 0.0))]);
-        let short = (4, vec![Some(offset(0.0, 50.0)), None]);
+        let short = (4, vec![Some(offset(0.0, 50.0))]);
         let ways = vec![a, b, far, short];
         let line = chain_ways(&ways, &[1, 2], ORIGIN).unwrap();
-        assert_eq!(line.len(), 3);
-        assert!((line[2].y + 100.0).abs() < 1e-2, "{line:?}");
+        assert_eq!(line.len(), 4);
+        assert!((line[3].y + 100.0).abs() < 1e-2, "{line:?}");
         // 두 번째 way에 맞춰 첫 way를 뒤집는 경우.
         let line = chain_ways(&ways, &[2, 1], ORIGIN).unwrap();
-        assert!(line[0].y.abs() > 99.0 && line[2].y.abs() < 1e-2, "{line:?}");
+        assert!(line[0].y.abs() > 99.0 && line[3].y.abs() < 1e-2, "{line:?}");
         assert!(chain_ways(&ways, &[1, 3], ORIGIN).is_err());
         assert!(chain_ways(&ways, &[9], ORIGIN).is_err());
         assert!(chain_ways(&ways, &[4], ORIGIN).is_err());
         assert!(chain_ways(&ways, &[], ORIGIN).is_err());
+    }
+
+    /// 선택 way의 빠진 노드(앞·가운데·끝)는 양옆을 잇지 않고 오류로 거부하는지 확인한다(Codex 재현 사례 포함).
+    #[test]
+    fn missing_nodes_are_rejected_not_bridged() {
+        let (a, b) = (
+            LatLon {
+                lat: 34.75,
+                lon: 127.75,
+            },
+            LatLon {
+                lat: 34.751,
+                lon: 127.75,
+            },
+        );
+        for nodes in [
+            vec![Some(a), None, Some(b)],
+            vec![None, Some(a), Some(b)],
+            vec![Some(a), Some(b), None],
+        ] {
+            let error = chain_ways(&[(5, nodes.clone())], &[5], ORIGIN).unwrap_err();
+            assert!(error.contains("missing"), "{nodes:?}: {error}");
+        }
+    }
+
+    /// 위경도 범위 밖·NaN 좌표와 원점에서 먼 점은 거부하는지 확인한다.
+    #[test]
+    fn invalid_or_distant_coordinates_are_rejected() {
+        let bad = [
+            LatLon {
+                lat: 95.0,
+                lon: 127.75,
+            },
+            LatLon {
+                lat: 34.75,
+                lon: 190.0,
+            },
+            LatLon {
+                lat: f64::NAN,
+                lon: 127.75,
+            },
+        ];
+        for point in bad {
+            let way = (6, vec![Some(offset(0.0, 0.0)), Some(point)]);
+            assert!(chain_ways(&[way], &[6], ORIGIN).is_err(), "{point:?}");
+        }
+        // 짧은 직선(30 m)이지만 원점에서 약 5 km 떨어져 있다.
+        let distant = (
+            7,
+            vec![Some(offset(5000.0, 0.0)), Some(offset(5000.0, 30.0))],
+        );
+        let error = chain_ways(&[distant], &[7], ORIGIN).unwrap_err();
+        assert!(error.contains("from the origin"), "{error}");
+        // 경계 안쪽(원점에서 900 m)은 받는다.
+        let near = (8, vec![Some(offset(900.0, 0.0)), Some(offset(900.0, 30.0))]);
+        assert!(chain_ways(&[near], &[8], ORIGIN).is_ok());
+    }
+
+    /// 코스 전체가 500 × 300 m 임시 상한을 넘으면 거부하고, 안이면 받는지 확인한다.
+    #[test]
+    fn course_extent_is_limited() {
+        // 남북 약 2224 m 직선(Codex 재현 사례): 원점 거리 검사 전에 크기 검사로도 거부되어야 한다.
+        let long = [Vec2::ZERO, Vec2::new(0.0, -2224.0)];
+        let error = build_road_course("long", &long, 4.0, Vec::new()).unwrap_err();
+        assert!(error.contains("spans"), "{error}");
+        // 긴 변 500 m 초과.
+        let over = [Vec2::ZERO, Vec2::new(0.0, -505.0)];
+        assert!(build_road_course("over", &over, 4.0, Vec::new()).is_err());
+        // 대각선 300 × 300 m에 가까운 경로: 짧은 변도 300 m를 넘으면 거부.
+        let diagonal = [Vec2::ZERO, Vec2::new(305.0, -305.0)];
+        assert!(build_road_course("diag", &diagonal, 4.0, Vec::new()).is_err());
+        let ok = [Vec2::ZERO, Vec2::new(0.0, -480.0)];
+        assert!(build_road_course("ok", &ok, 4.0, Vec::new()).is_ok());
+    }
+
+    /// 선택 파일 단계에서도 긴 경로는 training 대체 대상이 되도록 오류를 내는지 확인한다.
+    #[test]
+    fn oversize_map_file_fails_to_load() {
+        let dir = temp_dir("oversize");
+        // 위도 34.75 → 34.77(약 2224 m)인 직선. 원점은 가운데에 두어 원점 거리 1 km 안팎이 되게 한다.
+        std::fs::write(
+            dir.join("src.json"),
+            r#"{"elements":[{"type":"way","id":1,"geometry":[{"lat":34.75,"lon":127.75},{"lat":34.77,"lon":127.75}]}]}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("course.toml"),
+            "source = \"src.json\"\norigin = [34.76, 127.75]\nways = [1]\ntemporary_width_m = 4.0\n",
+        )
+        .unwrap();
+        assert!(load_map_course(&dir.join("course.toml")).is_err());
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     /// 연속 중복점은 하나로 줄이고, 길이 0·NaN·급한 꺾임은 거부하는지 확인한다.
