@@ -1,6 +1,7 @@
 # 여수 엑스포해양공원 일대 OSM 조사 자료
 
 > © OpenStreetMap contributors. 이 폴더의 데이터는 [ODbL 1.0](https://opendatacommons.org/licenses/odbl/1-0/)을 따른다.
+> 저작권·라이선스 상세: https://www.openstreetmap.org/copyright
 > 출처 표기와 라이선스 방침은 [`docs/map-data.md`](../../../docs/map-data.md)에 있다.
 
 이 자료는 **통로 후보 조사용**이다. 주행 코스용으로 선택한 구역 데이터가 아니다.
