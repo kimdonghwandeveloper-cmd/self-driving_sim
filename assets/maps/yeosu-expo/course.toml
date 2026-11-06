@@ -1,0 +1,15 @@
+# 여수 엑스포해양공원 가상 교육 코스 선택 파일 (Phase 3-3/3-4)
+# - OSM way 532526349(highway=service, 약 292 m)를 참고한 **가상 교육 코스**다.
+#   실제 셔틀 운행 경로나 통행 가능 구간이라는 확인이 아니다.
+# - 선택: Codex 제안(2026-11-06)을 사용자가 전달. 공원 경계 way 529495025(여수세계박람회장 / EXPO Ocean Park) 안.
+# - 출처: © OpenStreetMap contributors, ODbL — https://www.openstreetmap.org/copyright
+# 실행: cargo run --locked -- --course map:assets/maps/yeosu-expo/course.toml
+
+# 원본 Overpass 응답(수정하지 않음). 이 파일 기준 상대 경로.
+source = "course-way-532526349.osm.json"
+# 지역 좌표 원점 [위도, 경도]: way의 첫 노드(코스 시작 쪽 끝).
+origin = [34.7509700, 127.7493575]
+# 진행 순서대로 이을 way ID.
+ways = [532526349]
+# 훈련용 임시 도로 폭(m). OSM에 width 태그가 없어 정한 값이며 실제 폭이 아니다.
+temporary_width_m = 4.0

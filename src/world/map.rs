@@ -653,6 +653,64 @@ mod tests {
         assert!(build_road_course("short", &short, 4.0, Vec::new()).is_err());
     }
 
+    /// 저장소에 고정한 여수 가상 교육 코스(OSM way 532526349)가 읽히고, 출처 안내가 붙고,
+    /// 시작 자세가 비접촉이며, 시작 위치에서 조향 없이 직진해도 도중에 막히지 않고 끝 부근까지 가는지 확인한다.
+    #[test]
+    fn committed_yeosu_course_is_drivable() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/maps/yeosu-expo/course.toml");
+        let course = load_map_course(&path).unwrap();
+        assert!(
+            course
+                .notices
+                .iter()
+                .any(|notice| notice == OSM_ATTRIBUTION)
+        );
+        let obstacles = course.collision_rects();
+        assert!(!in_contact(&VEHICLE_FOOTPRINT, &course.start, &obstacles));
+        // 첫 노드에서 남서쪽(-X 서쪽, +Z 남쪽)으로 출발한다.
+        let (x, z) = course.start.forward();
+        assert!(x < 0.0 && z > 0.0, "forward ({x}, {z})");
+
+        let mut state = ready_in(Gear::Drive);
+        state.set_input(VehicleInput {
+            throttle: 1.0,
+            ..VehicleInput::default()
+        });
+        let mut motion = course.start;
+        let mut contact = ContactState::default();
+        let params = DynamicsParams::default();
+        let impact = (0..64 * 240).find_map(|_| {
+            step_with_obstacles(
+                &mut state,
+                &mut motion,
+                &params,
+                1.0 / 64.0,
+                &VEHICLE_FOOTPRINT,
+                &obstacles,
+                &mut contact,
+            )
+        });
+        assert!(impact.is_some(), "never blocked");
+        // 마지막 노드(위도 34.7488786, 경도 127.7474190)의 지역 좌표 근처에서 멈춘다.
+        let end = project(
+            LatLon {
+                lat: 34.7509700,
+                lon: 127.7493575,
+            },
+            LatLon {
+                lat: 34.7488786,
+                lon: 127.7474190,
+            },
+        );
+        let (fx, fz) = motion.forward();
+        let front = Vec2::new(motion.x_m, motion.z_m)
+            + Vec2::new(fx, fz)
+                * (VEHICLE_FOOTPRINT.rear_axle_to_center_m + VEHICLE_FOOTPRINT.length_m / 2.0);
+        // OSM 중심선은 구간마다 최대 약 0.6° 꺾인다. 조향 없이 첫 구간 방향으로만 달리면 끝까지
+        // 약 1 m 옆으로 밀려 끝 부근에서 모서리가 먼저 연석에 닿을 수 있으므로 2 m 안을 기준으로 본다.
+        assert!(front.distance(end) < 2.0, "front {front:?}, end {end:?}");
+    }
+
     /// 꺾이는 점의 바깥 연석 틈이 차체 폭 이상이면 거부하는지 확인한다.
     #[test]
     fn wide_road_with_bend_is_rejected_when_gap_fits_vehicle() {
