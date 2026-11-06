@@ -20,6 +20,14 @@ emergency_stop = ["Space"]
 emergency_release = ["Backspace"]
 # 정지 상태에서 시작 위치(원점, 전방 -Z)로 복귀합니다. 보정 시험을 같은 코스에서 반복할 때 씁니다.
 reset_course = ["KeyR"]
+# 입석 조작자 시점(같은 눈 위치에서 시선만 회전). 주행·기어 입력에 영향을 주지 않습니다.
+# 여러 방향을 동시에 누르면 현재 방향을 유지하며, 시작 위치 복귀 시 전방으로 돌아갑니다.
+view_front = ["Digit1"]
+view_rear = ["Digit2"]
+view_left = ["Digit3"]
+view_right = ["Digit4"]
+# 개발용 외부(뒤쪽 위) 디버그 카메라 켜기/끄기. 훈련 시점이 아닙니다.
+debug_camera = ["KeyC"]
 
 # Xbox 유형 게임패드. 버튼 이름: A, B, X, Y, LB, RB, Back, Start, LS, RS,
 #   DPadUp/DPadDown/DPadLeft/DPadRight (LT/RT는 아날로그 축이라 버튼 동작에 쓸 수 없습니다)

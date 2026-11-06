@@ -21,6 +21,10 @@ const SPEED_LIMIT_EPS_MPS: f32 = 1.0e-4;
 #[derive(Message, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ResetCourseRequest;
 
+/// 시작 위치 복귀가 실제로 적용되었음을 알리는 메시지. 카메라 시점 초기화 등에 쓴다.
+#[derive(Message, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CourseResetDone;
+
 /// 보정 측정 리소스와 시스템을 등록하는 플러그인.
 pub struct CalibrationPlugin;
 
@@ -31,6 +35,7 @@ impl Plugin for CalibrationPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<CalibrationLog>()
             .add_message::<ResetCourseRequest>()
+            .add_message::<CourseResetDone>()
             .add_systems(
                 bevy::app::RunFixedMainLoop,
                 apply_course_reset
@@ -384,9 +389,10 @@ pub fn reset_to_start(
     }
 }
 
-/// 받은 시작 위치 복귀 요청을 처리하고 결과를 HUD 피드백과 로그에 남긴다.
+/// 받은 시작 위치 복귀 요청을 처리하고 결과를 HUD 피드백과 로그에 남긴다. 적용되면 [`CourseResetDone`]을 보낸다.
 pub fn apply_course_reset(
     mut requests: MessageReader<ResetCourseRequest>,
+    mut done: MessageWriter<CourseResetDone>,
     mut vehicle: ResMut<Vehicle>,
     mut motion: ResMut<VehicleMotion>,
     mut contact: ResMut<VehicleContact>,
@@ -397,6 +403,7 @@ pub fn apply_course_reset(
         let result = reset_to_start(&mut vehicle.0, &mut motion.0, &mut contact, &mut log);
         if result.accepted {
             info!("control: {}", result.message);
+            done.write(CourseResetDone);
         } else {
             warn!("control rejected: {}", result.message);
         }

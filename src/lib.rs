@@ -1,6 +1,7 @@
 //! 자율주행 셔틀 안전관리자 조작 훈련 시뮬레이터의 도메인 로직과 Bevy 플러그인.
 
 pub mod calibration;
+pub mod camera;
 pub mod config;
 pub mod input;
 pub mod scene;
@@ -47,6 +48,7 @@ mod tests {
 
     use super::*;
     use crate::calibration::{CalibrationLog, CalibrationPlugin};
+    use crate::camera::{ActiveView, CameraPlugin, ViewDirection};
     use crate::input::{DriverInput, InputSource, InputStatus};
     use crate::training::{TrainingLog, TrainingPlugin};
     use crate::vehicle::{
@@ -68,6 +70,13 @@ mod tests {
             TrainingPlugin,
             CalibrationPlugin,
         ));
+        app
+    }
+
+    /// 창 없는 앱에 카메라 플러그인(시점 선택·카메라 갱신)을 더한다.
+    fn headless_app_with_camera() -> App {
+        let mut app = headless_app();
+        app.add_plugins(CameraPlugin);
         app
     }
 
@@ -569,5 +578,98 @@ mod tests {
         assert_eq!(stops[0], stops[1]);
         let counts = app.world().resource::<CalibrationLog>().trial_counts();
         assert_eq!(counts.0, 2);
+    }
+
+    /// 같은 주행 입력을 재생할 때 시점 키를 계속 바꿔도 위치·속도·heading이 시점 전환이 없을 때와
+    /// 정확히 같은지 확인한다. 시점 키는 주행·기어 상태도 바꾸지 않는다.
+    #[test]
+    fn view_switching_does_not_affect_vehicle() {
+        let views = [
+            KeyCode::Digit2,
+            KeyCode::Digit3,
+            KeyCode::Digit4,
+            KeyCode::Digit1,
+            KeyCode::KeyC,
+        ];
+        let run = |switch_views: bool| {
+            let mut app = headless_app_with_camera();
+            engine_on_in_drive(&mut app);
+            let mut seen = Vec::new();
+            for frame in 0..64 * 6 {
+                let mut keys = match frame {
+                    0..128 => vec![KeyCode::KeyW, KeyCode::KeyD],
+                    128..256 => vec![KeyCode::KeyW, KeyCode::KeyA],
+                    _ => vec![KeyCode::KeyS],
+                };
+                if switch_views && frame % 10 < 2 {
+                    keys.push(views[frame / 10 % views.len()]);
+                }
+                update_with_keys(&mut app, &keys);
+                seen.push(*app.world().resource::<ActiveView>());
+            }
+            let world = app.world();
+            (
+                world.resource::<Vehicle>().0.clone(),
+                world.resource::<VehicleMotion>().0,
+                seen,
+            )
+        };
+        let (plain_state, plain_motion, plain_views) = run(false);
+        let (switched_state, switched_motion, switched_views) = run(true);
+        assert_eq!(plain_state, switched_state);
+        assert_eq!(plain_motion, switched_motion);
+        assert!(
+            plain_views
+                .iter()
+                .all(|view| *view == ActiveView::default())
+        );
+        for direction in ViewDirection::ALL {
+            assert!(
+                switched_views
+                    .iter()
+                    .any(|view| view.direction == direction),
+                "{direction:?} never selected"
+            );
+        }
+        assert!(switched_views.iter().any(|view| view.debug_external));
+    }
+
+    /// 시점 키 동시 입력은 무시되고, 시작 위치 복귀가 적용되면 전방으로, 거부되면 그대로인지 확인한다.
+    #[test]
+    fn view_keys_conflict_and_reset_to_front() {
+        let mut app = headless_app_with_camera();
+        update_with_keys(&mut app, &[KeyCode::Digit2]);
+        assert_eq!(
+            app.world().resource::<ActiveView>().direction,
+            ViewDirection::Rear
+        );
+        update_with_keys(&mut app, &[]);
+        update_with_keys(&mut app, &[KeyCode::Digit3, KeyCode::Digit4]);
+        assert_eq!(
+            app.world().resource::<ActiveView>().direction,
+            ViewDirection::Rear
+        );
+
+        // 움직이는 중 복귀 요청은 거부되므로 시점도 그대로다.
+        engine_on_in_drive(&mut app);
+        for _ in 0..64 {
+            update_with_keys(&mut app, &[KeyCode::KeyW]);
+        }
+        update_with_keys(&mut app, &[KeyCode::KeyW, KeyCode::KeyR]);
+        assert_eq!(
+            app.world().resource::<ActiveView>().direction,
+            ViewDirection::Rear
+        );
+        for _ in 0..128 {
+            update_with_keys(&mut app, &[KeyCode::KeyS]);
+        }
+        update_with_keys(&mut app, &[]);
+        update_with_keys(&mut app, &[KeyCode::KeyR]);
+        let world = app.world();
+        assert_eq!(world.resource::<VehicleMotion>().0, Default::default());
+        assert_eq!(
+            world.resource::<ActiveView>().direction,
+            ViewDirection::Front
+        );
     }
 }

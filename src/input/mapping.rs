@@ -7,6 +7,7 @@ use std::fmt;
 use bevy::prelude::*;
 use serde::Deserialize;
 
+use crate::camera::ViewDirection;
 use crate::vehicle::Gear;
 
 /// 기어 키 처리 순서(P, R, N, D).
@@ -25,11 +26,15 @@ pub enum KeyAction {
     EmergencyRelease,
     /// 정지 상태에서 시작 위치로 복귀(보정 시험 반복용).
     ResetCourse,
+    /// 입석 조작자 시선 방향 선택. 주행 명령과 별도로 처리한다.
+    View(ViewDirection),
+    /// 개발용 외부 디버그 카메라 켜기/끄기.
+    DebugCamera,
 }
 
 impl KeyAction {
     /// 매핑 검증과 HUD 표시에 사용하는 전체 동작 목록.
-    pub const ALL: [KeyAction; 12] = [
+    pub const ALL: [KeyAction; 17] = [
         KeyAction::Throttle,
         KeyAction::Brake,
         KeyAction::SteerLeft,
@@ -42,6 +47,11 @@ impl KeyAction {
         KeyAction::EmergencyStop,
         KeyAction::EmergencyRelease,
         KeyAction::ResetCourse,
+        KeyAction::View(ViewDirection::Front),
+        KeyAction::View(ViewDirection::Rear),
+        KeyAction::View(ViewDirection::Left),
+        KeyAction::View(ViewDirection::Right),
+        KeyAction::DebugCamera,
     ];
 
     /// 동작에 대응하는 설정 파일 필드 이름을 반환한다.
@@ -59,6 +69,11 @@ impl KeyAction {
             KeyAction::EmergencyStop => "emergency_stop",
             KeyAction::EmergencyRelease => "emergency_release",
             KeyAction::ResetCourse => "reset_course",
+            KeyAction::View(ViewDirection::Front) => "view_front",
+            KeyAction::View(ViewDirection::Rear) => "view_rear",
+            KeyAction::View(ViewDirection::Left) => "view_left",
+            KeyAction::View(ViewDirection::Right) => "view_right",
+            KeyAction::DebugCamera => "debug_camera",
         }
     }
 }
@@ -79,6 +94,11 @@ pub struct KeyboardMapping {
     pub emergency_stop: Vec<String>,
     pub emergency_release: Vec<String>,
     pub reset_course: Vec<String>,
+    pub view_front: Vec<String>,
+    pub view_rear: Vec<String>,
+    pub view_left: Vec<String>,
+    pub view_right: Vec<String>,
+    pub debug_camera: Vec<String>,
 }
 
 impl Default for KeyboardMapping {
@@ -101,6 +121,11 @@ impl Default for KeyboardMapping {
             emergency_stop: names(&["Space"]),
             emergency_release: names(&["Backspace"]),
             reset_course: names(&["KeyR"]),
+            view_front: names(&["Digit1"]),
+            view_rear: names(&["Digit2"]),
+            view_left: names(&["Digit3"]),
+            view_right: names(&["Digit4"]),
+            debug_camera: names(&["KeyC"]),
         }
     }
 }
@@ -121,6 +146,11 @@ impl KeyboardMapping {
             KeyAction::EmergencyStop => &self.emergency_stop,
             KeyAction::EmergencyRelease => &self.emergency_release,
             KeyAction::ResetCourse => &self.reset_course,
+            KeyAction::View(ViewDirection::Front) => &self.view_front,
+            KeyAction::View(ViewDirection::Rear) => &self.view_rear,
+            KeyAction::View(ViewDirection::Left) => &self.view_left,
+            KeyAction::View(ViewDirection::Right) => &self.view_right,
+            KeyAction::DebugCamera => &self.debug_camera,
         }
     }
 
@@ -350,6 +380,36 @@ mod tests {
         );
         assert_eq!(bindings.label(KeyAction::Gear(Gear::Drive)), "KeyJ");
         assert_eq!(bindings.keys(KeyAction::ResetCourse), [KeyCode::KeyR]);
+        assert_eq!(
+            bindings.keys(KeyAction::View(ViewDirection::Rear)),
+            [KeyCode::Digit2]
+        );
+        assert_eq!(bindings.label(KeyAction::DebugCamera), "KeyC");
+    }
+
+    /// 시점 키가 주행·기어 키와 겹치면 거부하는지 확인한다.
+    #[test]
+    fn view_key_conflicting_with_drive_key_is_rejected() {
+        let mapping = KeyboardMapping {
+            view_left: vec!["KeyA".into()],
+            ..KeyboardMapping::default()
+        };
+        assert_eq!(
+            mapping.resolve(),
+            Err(MappingError::DuplicateKey {
+                name: "KeyA".into(),
+                first: KeyAction::SteerLeft,
+                second: KeyAction::View(ViewDirection::Left),
+            })
+        );
+        let mapping = KeyboardMapping {
+            view_front: vec!["KeyJ".into()],
+            ..KeyboardMapping::default()
+        };
+        assert!(matches!(
+            mapping.resolve(),
+            Err(MappingError::DuplicateKey { .. })
+        ));
     }
 
     /// 지원하지 않는 키 이름을 거부하는지 확인한다.
