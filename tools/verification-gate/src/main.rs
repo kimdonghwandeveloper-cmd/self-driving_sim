@@ -226,7 +226,7 @@ fn run() -> Result<u8> {
     let args: Vec<String> = env::args().skip(1).collect();
     let at = env::current_dir()?;
     if args.is_empty() {
-        return Err("usage: verification-gate request <stage> [--no-smoke] | verify <id> <detached-test-path> | approve|reject <id> <review-notes> | status <id> | wait <id> <timeout-seconds>".into());
+        return Err("usage: verification-gate list | request <stage> [--no-smoke] | verify <id> <detached-test-path> | approve|reject <id> <review-notes> | status <id> | wait <id> <timeout-seconds>".into());
     }
     let root = state_dir(&at)?;
     if args[0] == "wait" && args.len() == 3 {
@@ -249,6 +249,29 @@ fn run() -> Result<u8> {
     }
     let _guard = lock(&root)?;
     match args[0].as_str() {
+        "list" if args.len() == 1 => {
+            let mut entries = fs::read_dir(&root)?.collect::<std::io::Result<Vec<_>>>()?;
+            entries.sort_by_key(|entry| entry.file_name());
+            for entry in entries {
+                let path = entry.path();
+                if !path.join("request.toml").exists() {
+                    continue;
+                }
+                let req: Request = read(&path.join("request.toml"))?;
+                let state = if path.join("decision.toml").exists() {
+                    let value: Signal = read(&path.join("decision.toml"))?;
+                    matches(&req, &value)?;
+                    value.state
+                } else if path.join("checks.toml").exists() {
+                    "awaiting-review".into()
+                } else if path.join("started.toml").exists() {
+                    "started-or-interrupted".into()
+                } else {
+                    "pending".into()
+                };
+                println!("{} {} {} {}", req.id, req.stage, req.commit, state);
+            }
+        }
         "request" if args.len() == 2 || (args.len() == 3 && args[2] == "--no-smoke") => {
             valid_id(&args[1])?;
             clean(&at)?;

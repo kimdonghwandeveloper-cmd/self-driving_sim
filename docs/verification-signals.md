@@ -1,4 +1,4 @@
-﻿# 단계별 검증 신호
+# 단계별 검증 신호
 
 이 도구는 Claude(구현자)와 Codex(검토자)가 같은 Git 저장소의 서로 다른 워크트리에서 요청과 결과를 교환한다. 파일을 읽는 프로토콜이며 다른 채팅에 메시지를 보내거나 에이전트를 자동 실행하지 않는다. 양쪽 에이전트가 아래 절차를 따라야 한다. `/loop` 자체를 설치하거나 예약 작업을 등록하지 않는다.
 
@@ -12,11 +12,11 @@
 
 ## 준비
 
-기능 브랜치가 있는 워크트리에서 Windows PowerShell로 빌드한다.
+기능 브랜치가 있는 워크트리에서 Windows PowerShell로 빌드한다. 독립 Rust 패키지이므로 이 도구를 빌드할 때 Bevy 엔진을 빌드하지 않는다.
 
 ```powershell
-cargo.exe build --locked --bin verification-gate
-$gate = (Resolve-Path target/debug/verification-gate.exe).Path
+cargo.exe build --locked --manifest-path tools/verification-gate/Cargo.toml
+$gate = (Resolve-Path tools/verification-gate/target/debug/verification-gate.exe).Path
 ```
 
 아래 명령은 각 에이전트가 자신의 터미널에서 실행한다. `$gate`는 위 실행 파일의 절대 경로다. 개발 브랜치에 도구가 아직 없어도 이 경로로 호출할 수 있다. WSL 안에서도 Windows용 실행 파일과 Windows 경로를 사용한다.
@@ -70,3 +70,5 @@ $code = $LASTEXITCODE
 검사 명령에는 강제 시간 제한이 없다. 응답이 없는 검사라면 검토자가 프로세스를 확인하고 중단한다. 중단 후 불완전한 요청은 승인하지 않고 새 요청을 만든다. 프로세스를 강제 종료하면 공유 폴더에 `lock` 디렉터리가 남을 수 있다. 다른 검증 프로세스가 없음을 확인한 뒤 그 빈 lock 디렉터리만 제거한다. 자동으로 잠금을 강탈하지 않는다.
 
 이 도구는 상시 감시 서비스가 아니다. Claude와 Codex의 별도 loop가 요청/결과를 주기적으로 확인해야 한다. Codex는 요청 ID를 확인하고 실제 검토한 뒤만 approve한다. 구현 시점에는 Claude 세션과의 실시간 왕복 전달은 검증하지 않았다.
+
+Codex의 loop는 & $gate list로 요청 목록을 확인한다. pending 요청만 선택하고, awaiting-review는 로그·코드 검토를 마친 뒤 결정한다. started-or-interrupted는 현재 실행 중인지 먼저 확인하며 자동 재실행/승인하지 않는다.
