@@ -49,16 +49,12 @@ fn gate(at: &Path, args: &[&str], expected: i32) -> Output {
 /// Check pending, missing-review evidence, real command checks, approval, stale SHA, rejection and dirty-tree refusal.
 #[test]
 fn protocol_lifecycle() {
-    let fixture = Fixture(
-        std::env::temp_dir().join(format!(
-            "gate-integration-{}-{}",
-            std::process::id(),
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        )),
-    );
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let name = format!("gate-integration-{}-{nonce}", std::process::id());
+    let fixture = Fixture(std::env::temp_dir().join(name));
     let dev = fixture.0.join("dev");
     let test = fixture.0.join("test");
     fs::create_dir_all(dev.join("src")).unwrap();
