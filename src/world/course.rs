@@ -120,6 +120,26 @@ pub struct Marking {
     pub kind: MarkingKind,
 }
 
+/// 띠 메시 종류.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StripKind {
+    /// 포장 노면.
+    Road,
+    /// 차로 가장자리 흰 선(시각 표시).
+    EdgeLine,
+}
+
+/// 두 경계선 사이를 잇는 띠(시각 표시, 충돌 판정 없음). 같은 순번의 점끼리 마주 본다(Phase 4-1 굽은 길).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Strip {
+    /// 종류.
+    pub kind: StripKind,
+    /// 진행 방향 왼쪽 경계선.
+    pub left: Vec<Vec2>,
+    /// 진행 방향 오른쪽 경계선. `left`와 점 개수가 같다.
+    pub right: Vec<Vec2>,
+}
+
 /// 코스 하나의 전체 정의.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CourseDef {
@@ -131,6 +151,8 @@ pub struct CourseDef {
     pub start: Motion,
     /// 포장 노면 영역(시각 표시).
     pub surfaces: Vec<GroundRect>,
+    /// 굽은 길 노면·표시선 띠(시각 표시). 지도 코스에서 쓴다.
+    pub strips: Vec<Strip>,
     /// 노면 표시.
     pub markings: Vec<Marking>,
     /// 충돌 경계.
@@ -199,6 +221,7 @@ pub fn training_course() -> CourseDef {
         notices: Vec::new(),
         start: Motion::default(),
         surfaces: vec![rect_between((-half, half), (rear, front))],
+        strips: Vec::new(),
         markings: vec![
             edge_line(-1.0, (rear, NARROW_START_Z_M)),
             edge_line(1.0, (rear, NARROW_START_Z_M)),
@@ -246,6 +269,7 @@ pub fn calibration_course() -> CourseDef {
         notices: Vec::new(),
         start: Motion::default(),
         surfaces: Vec::new(),
+        strips: Vec::new(),
         markings: Vec::new(),
         colliders: vec![
             // 정면 30 m 앞의 벽

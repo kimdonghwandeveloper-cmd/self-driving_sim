@@ -1,0 +1,6 @@
+# Phase 4-1 굽은 길 확인용 가상 교육 코스(실제 도로 폭·통행 가능 여부 아님).
+# OSM way 529495041(highway=service, 약 321 m)을 노드 ID 스냅샷에서 읽는다. 끝점은 고정 코스(way 532526349)의 시작점이다.
+source = "graph-2026-11-06.osm.json"
+origin = [34.7527676, 127.7472424]
+ways = [529495041]
+temporary_width_m = 4.0

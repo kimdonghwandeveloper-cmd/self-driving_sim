@@ -150,7 +150,7 @@ fn spawn_grid(
 
 /// 코스 전체와 시작 위치를 덮는 정사각형 바닥의 (중심, 한 변 길이)를 구한다.
 ///
-/// 각 영역은 중심에서 반 크기 대각선까지의 원으로 넉넉히 감싼다. 둘레에 [`GROUND_MARGIN_M`]을 더하고,
+/// 각 영역은 중심에서 반 크기 대각선까지의 원으로 넉넉히 감싸고, 굽은 길 띠는 경계선 점을 모두 넣는다. 둘레에 [`GROUND_MARGIN_M`]을 더하고,
 /// 한 변은 [`GROUND_SIZE_M`] 이상이며 중심은 격자 간격의 정수배로 맞춘다.
 pub fn ground_square(course: &CourseDef) -> (Vec2, f32) {
     let start = Vec2::new(course.start.x_m, course.start.z_m);
@@ -164,6 +164,14 @@ pub fn ground_square(course: &CourseDef) -> (Vec2, f32) {
         let reach = rect.half_size.length();
         low = low.min(rect.center - Vec2::splat(reach));
         high = high.max(rect.center + Vec2::splat(reach));
+    }
+    for point in course
+        .strips
+        .iter()
+        .flat_map(|strip| strip.left.iter().chain(&strip.right))
+    {
+        low = low.min(*point);
+        high = high.max(*point);
     }
     let center = ((low + high) / 2.0 / GRID_SPACING_M).round() * GRID_SPACING_M;
     let half = (high - center).max(center - low).max_element() + GROUND_MARGIN_M;

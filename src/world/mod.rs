@@ -5,15 +5,18 @@
 pub mod course;
 pub mod map;
 pub mod osm_graph;
+pub mod road_geom;
 
 use std::path::PathBuf;
 
+use bevy::asset::RenderAssetUsages;
+use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
 
 pub use course::{CourseDef, CourseId};
 
 use crate::vehicle::{GroundRect, Obstacle};
-use course::{ColliderKind, MarkingKind};
+use course::{ColliderKind, MarkingKind, Strip, StripKind};
 
 /// 노면 표시 높이(m). 바닥 격자선(높이 0.01 m)을 덮는다.
 const SURFACE_Y_M: f32 = 0.012;
@@ -106,6 +109,43 @@ pub fn box_on_rect(rect: &GroundRect, bottom_y: f32, height: f32) -> (Transform,
     (transform, size)
 }
 
+/// 띠의 두 경계선 사이를 높이 `y`의 위를 향한 삼각형 목록 메시로 만든다.
+///
+/// 이웃한 두 쌍의 점마다 사각형 하나(삼각형 둘)를 만들고, 삼각형이 아래를 보면 감는 순서를 뒤집어 늘 위(+Y)를 보게 한다.
+pub fn strip_mesh(strip: &Strip, y: f32) -> Mesh {
+    let mut positions = Vec::with_capacity(strip.left.len() * 2);
+    for (left, right) in strip.left.iter().zip(&strip.right) {
+        positions.push([left.x, y, left.y]);
+        positions.push([right.x, y, right.y]);
+    }
+    let mut indices = Vec::new();
+    for i in 0..strip.left.len().saturating_sub(1) as u32 {
+        let (l0, r0, l1, r1) = (2 * i, 2 * i + 1, 2 * i + 2, 2 * i + 3);
+        for triangle in [[l0, r0, l1], [r0, r1, l1]] {
+            indices.extend(upward(&positions, triangle));
+        }
+    }
+    let normals = vec![[0.0, 1.0, 0.0]; positions.len()];
+    Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::default(),
+    )
+    .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
+    .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
+    .with_inserted_indices(Indices::U32(indices))
+}
+
+/// 삼각형의 법선이 +Y를 보도록 감는 순서를 정한다(반시계 = 앞면).
+fn upward(positions: &[[f32; 3]], [a, b, c]: [u32; 3]) -> [u32; 3] {
+    let p = |i: u32| Vec3::from(positions[i as usize]);
+    let normal = (p(b) - p(a)).cross(p(c) - p(a));
+    if normal.y >= 0.0 {
+        [a, b, c]
+    } else {
+        [a, c, b]
+    }
+}
+
 /// 코스의 노면·표시선(시각 전용)과 충돌 경계(메시 + [`Obstacle`]), 안내 패널을 만든다.
 pub fn spawn_course(
     commands: &mut Commands,
@@ -125,6 +165,17 @@ pub fn spawn_course(
     }
     let edge = materials.add(Color::srgb(0.92, 0.92, 0.88));
     let stop = materials.add(Color::srgb(0.98, 0.98, 0.98));
+    for strip in &course.strips {
+        let (material, y) = match strip.kind {
+            StripKind::Road => (road.clone(), SURFACE_Y_M),
+            StripKind::EdgeLine => (edge.clone(), MARKING_Y_M),
+        };
+        commands.spawn((
+            Mesh3d(meshes.add(strip_mesh(strip, y))),
+            MeshMaterial3d(material),
+            Transform::default(),
+        ));
+    }
     for marking in &course.markings {
         let material = match marking.kind {
             MarkingKind::EdgeLine => edge.clone(),
