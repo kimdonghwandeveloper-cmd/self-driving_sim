@@ -8,6 +8,7 @@ pub mod scene;
 pub mod training;
 pub mod ui;
 pub mod vehicle;
+pub mod world;
 
 use bevy::app::{RunFixedMainLoop, RunFixedMainLoopSystems};
 use bevy::prelude::*;
