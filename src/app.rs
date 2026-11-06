@@ -11,7 +11,7 @@ use self_driving_sim::{
     training::TrainingPlugin,
     ui::{HudPlugin, hud::VehicleHud},
     vehicle::{Vehicle, VehicleDynamics, VehicleMotion, VehiclePlugin, VehicleState},
-    world::{ActiveCourse, CourseId},
+    world::{ActiveCourse, CourseSelection},
 };
 
 /// 기본 창 크기(px).
@@ -31,7 +31,7 @@ pub struct RunOptions {
     /// 창 크기(px). 없으면 [`DEFAULT_WINDOW`].
     pub window: Option<(u32, u32)>,
     /// 주행 코스.
-    pub course: CourseId,
+    pub course: CourseSelection,
 }
 
 /// `"1498x700"` 형식의 창 크기를 읽는다. 0이나 형식 오류는 `None`.
@@ -61,8 +61,11 @@ pub fn run(options: RunOptions) -> AppExit {
     let key_bindings = config::load_key_bindings(Path::new(config::INPUT_CONFIG_PATH));
     let gamepad_bindings = config::load_gamepad_bindings(Path::new(config::INPUT_CONFIG_PATH));
     let camera_settings = config::load_camera_config(Path::new(config::CAMERA_CONFIG_PATH));
-    let course = options.course.build();
-    info!("course: {}", course.id.name());
+    let (course, fallback) = options.course.resolve();
+    if let Some(error) = fallback {
+        warn!("map course unavailable ({error}); using training course");
+    }
+    info!("course: {}", course.name);
     configure_sim_sets(&mut app);
     app.insert_resource(VehicleMotion(course.start))
         .insert_resource(ActiveCourse(course));

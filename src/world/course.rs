@@ -123,8 +123,10 @@ pub struct Marking {
 /// 코스 하나의 전체 정의.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CourseDef {
-    /// 코스 종류.
-    pub id: CourseId,
+    /// 로그에 쓰는 코스 이름.
+    pub name: String,
+    /// 주행 화면에 계속 표시할 안내(지도 출처, 임시 폭 등). 없으면 표시하지 않는다.
+    pub notices: Vec<String>,
     /// 시작·리셋 자세.
     pub start: Motion,
     /// 포장 노면 영역(시각 표시).
@@ -193,7 +195,8 @@ pub fn training_course() -> CourseDef {
         kind: MarkingKind::EdgeLine,
     };
     CourseDef {
-        id: CourseId::Training,
+        name: CourseId::Training.name().to_owned(),
+        notices: Vec::new(),
         start: Motion::default(),
         surfaces: vec![rect_between((-half, half), (rear, front))],
         markings: vec![
@@ -239,7 +242,8 @@ pub fn calibration_course() -> CourseDef {
         kind: ColliderKind::Obstacle,
     };
     CourseDef {
-        id: CourseId::Calibration,
+        name: CourseId::Calibration.name().to_owned(),
+        notices: Vec::new(),
         start: Motion::default(),
         surfaces: Vec::new(),
         markings: Vec::new(),

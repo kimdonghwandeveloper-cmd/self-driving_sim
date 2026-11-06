@@ -1,8 +1,11 @@
-//! 주행 코스(Phase 3-2): 선택한 코스 정의와 그 노면·표시선·충돌 경계 메시 생성.
+//! 주행 코스(Phase 3-2/3-4): 선택한 코스 정의와 그 노면·표시선·충돌 경계 메시 생성.
 //!
-//! 지도 코스(Phase 3-3/3-4)가 없어도 [`course`]의 개발 코스만으로 조작·카메라를 검증할 수 있다.
+//! 지도 코스([`map`])가 없거나 읽지 못해도 [`course`]의 개발 코스만으로 조작·카메라를 검증할 수 있다.
 
 pub mod course;
+pub mod map;
+
+use std::path::PathBuf;
 
 use bevy::prelude::*;
 
@@ -29,6 +32,69 @@ impl Default for ActiveCourse {
     }
 }
 
+/// 명령줄에서 고른 코스.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CourseSelection {
+    /// 내장 개발 코스.
+    Builtin(CourseId),
+    /// 지도 코스 선택 파일(TOML) 경로.
+    Map(PathBuf),
+}
+
+impl Default for CourseSelection {
+    /// 기본 훈련 코스를 고른다.
+    fn default() -> Self {
+        Self::Builtin(CourseId::default())
+    }
+}
+
+impl CourseSelection {
+    /// `training`, `calibration`, `map:<선택 파일 경로>`를 읽는다. 모르는 값이면 `None`.
+    pub fn parse(text: &str) -> Option<Self> {
+        match text.trim().strip_prefix("map:") {
+            Some(path) if !path.trim().is_empty() => Some(Self::Map(PathBuf::from(path.trim()))),
+            Some(_) => None,
+            None => CourseId::parse(text).map(Self::Builtin),
+        }
+    }
+
+    /// 코스 정의를 만든다. 지도 코스를 읽지 못하면 이유와 함께 기본 훈련 코스를 돌려준다.
+    pub fn resolve(&self) -> (CourseDef, Option<String>) {
+        match self {
+            Self::Builtin(id) => (id.build(), None),
+            Self::Map(path) => match map::load_map_course(path) {
+                Ok(course) => (course, None),
+                Err(error) => (CourseId::default().build(), Some(error)),
+            },
+        }
+    }
+}
+
+/// 코스 안내 패널 표시용 마커.
+#[derive(Component)]
+pub struct CourseNotice;
+
+/// 코스 안내(지도 출처, 임시 폭 등)가 있으면 화면 오른쪽 아래에 계속 보이게 띄운다.
+pub fn spawn_course_notice(commands: &mut Commands, course: &CourseDef) {
+    if course.notices.is_empty() {
+        return;
+    }
+    commands.spawn((
+        Node {
+            position_type: PositionType::Absolute,
+            bottom: Val::Px(12.0),
+            right: Val::Px(12.0),
+            padding: UiRect::all(Val::Px(6.0)),
+            ..default()
+        },
+        BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.55)),
+        Text::new(course.notices.join("\n")),
+        TextFont::from_font_size(14.0),
+        TextColor(Color::WHITE),
+        CourseNotice,
+    ));
+}
+
 /// 지면 직사각형 `rect`를 바닥 높이 `bottom_y`부터 `height` 높이로 세운 상자의 (Transform, 크기)를 만든다.
 ///
 /// 상자 바닥면은 `rect`와 정확히 같아서 화면 메시와 충돌 판정이 어긋나지 않는다.
@@ -39,7 +105,7 @@ pub fn box_on_rect(rect: &GroundRect, bottom_y: f32, height: f32) -> (Transform,
     (transform, size)
 }
 
-/// 코스의 노면·표시선(시각 전용)과 충돌 경계(메시 + [`Obstacle`])를 만든다.
+/// 코스의 노면·표시선(시각 전용)과 충돌 경계(메시 + [`Obstacle`]), 안내 패널을 만든다.
 pub fn spawn_course(
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
@@ -95,15 +161,44 @@ pub fn spawn_course(
     }
     info!(
         "course `{}` ready: {} colliders, {} markings",
-        course.id.name(),
+        course.name,
         course.colliders.len(),
         course.markings.len()
     );
+    // 로그는 보조 기록이다. 출처 표기는 화면 안내 패널이 맡는다.
+    for notice in &course.notices {
+        info!("course notice: {notice}");
+    }
+    spawn_course_notice(commands, course);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 코스 선택 문자열을 읽고, 지도 코스를 읽지 못하면 이유와 함께 훈련 코스로 대체하는지 확인한다.
+    #[test]
+    fn course_selection_parses_and_falls_back() {
+        assert_eq!(
+            CourseSelection::parse("calibration"),
+            Some(CourseSelection::Builtin(CourseId::Calibration))
+        );
+        assert_eq!(
+            CourseSelection::parse("map:assets/maps/x/course.toml"),
+            Some(CourseSelection::Map(PathBuf::from(
+                "assets/maps/x/course.toml"
+            )))
+        );
+        assert_eq!(CourseSelection::parse("map:"), None);
+        assert_eq!(CourseSelection::parse("yeosu"), None);
+
+        let (course, error) = CourseSelection::Map(PathBuf::from("does/not/exist.toml")).resolve();
+        assert!(error.is_some());
+        assert_eq!(course, CourseId::Training.build());
+        let (course, error) = CourseSelection::default().resolve();
+        assert!(error.is_none());
+        assert_eq!(course.name, "training");
+    }
 
     /// 상자 바닥면의 네 모서리가 충돌 영역의 네 모서리와 같은지 확인한다(회전한 영역 포함).
     #[test]
