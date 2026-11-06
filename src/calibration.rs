@@ -11,6 +11,7 @@ use crate::vehicle::controller::{
     ControlFeedback, Feedback, Vehicle, VehicleContact, VehicleDynamics, VehicleMotion, step_motion,
 };
 use crate::vehicle::{DynamicsParams, EngineState, Gear, Motion, VehicleState};
+use crate::world::ActiveCourse;
 
 /// 이 조향각(rad)보다 작으면 직진으로 보고 회전반경을 표시하지 않는다.
 const STRAIGHT_STEER_RAD: f32 = 1.0e-4;
@@ -34,6 +35,7 @@ impl Plugin for CalibrationPlugin {
     /// 복귀 요청은 명령 처리 직후(고정 주기 루프 직전), 측정은 운동 계산 직후 고정 주기마다 돈다.
     fn build(&self, app: &mut App) {
         app.init_resource::<CalibrationLog>()
+            .init_resource::<ActiveCourse>()
             .add_message::<ResetCourseRequest>()
             .add_message::<CourseResetDone>()
             .add_systems(
@@ -364,12 +366,13 @@ impl CalibrationReadout {
     }
 }
 
-/// 정지 상태이면 차량을 시작 자세(원점, 전방 -Z, 바퀴 정렬)로 되돌린다. 움직이는 중이면 거부한다.
+/// 정지 상태이면 차량을 코스 시작 자세 `start`로 되돌린다. 움직이는 중이면 거부한다.
 ///
 /// 시동·기어·비상 정지 상태는 바꾸지 않고, 장애물 접촉 기록과 진행 중인 시험만 초기화한다.
 pub fn reset_to_start(
     state: &mut VehicleState,
     motion: &mut Motion,
+    start: &Motion,
     contact: &mut VehicleContact,
     log: &mut CalibrationLog,
 ) -> Feedback {
@@ -380,7 +383,7 @@ pub fn reset_to_start(
         };
     }
     state.set_speed_mps(0.0);
-    *motion = Motion::default();
+    *motion = *start;
     *contact = VehicleContact::default();
     log.restart_from(state, motion);
     Feedback {
@@ -390,6 +393,8 @@ pub fn reset_to_start(
 }
 
 /// 받은 시작 위치 복귀 요청을 처리하고 결과를 HUD 피드백과 로그에 남긴다. 적용되면 [`CourseResetDone`]을 보낸다.
+/// 복귀 자세는 현재 코스([`ActiveCourse`])의 시작 자세다.
+#[allow(clippy::too_many_arguments)]
 pub fn apply_course_reset(
     mut requests: MessageReader<ResetCourseRequest>,
     mut done: MessageWriter<CourseResetDone>,
@@ -398,9 +403,16 @@ pub fn apply_course_reset(
     mut contact: ResMut<VehicleContact>,
     mut log: ResMut<CalibrationLog>,
     mut feedback: ResMut<ControlFeedback>,
+    course: Res<ActiveCourse>,
 ) {
     for _ in requests.read() {
-        let result = reset_to_start(&mut vehicle.0, &mut motion.0, &mut contact, &mut log);
+        let result = reset_to_start(
+            &mut vehicle.0,
+            &mut motion.0,
+            &course.0.start,
+            &mut contact,
+            &mut log,
+        );
         if result.accepted {
             info!("control: {}", result.message);
             done.write(CourseResetDone);
@@ -720,15 +732,22 @@ mod tests {
         let mut contact = VehicleContact::default();
         drive(&mut state, &mut motion, &mut log, input(1.0, 0.0), 64);
         let moving = motion;
-        let result = reset_to_start(&mut state, &mut motion, &mut contact, &mut log);
+        // 원점이 아닌 시작 자세도 그대로 복원하는지 보기 위한 임의 자세.
+        let start = Motion {
+            x_m: 2.0,
+            z_m: 1.5,
+            heading_rad: 0.4,
+            ..Motion::default()
+        };
+        let result = reset_to_start(&mut state, &mut motion, &start, &mut contact, &mut log);
         assert!(!result.accepted);
         assert_eq!(motion, moving);
 
         drive(&mut state, &mut motion, &mut log, input(0.0, 1.0), 64);
         contact.0.touching = true;
-        let result = reset_to_start(&mut state, &mut motion, &mut contact, &mut log);
+        let result = reset_to_start(&mut state, &mut motion, &start, &mut contact, &mut log);
         assert!(result.accepted, "{result:?}");
-        assert_eq!(motion, Motion::default());
+        assert_eq!(motion, start);
         assert_eq!(contact, VehicleContact::default());
         assert_eq!(state.gear(), Gear::Drive);
         assert!(log.last_stop().is_some(), "finished results are kept");

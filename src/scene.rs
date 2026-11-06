@@ -1,8 +1,8 @@
-//! 개발용 3D 장면: 격자 바닥, 고정 장애물, 움직이는 차량 도형(외관 + 최소 실내).
+//! 개발용 3D 장면: 격자 바닥, 선택한 코스([`crate::world`]), 움직이는 차량 도형(외관 + 최소 실내).
 //!
 //! 외관 차체는 [`EXTERIOR_LAYER`]에 두어 입석 조작자 시점에서 보이지 않게 하고,
 //! 기준 시야용 최소 실내 형상은 기본 레이어에 둔다. 카메라는 [`crate::camera`]가 만든다.
-//! 차체 크기, 장애물 배치, 외부 디버그 카메라 위치는 모두 **시뮬레이터 임시값**이다.
+//! 차체 크기, 코스 배치, 외부 디버그 카메라 위치는 모두 **시뮬레이터 임시값**이다.
 
 use bevy::camera::visibility::RenderLayers;
 use bevy::prelude::*;
@@ -10,10 +10,13 @@ use bevy::prelude::*;
 use crate::SimSet;
 use crate::camera::EXTERIOR_LAYER;
 use crate::camera::interior::{BODY_HEIGHT_M, spawn_interior};
-use crate::vehicle::{GroundRect, Motion, Obstacle, VEHICLE_FOOTPRINT, VehicleMotion};
+use crate::vehicle::{Motion, VEHICLE_FOOTPRINT, VehicleMotion};
+use crate::world::{ActiveCourse, CourseDef, spawn_course};
 
-/// 바닥 한 변 길이(m).
+/// 바닥 한 변의 최소 길이(m). 코스가 크면 [`ground_square`]가 더 넓힌다.
 const GROUND_SIZE_M: f32 = 200.0;
+/// 코스 둘레에 더 까는 바닥 여유(m). 1인칭 시야에서 바닥 끝이 가까이 보이지 않게 한다.
+const GROUND_MARGIN_M: f32 = 100.0;
 /// 격자선 간격(m). 이동 거리를 눈으로 가늠하는 기준이다.
 const GRID_SPACING_M: f32 = 5.0;
 /// 차체 크기(폭, 높이, 길이; m). 폭·길이는 충돌 박스와 같다. 실차 치수 미확인 임시값.
@@ -24,19 +27,6 @@ const BODY_SIZE_M: Vec3 = Vec3::new(
 );
 /// 후륜축 중심에서 차체 중심까지의 전방 거리(m).
 const REAR_AXLE_TO_CENTER_M: f32 = VEHICLE_FOOTPRINT.rear_axle_to_center_m;
-/// 장애물 표시 높이(m). 충돌 판정은 높이를 보지 않는다.
-const OBSTACLE_HEIGHT_M: f32 = 1.2;
-/// 충돌 시험용 고정 장애물(중심 x·z, 크기 x·z; m). 시작 위치는 원점, 정면은 -Z다.
-const OBSTACLES: [(Vec2, Vec2); 4] = [
-    // 정면 30 m 앞의 벽
-    (Vec2::new(0.0, -30.0), Vec2::new(12.0, 0.5)),
-    // 오른쪽 앞 기둥
-    (Vec2::new(6.0, -14.0), Vec2::new(1.0, 1.0)),
-    // 왼쪽 앞 상자
-    (Vec2::new(-7.0, -10.0), Vec2::new(2.0, 2.0)),
-    // 후진 시험용 뒤쪽 벽
-    (Vec2::new(0.0, 15.0), Vec2::new(8.0, 0.5)),
-];
 /// 보조광 조도(lux). 주광(기본값)보다 훨씬 약하게 둔다.
 const FILL_LIGHT_LUX: f32 = 1500.0;
 /// 개발용 외부 디버그 카메라의 차량 기준 위치(오른쪽, 위, 뒤; m).
@@ -57,18 +47,27 @@ impl Plugin for ScenePlugin {
     }
 }
 
-/// 바닥, 격자선, 장애물, 차량 도형(외관·실내), 조명을 배치한다.
+/// 바닥, 격자선, 선택한 코스, 차량 도형(외관·실내), 조명을 배치한다.
 fn setup_scene(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    course: Res<ActiveCourse>,
 ) {
+    let (ground_center, ground_size) = ground_square(&course.0);
     commands.spawn((
-        Mesh3d(meshes.add(Plane3d::default().mesh().size(GROUND_SIZE_M, GROUND_SIZE_M))),
+        Mesh3d(meshes.add(Plane3d::default().mesh().size(ground_size, ground_size))),
         MeshMaterial3d(materials.add(Color::srgb(0.25, 0.30, 0.30))),
+        Transform::from_xyz(ground_center.x, 0.0, ground_center.y),
     ));
-    spawn_grid(&mut commands, &mut meshes, &mut materials);
-    spawn_obstacles(&mut commands, &mut meshes, &mut materials);
+    spawn_grid(
+        &mut commands,
+        &mut meshes,
+        &mut materials,
+        ground_center,
+        ground_size,
+    );
+    spawn_course(&mut commands, &mut meshes, &mut materials, &course.0);
 
     let body = meshes.add(Cuboid::from_size(BODY_SIZE_M));
     let front_marker = meshes.add(Cuboid::new(BODY_SIZE_M.x * 0.8, 0.3, 0.3));
@@ -114,47 +113,64 @@ fn setup_scene(
 }
 
 /// 바닥 위에 일정 간격의 격자선을 깐다. 원점을 지나는 두 선은 밝게 표시한다.
+///
+/// `center`(x, z)는 격자 간격의 정수배여야 원점 축선과 격자가 맞는다.
 fn spawn_grid(
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,
+    center: Vec2,
+    size: f32,
 ) {
-    let along_x = meshes.add(Cuboid::new(GROUND_SIZE_M, 0.01, 0.05));
-    let along_z = meshes.add(Cuboid::new(0.05, 0.01, GROUND_SIZE_M));
+    let along_x = meshes.add(Cuboid::new(size, 0.01, 0.05));
+    let along_z = meshes.add(Cuboid::new(0.05, 0.01, size));
     let line = materials.add(Color::srgb(0.38, 0.44, 0.44));
     let axis = materials.add(Color::srgb(0.75, 0.75, 0.70));
-    let half_lines = (GROUND_SIZE_M / 2.0 / GRID_SPACING_M) as i32;
+    let half_lines = (size / 2.0 / GRID_SPACING_M) as i32;
+    let (base_x, base_z) = (
+        (center.x / GRID_SPACING_M).round() as i32,
+        (center.y / GRID_SPACING_M).round() as i32,
+    );
     for index in -half_lines..=half_lines {
-        let offset = index as f32 * GRID_SPACING_M;
-        let material = if index == 0 { &axis } else { &line };
+        let (ix, iz) = (base_x + index, base_z + index);
+        let z_material = if iz == 0 { &axis } else { &line };
+        let x_material = if ix == 0 { &axis } else { &line };
         commands.spawn((
             Mesh3d(along_x.clone()),
-            MeshMaterial3d(material.clone()),
-            Transform::from_xyz(0.0, 0.005, offset),
+            MeshMaterial3d(z_material.clone()),
+            Transform::from_xyz(center.x, 0.005, iz as f32 * GRID_SPACING_M),
         ));
         commands.spawn((
             Mesh3d(along_z.clone()),
-            MeshMaterial3d(material.clone()),
-            Transform::from_xyz(offset, 0.005, 0.0),
+            MeshMaterial3d(x_material.clone()),
+            Transform::from_xyz(ix as f32 * GRID_SPACING_M, 0.005, center.y),
         ));
     }
 }
 
-/// 충돌 판정용 [`Obstacle`]과 같은 크기의 상자를 장애물 위치에 놓는다.
-fn spawn_obstacles(
-    commands: &mut Commands,
-    meshes: &mut Assets<Mesh>,
-    materials: &mut Assets<StandardMaterial>,
-) {
-    let material = materials.add(Color::srgb(0.85, 0.35, 0.25));
-    for (center, size) in OBSTACLES {
-        commands.spawn((
-            Mesh3d(meshes.add(Cuboid::new(size.x, OBSTACLE_HEIGHT_M, size.y))),
-            MeshMaterial3d(material.clone()),
-            Transform::from_xyz(center.x, OBSTACLE_HEIGHT_M / 2.0, center.y),
-            Obstacle(GroundRect::axis_aligned(center, size)),
-        ));
+/// 코스 전체와 시작 위치를 덮는 정사각형 바닥의 (중심, 한 변 길이)를 구한다.
+///
+/// 각 영역은 중심에서 반 크기 대각선까지의 원으로 넉넉히 감싼다. 둘레에 [`GROUND_MARGIN_M`]을 더하고,
+/// 한 변은 [`GROUND_SIZE_M`] 이상이며 중심은 격자 간격의 정수배로 맞춘다.
+pub fn ground_square(course: &CourseDef) -> (Vec2, f32) {
+    let start = Vec2::new(course.start.x_m, course.start.z_m);
+    let (mut low, mut high) = (start, start);
+    for rect in course
+        .surfaces
+        .iter()
+        .chain(course.markings.iter().map(|marking| &marking.rect))
+        .chain(course.colliders.iter().map(|collider| &collider.rect))
+    {
+        let reach = rect.half_size.length();
+        low = low.min(rect.center - Vec2::splat(reach));
+        high = high.max(rect.center + Vec2::splat(reach));
     }
+    let center = ((low + high) / 2.0 / GRID_SPACING_M).round() * GRID_SPACING_M;
+    let half = (high - center).max(center - low).max_element() + GROUND_MARGIN_M;
+    let size = (2.0 * half).max(GROUND_SIZE_M);
+    // 격자선이 바닥 끝에 맞도록 한 변을 격자 간격 2배의 정수배로 올린다.
+    let step = 2.0 * GRID_SPACING_M;
+    (center, (size / step).ceil() * step)
 }
 
 /// 운동 모델의 자세를 차량 도형 Transform에 반영한다.
@@ -184,6 +200,34 @@ pub fn external_camera_transform(motion: &Motion) -> Transform {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::world::CourseId;
+
+    /// 기본 코스의 바닥이 최소 크기 이상이고, 원점에서 먼 지도 코스도 모든 영역이 바닥 안에 드는지 확인한다.
+    #[test]
+    fn ground_covers_course() {
+        let (center, size) = ground_square(&CourseId::Training.build());
+        assert!(
+            center.x.abs() < 1e-6 && size >= GROUND_SIZE_M,
+            "{center:?} {size}"
+        );
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("assets/maps/yeosu-expo/course.toml");
+        let course = crate::world::map::load_map_course(&path).unwrap();
+        let (center, size) = ground_square(&course);
+        assert_eq!(center % GRID_SPACING_M, Vec2::ZERO);
+        for rect in course
+            .surfaces
+            .iter()
+            .chain(course.collision_rects().iter())
+        {
+            let reach = rect.half_size.length();
+            let offset = (rect.center - center).abs() + Vec2::splat(reach);
+            assert!(
+                offset.max_element() <= size / 2.0,
+                "{rect:?} outside ground"
+            );
+        }
+    }
 
     /// 차량 도형의 전방(-Z)이 운동 모델의 전방 벡터와 같은 방향인지 확인한다.
     #[test]
@@ -201,20 +245,6 @@ mod tests {
             body_transform(&motion).translation,
             Vec3::new(3.0, 0.0, -2.0)
         );
-    }
-
-    /// 시작 자세의 차체가 어떤 장애물과도 겹치지 않는지 확인한다.
-    #[test]
-    fn start_pose_is_clear_of_obstacles() {
-        let obstacles: Vec<GroundRect> = OBSTACLES
-            .iter()
-            .map(|(center, size)| GroundRect::axis_aligned(*center, *size))
-            .collect();
-        assert!(!crate::vehicle::collision::in_contact(
-            &VEHICLE_FOOTPRINT,
-            &Motion::default(),
-            &obstacles
-        ));
     }
 
     /// 외부 디버그 카메라가 차량 뒤쪽 위에 있는지 확인한다.
