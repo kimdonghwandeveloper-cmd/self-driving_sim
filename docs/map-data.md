@@ -67,7 +67,7 @@ OSM 통로를 바탕으로 만든 코스는 **가상 교육 코스**다. 그 통
   - 근거: [OSMF 출처 표기 지침 중 컴퓨터 게임·시뮬레이션 항목](https://osmfoundation.org/wiki/Licence/Attribution_Guidelines#Computer_games_and_simulations). 시작 화면, 게임 화면, 크레딧·메뉴처럼 사용자가 보는 적절한 위치에 표기하라고 안내한다.
   - HUD에 두기 어려우면 충분히 읽을 수 있는 시작 화면이나 크레딧 화면으로 대신할 수 있다. 시작 로그는 **보조 기록**일 뿐이며, 그것만으로는 표기를 대신할 수 없다.
   - 상세 라이선스로 가는 경로: 크레딧이나 도움말에 [https://www.openstreetmap.org/copyright](https://www.openstreetmap.org/copyright)를 함께 적는다. 저장소에서는 이 문서와 지도 데이터 폴더 README에서 찾을 수 있다.
-- 배포물: Phase 5-4 릴리스 크레딧에 같은 표기를 넣는다.
+- 배포물: Phase 6-4 릴리스 크레딧에 같은 표기를 넣는다.
 - 변환한 코스 데이터는 OSM에서 파생한 데이터베이스이므로 공개 배포할 때는 ODbL의 동일조건(share-alike) 조항을 따른다. 배포 방식이 정해지면 다시 확인한다.
 
 ## 변환기 (Phase 3-4 범용 부분, `src/world/map.rs`)
