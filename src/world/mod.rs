@@ -4,6 +4,7 @@
 
 pub mod course;
 pub mod map;
+pub mod osm_graph;
 
 use std::path::PathBuf;
 
