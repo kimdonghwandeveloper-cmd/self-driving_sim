@@ -634,11 +634,13 @@ mod tests {
         assert!(state.speed_mps() > 4.0);
     }
 
-    /// 최고 속도에서도 검사 간격보다 두꺼운 얇은 벽(0.1 m)을 건너뛰지 않는지 확인한다.
+    /// 최고 속도(40 km/h)에서도 검사 간격보다 두꺼운 얇은 벽(0.1 m)을 건너뛰지 않는지 확인한다.
     #[test]
     fn thin_wall_is_not_tunneled_at_top_speed() {
         let wall = [wall_ahead(30.0, 0.1)];
         let mut state = ready_in(Gear::Drive);
+        // 30 m 안에서는 최고 속도까지 가속하지 못하므로 최고 속도에서 출발한다.
+        state.set_speed_mps(DynamicsParams::default().max_forward_speed_mps);
         let mut motion = Motion::default();
         let mut contact = ContactState::default();
         let impacts = drive(
@@ -795,7 +797,8 @@ mod tests {
     /// 그 사이(단계의 약 5/6 지점)에서 차체 모서리가 장면의 1 m 기둥을 수 mm 침범한다.
     #[test]
     fn turning_clip_between_samples_is_blocked() {
-        let params = DynamicsParams::default();
+        // 이 자세는 Phase 2 기준 모델(5 m/s, 기구학 곡률)로 만든 사례라 그 값으로 재현한다.
+        let params = DynamicsParams::phase2_reference();
         let pillar = [GroundRect::axis_aligned(Vec2::new(6.0, -14.0), Vec2::ONE)];
         let depth = |motion: &Motion| VEHICLE_FOOTPRINT.rect_at(motion).penetration(&pillar[0]);
         let mut state = ready_in(Gear::Drive);

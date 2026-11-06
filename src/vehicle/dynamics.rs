@@ -1,7 +1,9 @@
-//! 저속 차량 운동 모델(Phase 2 임시 기준 모델).
+//! 차량 운동 모델(Phase 2 임시 기준 모델, 2-6 중속 보강).
 //!
-//! 종방향은 가속·제동·관성 감속, 횡방향은 후륜축 기준 Kinematic Bicycle Model을 사용한다.
-//! 모든 파라미터는 실차 검증 전 **시뮬레이터 임시값**이다.
+//! 종방향은 출력 한계가 있는 구동 가속, 구름·공기 저항, 제동·관성·비상 감속을 쓴다.
+//! 횡방향은 후륜축 기준 Kinematic Bicycle Model에 정상 상태 언더스티어 식과 횡가속도 상한을 더한다.
+//! 전진 최고 속도(40 km/h)만 사용자가 알려 준 실차 사양이고, 나머지 파라미터는 실차 검증 전
+//! **시뮬레이터 임시값**이다.
 //!
 //! 단위는 위치 m, 속도 m/s, 가속도 m/s², 각도 rad로 통일한다(설정 파일의 각도만 도 단위).
 //! 좌표는 Bevy 지면(x, z)이며, heading은 +Y축 회전각이다. heading 0일 때 전방은 -Z이고,
@@ -17,6 +19,10 @@ use super::state::{EngineState, Gear, VehicleState};
 const REST_SPEED_MPS: f32 = 1.0e-3;
 /// 최대 조향각 허용 상한(도). 90도에 가까우면 tan이 발산한다.
 const MAX_STEER_ANGLE_LIMIT_DEG: f32 = 60.0;
+/// 중력 가속도(m/s²).
+const GRAVITY_MPS2: f32 = 9.80665;
+/// 공기 밀도(kg/m³). 15 °C 해수면 표준 대기 값.
+const AIR_DENSITY_KG_M3: f32 = 1.225;
 
 /// 조향 입력이 중립(0)일 때 바퀴 조향각 처리 방식. 실차 동작 미확정이라 설정으로 고른다.
 ///
@@ -36,18 +42,27 @@ pub enum SteerReturn {
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct DynamicsParams {
-    /// D 최고 속도(m/s).
+    /// D 최고 속도(m/s). 기본 11.11 m/s(40 km/h)는 실차 사양.
     pub max_forward_speed_mps: f32,
     /// R 최고 속도(m/s, 크기).
     pub max_reverse_speed_mps: f32,
-    /// 가속 입력 1.0일 때 가속도(m/s²).
+    /// 가속 입력 1.0일 때 저속 구동 가속도 상한(m/s²). 속도가 오르면 출력 한계로 줄어든다.
     pub max_accel_mps2: f32,
+    /// 차량 질량(kg). 출력·공기 저항을 가속도로 바꿀 때 쓴다.
+    pub mass_kg: f32,
+    /// 최대 구동 출력(kW). 구동 가속도는 `출력 ÷ (질량 × 속도)`를 넘지 않는다.
+    pub max_drive_power_kw: f32,
+    /// 구름 저항 계수(무차원, 0 허용). 움직이는 동안 `계수 × g`의 감속 성분이 된다.
+    pub rolling_resistance_coeff: f32,
+    /// 공기 저항 면적 Cd·A(m², 0 허용). 감속 성분은 `½ρ·CdA·v² ÷ 질량`이다.
+    pub drag_area_m2: f32,
     /// 제동 입력 1.0일 때 더하는 감속 성분(m/s²).
     ///
     /// 세 감속 값(제동·관성·비상)은 최종 감속도가 아니라 **더해지는 성분**이다. 기본값에서 가속 입력 없이
     /// 최대 제동하면 3.0 + 0.3 = 3.3, 비상 정지만이면 5.0 + 0.3 = 5.3, 둘 다면 8.3 m/s²로 감속한다.
     pub max_brake_decel_mps2: f32,
-    /// 가속 입력이 없을 때(관성 주행·N) 더하는 감속 성분(m/s²). 0이면 감속 없이 관성으로 계속 굴러간다.
+    /// 가속 입력이 없을 때(관성 주행·N) 더하는 감속 성분(m/s²). 구름·공기 저항과 별도로 더해진다.
+    /// 0이고 저항도 0이면 감속 없이 관성으로 계속 굴러간다.
     pub coast_decel_mps2: f32,
     /// 비상 정지 중 더하는 감속 성분(m/s²).
     pub emergency_decel_mps2: f32,
@@ -57,6 +72,10 @@ pub struct DynamicsParams {
     pub max_steer_angle_deg: f32,
     /// 바퀴 조향각 변화 속도(도/s).
     pub steer_rate_deg_s: f32,
+    /// 언더스티어 계수 K(rad/g, 0 허용). 곡률은 `tan δ ÷ (L + K·v²/g)`이며 0이면 기존 기구학 모델과 같다.
+    pub understeer_gradient_rad_per_g: f32,
+    /// 횡가속도 상한(m/s²). 곡률이 `상한 ÷ v²`를 넘지 않아 고속 급회전이 불가능하다.
+    pub max_lateral_accel_mps2: f32,
     /// 조향 감도(배율). 조향 입력에 곱한 뒤 -1..=1로 자른다.
     /// 1.0이면 입력 그대로, 1보다 작으면 최대 입력에서도 최대 조향각보다 덜 꺾이고,
     /// 1보다 크면 작은 입력으로 최대 조향각에 먼저 도달한다.
@@ -71,15 +90,21 @@ impl Default for DynamicsParams {
     /// 시뮬레이터 임시 기본값을 만든다(실차 미검증).
     fn default() -> Self {
         Self {
-            max_forward_speed_mps: 5.0,
+            max_forward_speed_mps: 40.0 / 3.6,
             max_reverse_speed_mps: 1.5,
             max_accel_mps2: 1.0,
+            mass_kg: 3000.0,
+            max_drive_power_kw: 20.0,
+            rolling_resistance_coeff: 0.015,
+            drag_area_m2: 3.5,
             max_brake_decel_mps2: 3.0,
-            coast_decel_mps2: 0.3,
+            coast_decel_mps2: 0.15,
             emergency_decel_mps2: 5.0,
             wheelbase_m: 2.8,
             max_steer_angle_deg: 30.0,
             steer_rate_deg_s: 60.0,
+            understeer_gradient_rad_per_g: 0.03,
+            max_lateral_accel_mps2: 6.0,
             steer_sensitivity: 1.0,
             steer_return: SteerReturn::Auto,
             steer_return_rate_deg_s: 60.0,
@@ -88,18 +113,30 @@ impl Default for DynamicsParams {
 }
 
 impl DynamicsParams {
-    /// 모든 값이 유한한 양수인지(관성 감속만 0 허용), 최대 조향각이 상한 이하인지 검사한다.
+    /// 모든 값이 유한한 양수인지(관성 감속·저항·언더스티어 계수는 0 허용), 최대 조향각이 상한 이하인지 검사한다.
     pub fn validate(&self) -> Result<(), String> {
-        if !(self.coast_decel_mps2.is_finite() && self.coast_decel_mps2 >= 0.0) {
-            return Err(format!(
-                "dynamics.coast_decel_mps2 must be zero or a positive number, got {}",
-                self.coast_decel_mps2
-            ));
+        for (name, value) in [
+            ("coast_decel_mps2", self.coast_decel_mps2),
+            ("rolling_resistance_coeff", self.rolling_resistance_coeff),
+            ("drag_area_m2", self.drag_area_m2),
+            (
+                "understeer_gradient_rad_per_g",
+                self.understeer_gradient_rad_per_g,
+            ),
+        ] {
+            if !(value.is_finite() && value >= 0.0) {
+                return Err(format!(
+                    "dynamics.{name} must be zero or a positive number, got {value}"
+                ));
+            }
         }
         for (name, value) in [
             ("max_forward_speed_mps", self.max_forward_speed_mps),
             ("max_reverse_speed_mps", self.max_reverse_speed_mps),
             ("max_accel_mps2", self.max_accel_mps2),
+            ("mass_kg", self.mass_kg),
+            ("max_drive_power_kw", self.max_drive_power_kw),
+            ("max_lateral_accel_mps2", self.max_lateral_accel_mps2),
             ("max_brake_decel_mps2", self.max_brake_decel_mps2),
             ("emergency_decel_mps2", self.emergency_decel_mps2),
             ("wheelbase_m", self.wheelbase_m),
@@ -121,6 +158,66 @@ impl DynamicsParams {
             ));
         }
         Ok(())
+    }
+
+    /// 구름 저항이 만드는 감속도 크기(m/s², `계수 × g`)를 계산한다. 속도와 무관하다.
+    pub fn rolling_decel_mps2(&self) -> f32 {
+        self.rolling_resistance_coeff * GRAVITY_MPS2
+    }
+
+    /// 속도 `speed_mps`(부호 무관)에서 구름·공기 저항이 만드는 감속도 크기(m/s²)를 계산한다. 정지 중이면 0.
+    pub fn resistance_decel_mps2(&self, speed_mps: f32) -> f32 {
+        if speed_mps == 0.0 {
+            return 0.0;
+        }
+        let drag =
+            0.5 * AIR_DENSITY_KG_M3 * self.drag_area_m2 * speed_mps * speed_mps / self.mass_kg;
+        self.rolling_decel_mps2() + drag
+    }
+
+    /// 가속 입력 1.0일 때 속도 `speed_mps`에서 낼 수 있는 구동 가속도 크기(m/s²)를 계산한다.
+    ///
+    /// 저속에서는 `max_accel_mps2`, 속도가 오르면 `출력 ÷ (질량 × 속도)`로 줄어든다.
+    pub fn drive_accel_limit_mps2(&self, speed_mps: f32) -> f32 {
+        let speed = speed_mps.abs();
+        if speed == 0.0 {
+            return self.max_accel_mps2;
+        }
+        let power_limited = self.max_drive_power_kw * 1000.0 / (self.mass_kg * speed);
+        self.max_accel_mps2.min(power_limited)
+    }
+
+    /// 속도 `speed_mps`와 바퀴 조향각 `steer_angle_rad`에서 후륜축 경로의 곡률(1/m, 양수=우회전)을 계산한다.
+    ///
+    /// 정상 상태 언더스티어 식 `tan δ ÷ (L + K·v²/g)`에 횡가속도 상한 `a_lat ÷ v²`를 적용한다.
+    /// 정지 부근에서는 기구학 모델 `tan δ ÷ L`과 같다.
+    pub fn path_curvature(&self, speed_mps: f32, steer_angle_rad: f32) -> f32 {
+        let speed_sq = speed_mps * speed_mps;
+        let curvature = steer_angle_rad.tan()
+            / (self.wheelbase_m + self.understeer_gradient_rad_per_g * speed_sq / GRAVITY_MPS2);
+        if speed_sq == 0.0 {
+            return curvature;
+        }
+        let limit = self.max_lateral_accel_mps2 / speed_sq;
+        curvature.clamp(-limit, limit)
+    }
+}
+
+#[cfg(test)]
+impl DynamicsParams {
+    /// 테스트용 Phase 2 기준 모델 값을 만든다: 최고 5 m/s, 관성 감속 0.3, 저항·출력 한계·언더스티어·
+    /// 횡가속도 상한 없음. 운동 모델이 아닌 충돌·보정 로직을 예전 수치로 확인할 때 쓴다.
+    pub(crate) fn phase2_reference() -> Self {
+        Self {
+            max_forward_speed_mps: 5.0,
+            coast_decel_mps2: 0.3,
+            rolling_resistance_coeff: 0.0,
+            drag_area_m2: 0.0,
+            max_drive_power_kw: 1.0e6,
+            understeer_gradient_rad_per_g: 0.0,
+            max_lateral_accel_mps2: 1.0e6,
+            ..Self::default()
+        }
     }
 }
 
@@ -168,7 +265,7 @@ pub fn step(state: &mut VehicleState, motion: &mut Motion, params: &DynamicsPara
     }
 
     // 우조향(양수)이면 전진 시 heading이 줄어든다. 후진이면 속도 부호로 회전 방향이 자동으로 바뀐다.
-    let yaw_rate = -next_speed * motion.steer_angle_rad.tan() / params.wheelbase_m;
+    let yaw_rate = -next_speed * params.path_curvature(next_speed, motion.steer_angle_rad);
     motion.heading_rad = wrap_angle(motion.heading_rad + yaw_rate * dt);
     let (forward_x, forward_z) = motion.forward();
     motion.x_m += forward_x * next_speed * dt;
@@ -201,27 +298,33 @@ fn steer_target(steering: f32, current_rad: f32, params: &DynamicsParams) -> Opt
 /// 다음 단계의 부호 있는 속도를 계산한다.
 ///
 /// - P는 주차 잠금으로 0을 유지한다(P는 정지 상태에서만 들어갈 수 있다).
-/// - 구동 가속은 상태 머신이 허용한 가속 입력(`effective_throttle`)과 D/R 방향으로만 생긴다.
-/// - 제동·관성·비상 정지 감속은 각 성분을 더한 값으로, 항상 속도를 0 쪽으로만 당기며 0을 넘지 않는다.
+/// - 구동 가속은 상태 머신이 허용한 가속 입력(`effective_throttle`)과 D/R 방향으로만 생기며,
+///   크기는 출력 한계(`drive_accel_limit_mps2`)를 따른다.
+/// - 제동·관성·비상 정지·구름/공기 저항 감속은 각 성분을 더한 값으로, 항상 속도를 0 쪽으로만 당기며
+///   0을 넘지 않는다. 저항 때문에 차가 반대로 움직이지 않는다.
+/// - 최고 속도 상한은 감속을 적용한 뒤에 자르므로, 구동이 저항보다 크면 정확히 상한을 유지한다.
 fn longitudinal_speed(state: &VehicleState, params: &DynamicsParams, speed: f32, dt: f32) -> f32 {
     if state.gear() == Gear::Park {
         return 0.0;
     }
     let drive_accel = match state.gear().drive_direction() {
-        Some(direction) => direction * state.effective_throttle() * params.max_accel_mps2,
+        Some(direction) => {
+            direction * state.effective_throttle() * params.drive_accel_limit_mps2(speed)
+        }
         None => 0.0,
     };
-    let mut next = (speed + drive_accel * dt)
-        .clamp(-params.max_reverse_speed_mps, params.max_forward_speed_mps);
+    let mut next = speed + drive_accel * dt;
 
-    let mut decel = state.input().brake * params.max_brake_decel_mps2;
+    let mut decel =
+        state.input().brake * params.max_brake_decel_mps2 + params.resistance_decel_mps2(speed);
     if drive_accel == 0.0 {
         decel += params.coast_decel_mps2;
     }
     if state.engine() == EngineState::EmergencyStop {
         decel += params.emergency_decel_mps2;
     }
-    next = approach_zero(next, decel * dt);
+    next = approach_zero(next, decel * dt)
+        .clamp(-params.max_reverse_speed_mps, params.max_forward_speed_mps);
     if drive_accel == 0.0 && next.abs() < REST_SPEED_MPS {
         next = 0.0;
     }
@@ -283,20 +386,122 @@ mod tests {
         }
     }
 
-    /// D에서 가속하면 전방(-Z)으로 움직이고 최고 속도를 넘지 않는지 확인한다.
+    /// D에서 가속하면 전방(-Z)으로 움직이고, 저속에서는 `최대 가속 − 저항`으로 가속하며
+    /// 최고 속도(40 km/h)에 도달한 뒤에는 넘지 않는지 확인한다.
     #[test]
     fn drive_accelerates_forward_up_to_limit() {
+        let params = DynamicsParams::default();
         let mut state = ready_in(Gear::Drive);
         let mut motion = Motion::default();
         run(&mut state, &mut motion, 1.0, DT, input(1.0, 0.0, 0.0));
-        assert!((state.speed_mps() - 1.0).abs() < 1e-3);
+        let expected = params.max_accel_mps2 - params.rolling_decel_mps2();
+        assert!(
+            (state.speed_mps() - expected).abs() < 0.01,
+            "{}",
+            state.speed_mps()
+        );
         assert!(motion.z_m < 0.0);
 
-        run(&mut state, &mut motion, 20.0, DT, input(1.0, 0.0, 0.0));
+        run(&mut state, &mut motion, 60.0, DT, input(1.0, 0.0, 0.0));
+        assert_eq!(state.speed_mps(), params.max_forward_speed_mps);
+        assert!((params.max_forward_speed_mps * 3.6 - 40.0).abs() < 1e-4);
+    }
+
+    /// 출력 한계 때문에 고속에서는 같은 가속 입력으로도 가속도가 줄어드는지 확인한다.
+    #[test]
+    fn power_limit_reduces_accel_at_speed() {
+        let params = DynamicsParams::default();
+        assert_eq!(params.drive_accel_limit_mps2(0.0), params.max_accel_mps2);
+        // 20 kW ÷ (3 000 kg × 10 m/s) ≈ 0.667 m/s².
+        assert!((params.drive_accel_limit_mps2(10.0) - 20.0 / 30.0).abs() < 1e-4);
         assert_eq!(
-            state.speed_mps(),
-            DynamicsParams::default().max_forward_speed_mps
+            params.drive_accel_limit_mps2(-10.0),
+            params.drive_accel_limit_mps2(10.0)
         );
+
+        let accel_at = |speed: f32| {
+            let mut state = ready_in(Gear::Drive);
+            state.set_speed_mps(speed);
+            state.set_input(input(1.0, 0.0, 0.0));
+            let mut motion = Motion::default();
+            step(&mut state, &mut motion, &params, DT);
+            motion.accel_mps2
+        };
+        assert!(accel_at(2.0) > 0.8, "{}", accel_at(2.0));
+        assert!(accel_at(10.0) < 0.5, "{}", accel_at(10.0));
+        assert!(accel_at(10.0) > 0.0);
+    }
+
+    /// 구름·공기 저항이 관성 주행 감속에 더해지고, 차를 반대 방향으로 밀지 않는지 확인한다(D·R·N).
+    #[test]
+    fn resistance_slows_without_reversing() {
+        let params = DynamicsParams::default();
+        let mut state = ready_in(Gear::Drive);
+        state.set_speed_mps(10.0);
+        state.set_input(input(0.0, 0.0, 0.0));
+        let mut motion = Motion::default();
+        step(&mut state, &mut motion, &params, DT);
+        let expected = params.coast_decel_mps2 + params.resistance_decel_mps2(10.0);
+        assert!(
+            (-motion.accel_mps2 - expected).abs() < 1e-3,
+            "{}",
+            motion.accel_mps2
+        );
+        assert!(params.resistance_decel_mps2(10.0) > params.resistance_decel_mps2(2.0));
+        assert_eq!(params.resistance_decel_mps2(0.0), 0.0);
+
+        for (gear, speed) in [(Gear::Drive, 0.01), (Gear::Reverse, -0.01)] {
+            let mut state = ready_in(gear);
+            state.set_speed_mps(speed);
+            state
+                .apply(VehicleCommand::RequestGear(Gear::Neutral))
+                .unwrap();
+            state.set_input(input(0.0, 0.0, 0.0));
+            let mut motion = Motion::default();
+            for _ in 0..64 {
+                step(&mut state, &mut motion, &params, DT);
+                assert!(state.speed_mps() * speed >= 0.0, "{gear:?}");
+            }
+            assert_eq!(state.speed_mps(), 0.0, "{gear:?}");
+        }
+    }
+
+    /// 정지 부근에서는 곡률이 기구학 모델 `tan δ ÷ L`과 같고, 속도가 오르면 언더스티어로 줄어드는지 확인한다.
+    #[test]
+    fn curvature_matches_kinematic_at_low_speed() {
+        let params = DynamicsParams::default();
+        let steer = 10f32.to_radians();
+        let kinematic = steer.tan() / params.wheelbase_m;
+        assert_eq!(params.path_curvature(0.0, steer), kinematic);
+        assert!((params.path_curvature(0.5, steer) / kinematic - 1.0).abs() < 1e-3);
+        let fast = params.path_curvature(8.0, steer);
+        assert!(fast < kinematic && fast > 0.0, "{fast} vs {kinematic}");
+        assert_eq!(params.path_curvature(8.0, -steer), -fast);
+    }
+
+    /// 40 km/h에서 끝까지 조향해도 실제 횡가속도(속도 × 회전 각속도)가 상한을 넘지 않는지 확인한다.
+    #[test]
+    fn lateral_accel_is_limited_at_top_speed() {
+        let params = DynamicsParams::default();
+        let mut state = ready_in(Gear::Drive);
+        state.set_speed_mps(params.max_forward_speed_mps);
+        state.set_input(input(1.0, 0.0, 1.0));
+        let mut motion = Motion {
+            steer_angle_rad: params.max_steer_angle_deg.to_radians(),
+            ..Motion::default()
+        };
+        let before = motion.heading_rad;
+        step(&mut state, &mut motion, &params, DT);
+        let yaw_rate = (motion.heading_rad - before) / DT;
+        let lateral = (state.speed_mps() * yaw_rate).abs();
+        assert!(
+            lateral <= params.max_lateral_accel_mps2 * 1.001,
+            "{lateral}"
+        );
+        // 같은 조향각의 기구학 모델이라면 약 25 m/s²였다.
+        let kinematic =
+            state.speed_mps().powi(2) * motion.steer_angle_rad.tan() / params.wheelbase_m;
+        assert!(kinematic > 20.0, "{kinematic}");
     }
 
     /// R에서 가속하면 후방(+Z)으로 움직이고 후진 최고 속도를 넘지 않는지 확인한다.
@@ -355,9 +560,10 @@ mod tests {
     }
 
     /// 제동·관성·비상 감속이 성분 합으로 적용되는지 확인한다(최대 제동 + 비상 정지 = 3.0 + 0.3 + 5.0).
+    /// 저항이 없는 기준 모델 값으로 성분 합만 확인한다. 저항은 `resistance_slows_without_reversing`이 확인한다.
     #[test]
     fn deceleration_components_add_up() {
-        let params = DynamicsParams::default();
+        let params = DynamicsParams::phase2_reference();
         let speed_drop = |brake: f32, emergency: bool| {
             let mut state = ready_in(Gear::Drive);
             state.set_speed_mps(4.0);
@@ -610,17 +816,33 @@ mod tests {
                 steer_return_rate_deg_s: 0.0,
                 ..DynamicsParams::default()
             },
+            DynamicsParams {
+                mass_kg: 0.0,
+                ..DynamicsParams::default()
+            },
+            DynamicsParams {
+                drag_area_m2: -1.0,
+                ..DynamicsParams::default()
+            },
+            DynamicsParams {
+                max_lateral_accel_mps2: 0.0,
+                ..DynamicsParams::default()
+            },
+            DynamicsParams {
+                understeer_gradient_rad_per_g: f32::NAN,
+                ..DynamicsParams::default()
+            },
         ] {
             assert!(params.validate().is_err(), "{params:?}");
         }
     }
 
-    /// 관성 감속 0은 허용되고, N에서 속도를 줄이지 않고 계속 굴러가는지 확인한다.
+    /// 관성 감속과 저항이 모두 0이면 허용되고, N에서 속도를 줄이지 않고 계속 굴러가는지 확인한다.
     #[test]
     fn zero_coast_decel_keeps_rolling_in_neutral() {
         let params = DynamicsParams {
             coast_decel_mps2: 0.0,
-            ..DynamicsParams::default()
+            ..DynamicsParams::phase2_reference()
         };
         assert!(params.validate().is_ok());
         let mut state = ready_in(Gear::Drive);
