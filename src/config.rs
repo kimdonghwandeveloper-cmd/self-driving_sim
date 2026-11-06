@@ -273,6 +273,22 @@ mod tests {
         assert!(matches!(result, Err(ConfigError::Invalid(_))));
     }
 
+    /// 저장소의 `config/vehicle.toml`이 오류 없이 읽히고 운동 모델 값이 코드 기본값과 같은지 확인한다.
+    /// 최고 속도는 소수 표기(11.111111) 때문에 작은 오차를 허용한다.
+    #[test]
+    fn shipped_vehicle_config_matches_defaults() {
+        let config = parse_vehicle_config(include_str!("../config/vehicle.toml")).unwrap();
+        let defaults = DynamicsParams::default();
+        assert!((config.dynamics.max_forward_speed_mps * 3.6 - 40.0).abs() < 1e-4);
+        assert_eq!(
+            DynamicsParams {
+                max_forward_speed_mps: defaults.max_forward_speed_mps,
+                ..config.dynamics
+            },
+            defaults
+        );
+    }
+
     /// 운동 모델 일부 값만 지정하면 나머지는 기본값을 유지하고, 잘못된 값은 거부하는지 확인한다.
     #[test]
     fn dynamics_section_is_parsed_and_validated() {

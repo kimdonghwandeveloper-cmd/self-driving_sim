@@ -298,6 +298,20 @@ impl CalibrationLog {
     }
 }
 
+/// 지금 속도에서 바퀴 조향각으로 도는 후륜축 중심 회전반경(m)을 계산한다. 거의 직진이면 `None`.
+///
+/// 운동 모델과 같은 곡률(언더스티어·횡가속도 상한 포함)을 쓰므로, 고속에서는 기구학 반경보다 크다.
+pub fn effective_turn_radius_m(
+    params: &DynamicsParams,
+    speed_mps: f32,
+    steer_angle_rad: f32,
+) -> Option<f32> {
+    if steer_angle_rad.abs() < STRAIGHT_STEER_RAD {
+        return None;
+    }
+    Some(1.0 / params.path_curvature(speed_mps, steer_angle_rad).abs())
+}
+
 /// 후륜축 중심 기준 회전반경(m)을 Kinematic Bicycle Model로 계산한다. 거의 직진이면 `None`.
 pub fn turn_radius_m(wheelbase_m: f32, steer_angle_rad: f32) -> Option<f32> {
     if steer_angle_rad.abs() < STRAIGHT_STEER_RAD {
@@ -313,14 +327,16 @@ pub fn min_turn_radius_m(params: &DynamicsParams) -> f32 {
 
 /// 지금 속도에서 가속 없이 최대 제동했을 때의 예상 정지거리(m)를 v²/(2a)로 계산한다.
 ///
-/// 감속도는 최대 제동 + 관성 감속 성분이며, 비상 정지 중이면 비상 감속 성분도 더한다.
+/// 감속도는 최대 제동 + 관성 감속 + 구름 저항 성분이며, 비상 정지 중이면 비상 감속 성분도 더한다.
+/// 속도에 따라 줄어드는 공기 저항은 넣지 않아 실제보다 조금 길게(보수적으로) 예상한다.
 /// 이산 적분 결과와는 한 단계 이동량 정도 차이가 날 수 있다.
 pub fn brake_distance_estimate_m(state: &VehicleState, params: &DynamicsParams) -> f32 {
     let speed = state.speed_mps();
     if !speed.is_finite() || speed == 0.0 {
         return 0.0;
     }
-    let mut decel = params.max_brake_decel_mps2 + params.coast_decel_mps2;
+    let mut decel =
+        params.max_brake_decel_mps2 + params.coast_decel_mps2 + params.rolling_decel_mps2();
     if state.engine() == EngineState::EmergencyStop {
         decel += params.emergency_decel_mps2;
     }
@@ -330,7 +346,7 @@ pub fn brake_distance_estimate_m(state: &VehicleState, params: &DynamicsParams) 
 /// HUD에 표시할 보정 값 묶음.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct CalibrationReadout {
-    /// 현재 바퀴 각도의 회전반경(m). 직진이면 `None`.
+    /// 현재 속도·바퀴 각도의 회전반경(m). 직진이면 `None`.
     pub turn_radius_m: Option<f32>,
     /// 최대 조향각의 최소 회전반경(m).
     pub min_turn_radius_m: f32,
@@ -355,7 +371,11 @@ impl CalibrationReadout {
         log: &CalibrationLog,
     ) -> Self {
         Self {
-            turn_radius_m: turn_radius_m(params.wheelbase_m, motion.steer_angle_rad),
+            turn_radius_m: effective_turn_radius_m(
+                params,
+                state.speed_mps(),
+                motion.steer_angle_rad,
+            ),
             min_turn_radius_m: min_turn_radius_m(params),
             brake_estimate_m: brake_distance_estimate_m(state, params),
             active: log.active(),
@@ -471,7 +491,7 @@ mod tests {
         input: VehicleInput,
         steps: usize,
     ) {
-        let params = DynamicsParams::default();
+        let params = DynamicsParams::phase2_reference();
         state.set_input(input);
         for _ in 0..steps {
             step(state, motion, &params, DT);
@@ -511,7 +531,7 @@ mod tests {
         let mut log = CalibrationLog::default();
         drive(&mut state, &mut motion, &mut log, input(1.0, 0.0), 64 * 4);
         let speed = state.speed_mps();
-        let estimate = brake_distance_estimate_m(&state, &DynamicsParams::default());
+        let estimate = brake_distance_estimate_m(&state, &DynamicsParams::phase2_reference());
         drive(&mut state, &mut motion, &mut log, input(0.0, 1.0), 64 * 3);
 
         let result = log.last_stop().expect("brake trial should finish");
@@ -552,7 +572,7 @@ mod tests {
         input: VehicleInput,
         steps: usize,
     ) {
-        let params = DynamicsParams::default();
+        let params = DynamicsParams::phase2_reference();
         state.set_input(input);
         for _ in 0..steps {
             step_with_obstacles(
@@ -656,7 +676,7 @@ mod tests {
     /// 정지 직전에 제동을 풀어 관성 감속으로 멈추면 제동 시험 결과를 남기지 않는지 확인한다.
     #[test]
     fn release_just_before_stop_discards_trial() {
-        let params = DynamicsParams::default();
+        let params = DynamicsParams::phase2_reference();
         let mut state = ready_in_drive();
         let mut motion = Motion::default();
         let mut log = CalibrationLog::default();
@@ -682,7 +702,7 @@ mod tests {
     /// 이동이 막힌 단계로 멈추면 제동 시험 결과를 남기지 않는지 확인한다.
     #[test]
     fn stop_against_obstacle_is_not_recorded() {
-        let params = DynamicsParams::default();
+        let params = DynamicsParams::phase2_reference();
         let mut state = ready_in_drive();
         let mut motion = Motion::default();
         let mut log = CalibrationLog::default();
@@ -713,14 +733,27 @@ mod tests {
         assert!((result.distance_m - speed * speed / (2.0 * 5.3)).abs() < speed * DT);
     }
 
-    /// 회전반경이 L/tan(δ)이고 직진이면 없으며, 최소 회전반경은 최대 조향각 기준인지 확인한다.
+    /// 기구학 회전반경이 L/tan(δ)이고 직진이면 없으며, 최소 회전반경은 최대 조향각 기준인지 확인한다.
+    /// 실제 반경은 정지 부근에서 같고 고속에서 커지는지도 확인한다.
     #[test]
     fn turn_radius_follows_bicycle_model() {
         assert_eq!(turn_radius_m(2.8, 0.0), None);
         let radius = turn_radius_m(2.8, -30f32.to_radians()).unwrap();
         assert!((radius - 2.8 / 30f32.to_radians().tan()).abs() < 1e-5);
-        let params = DynamicsParams::default();
+        let params = DynamicsParams::phase2_reference();
         assert!((min_turn_radius_m(&params) - radius).abs() < 1e-5);
+
+        let params = DynamicsParams::default();
+        let steer = -30f32.to_radians();
+        assert_eq!(effective_turn_radius_m(&params, 0.0, 0.0), None);
+        let slow = effective_turn_radius_m(&params, 0.0, steer).unwrap();
+        assert!((slow - radius).abs() < 1e-4);
+        let fast = effective_turn_radius_m(&params, params.max_forward_speed_mps, steer).unwrap();
+        // 40 km/h, 횡가속도 상한 6 m/s²이면 v²/a ≈ 20.6 m.
+        assert!(
+            (fast - params.max_forward_speed_mps.powi(2) / 6.0).abs() < 0.01,
+            "{fast}"
+        );
     }
 
     /// 움직이는 중에는 복귀를 거부하고, 정지 상태에서는 시작 자세로 되돌리는지 확인한다.

@@ -575,7 +575,7 @@ mod tests {
             assert_eq!(world.resource::<Vehicle>().0.gear(), Gear::Drive);
             update_with_keys(&mut app, &[]);
         }
-        assert!(stops[0].1 > 0.5, "{stops:?}");
+        assert!(stops[0].1 > 0.3, "{stops:?}");
         assert_eq!(stops[0], stops[1]);
         let counts = app.world().resource::<CalibrationLog>().trial_counts();
         assert_eq!(counts.0, 2);

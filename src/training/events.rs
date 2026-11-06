@@ -1,4 +1,4 @@
-//! 교육 이벤트와 세션 기록. JSON 내보내기·평가는 Phase 4에서 추가한다.
+//! 교육 이벤트와 세션 기록. JSON 내보내기·평가는 Phase 5에서 추가한다.
 
 use bevy::prelude::Resource;
 
