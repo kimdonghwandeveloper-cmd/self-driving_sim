@@ -13,6 +13,8 @@
 //!   코스 전체에 쓴다. 태그가 아닌 값은 임시 폭으로 화면에 표시한다. 모든 기본값은 **실측이 아니다**.
 //! - 범위: 찍은 점과 경로 노드는 대한민국 근사 사각형([`KOREA_LAT`]·[`KOREA_LON`]) 안이어야 하고, 경로 길이는
 //!   [`RoadGraphConfig::max_route_length_m`] 이하여야 한다. 코스 범위 상한은 [`route::ROUTE_MAX_EXTENT_M`]이다.
+//! - 재생 계약: 계획에 쓴 점 붙이기 거리·경로 길이 상한을 경로 파일에 함께 저장하고, 다시 읽을 때도 같은 값으로
+//!   검사한다. 두 값은 유한한 양수이고 각각 [`SNAP_DISTANCE_CAP_M`]·[`ROUTE_LENGTH_CAP_M`] 이하여야 한다.
 
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet, BinaryHeap};
@@ -38,6 +40,10 @@ pub const KOREA_LON: std::ops::RangeInclusive<f64> = 124.5..=132.0;
 pub const VIRTUAL_NODE_BASE: u64 = 1 << 62;
 /// 찍은 점을 붙인 곳이 기존 노드에서 이 거리(m) 안이면 가상 노드 대신 그 노드를 쓴다.
 pub const NODE_SNAP_M: f64 = 1.0;
+/// 점 붙이기 거리의 절대 상한(m). 설정·경로 파일 값이 이보다 크면 거부한다.
+pub const SNAP_DISTANCE_CAP_M: f64 = 100.0;
+/// 경로 길이의 절대 상한(m). PLAN 4 공통 계약의 2 km.
+pub const ROUTE_LENGTH_CAP_M: f64 = 2000.0;
 /// 지구 평균 반지름(m). [`map::project`]와 같은 값.
 const EARTH_RADIUS_M: f64 = 6_371_008.8;
 
@@ -99,15 +105,14 @@ impl RoadGraphConfig {
                 .ok_or_else(|| format!("default_width_m has no value for `{kind}`"))?;
             map::check_width(*width)?;
         }
-        let positive = |value: f64| value.is_finite() && value > 0.0;
-        if !(positive(self.lane_width_m.into())
-            && positive(self.snap_distance_m)
-            && positive(self.max_route_length_m))
-        {
-            return Err(
-                "lane_width_m, snap_distance_m and max_route_length_m must be positive".to_owned(),
-            );
+        let lane = f64::from(self.lane_width_m);
+        if !(lane.is_finite() && lane > 0.0) {
+            return Err(format!(
+                "lane_width_m must be positive, got {}",
+                self.lane_width_m
+            ));
         }
+        check_limits(self.snap_distance_m, self.max_route_length_m)?;
         self.junction_settings().validate()
     }
 
@@ -118,6 +123,21 @@ impl RoadGraphConfig {
             stub_length_m: self.stub_length_m,
         }
     }
+}
+
+/// 점 붙이기 거리와 경로 길이 상한이 유한한 양수이고 절대 상한 이하인지 검사한다(설정·경로 파일 공통).
+fn check_limits(snap_distance_m: f64, max_route_length_m: f64) -> Result<(), String> {
+    for (name, value, cap) in [
+        ("snap_distance_m", snap_distance_m, SNAP_DISTANCE_CAP_M),
+        ("max_route_length_m", max_route_length_m, ROUTE_LENGTH_CAP_M),
+    ] {
+        if !(value.is_finite() && value > 0.0 && value <= cap) {
+            return Err(format!(
+                "{name} must be a positive number up to {cap} m, got {value}"
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// 설정 파일 내용을 읽고 검사한다.
@@ -150,6 +170,10 @@ pub struct RouteFile {
     pub corner_radius_m: f32,
     /// 곁가지 길이(m). 임시값.
     pub stub_length_m: f32,
+    /// 계획에 쓴 점 붙이기 거리(m). 다시 읽을 때도 찍은 점이 이 거리 안의 도로에 붙어야 한다.
+    pub snap_distance_m: f64,
+    /// 계획에 쓴 경로 길이 상한(m). 다시 읽을 때도 검사한다.
+    pub max_route_length_m: f64,
 }
 
 /// 폭을 정한 출처.
@@ -505,18 +529,20 @@ pub fn plan_route(
         width_source: source.as_str().to_owned(),
         corner_radius_m: config.corner_radius_m,
         stub_length_m: config.stub_length_m,
+        snap_distance_m: config.snap_distance_m,
+        max_route_length_m: config.max_route_length_m,
     };
-    build_route_file_course(&file, ways, config.max_route_length_m)?;
+    build_route_file_course(&file, ways)?;
     Ok(file)
 }
 
 /// 경로 파일과 스냅샷 way로 코스를 만든다. 찍은 점을 같은 방법으로 다시 붙여 가상 노드를 복원한다.
 ///
-/// 형식·대한민국 범위·경로 길이(`max_route_length_m`)·폭·교차로 형상 값을 검사한다.
+/// 파일은 사용자가 고쳤거나 다른 스냅샷과 짝지어졌을 수 있으므로 계획 때와 같은 조건을 모두 다시 검사한다:
+/// 형식, 점 붙이기 거리·경로 길이 상한 값과 그 적용, 대한민국 범위, 폭 출처, 폭·교차로 형상 값.
 pub fn build_route_file_course(
     file: &RouteFile,
     ways: &[OsmGraphWay],
-    max_route_length_m: f64,
 ) -> Result<RouteCourse, String> {
     if file.format != ROUTE_FORMAT {
         return Err(format!(
@@ -524,10 +550,17 @@ pub fn build_route_file_course(
             file.format
         ));
     }
+    check_limits(file.snap_distance_m, file.max_route_length_m)?;
+    if ![WidthSource::Tag, WidthSource::Lanes, WidthSource::Default]
+        .iter()
+        .any(|source| source.as_str() == file.width_source)
+    {
+        return Err(format!("unknown width_source `{}`", file.width_source));
+    }
+    let max_route_length_m = file.max_route_length_m;
     let allowed: BTreeSet<&str> = file.allowed_highways.iter().map(String::as_str).collect();
     let picked = korean_points(&file.points)?;
-    // 경로 파일을 만들 때 거리 상한을 이미 검사했으므로 다시 붙일 때는 거리를 제한하지 않는다.
-    let snapped = snap_points(ways, &allowed, &picked, f64::INFINITY)?;
+    let snapped = snap_points(ways, &allowed, &picked, file.snap_distance_m)?;
     let graph = SearchGraph::new(&snapped.ways, &allowed, picked[0]);
     for &id in &file.nodes {
         let Some(&pos) = graph.pos.get(&id) else {
@@ -572,15 +605,12 @@ pub fn build_route_file_course(
 }
 
 /// 경로 파일 내용과 그 파일이 있는 폴더로 코스를 만든다. 스냅샷은 `base_dir` 기준 상대 경로다.
-///
-/// 경로 길이 상한은 기본 설정값([`RoadGraphConfig::default`])이다.
 pub fn load_route_course(file: &RouteFile, base_dir: &Path) -> Result<CourseDef, String> {
     let source = base_dir.join(&file.snapshot);
     let json = std::fs::read_to_string(&source)
         .map_err(|error| format!("cannot read {}: {error}", source.display()))?;
     let ways = parse_overpass_graph(&json)?;
-    build_route_file_course(file, &ways, RoadGraphConfig::default().max_route_length_m)
-        .map(|built| built.course)
+    build_route_file_course(file, &ways).map(|built| built.course)
 }
 
 /// 경로 파일 내용을 TOML 문자열로 만든다.
@@ -700,8 +730,8 @@ mod tests {
         let text = route_file_toml(&file).unwrap();
         let reread: RouteFile = toml::from_str(&text).unwrap();
         assert_eq!(reread, file);
-        let first = build_route_file_course(&file, &ways, config.max_route_length_m).unwrap();
-        let second = build_route_file_course(&reread, &ways, config.max_route_length_m).unwrap();
+        let first = build_route_file_course(&file, &ways).unwrap();
+        let second = build_route_file_course(&reread, &ways).unwrap();
         assert_eq!(first, second);
         assert_eq!(first.junctions, vec![10]);
         let result = follow_path(&first.course, &first.guide, 3.0);
@@ -784,8 +814,77 @@ mod tests {
         let mut file =
             plan_route(&ways, "f.json", &[at(-40.0, 0.0), at(40.0, 0.0)], &config).unwrap();
         file.format = "route-v0".to_owned();
-        let error = build_route_file_course(&file, &ways, config.max_route_length_m).unwrap_err();
+        let error = build_route_file_course(&file, &ways).unwrap_err();
         assert!(error.contains("format"), "{error}");
+    }
+
+    /// 재생 계약: 다시 읽을 때도 저장한 점 붙이기 거리·경로 길이 상한을 적용하고, 값 자체도 검사한다
+    /// (Codex 4-3 검토 P2 재현 사례 포함).
+    #[test]
+    fn replay_enforces_saved_limits() {
+        let straight = parse(vec![(
+            195,
+            "service",
+            &[],
+            vec![(1, 0.0, 0.0), (2, 100.0, 0.0)],
+        )]);
+        let config = RoadGraphConfig::default();
+        let file = plan_route(
+            &straight,
+            "f.json",
+            &[at(10.0, 0.0), at(90.0, 0.0)],
+            &config,
+        )
+        .unwrap();
+        assert_eq!(
+            (file.snap_distance_m, file.max_route_length_m),
+            (30.0, 2000.0)
+        );
+        assert!(build_route_file_course(&file, &straight).is_ok());
+        // 저장한 점을 약 111 m 북쪽으로 옮긴 파일(사용자 수정)은 거부한다.
+        let mut moved = file.clone();
+        for point in &mut moved.points {
+            point[0] += 0.001;
+        }
+        let error = build_route_file_course(&moved, &straight).unwrap_err();
+        assert!(error.contains("nearest"), "{error}");
+        // 스냅샷이 바뀌어 가까운 도로가 사라지고 먼 도로만 남으면 거부한다.
+        let changed = parse(vec![(
+            196,
+            "service",
+            &[],
+            vec![(3, 0.0, 120.0), (4, 100.0, 120.0)],
+        )]);
+        let error = build_route_file_course(&file, &changed).unwrap_err();
+        assert!(error.contains("nearest"), "{error}");
+        // 상한 값이 없거나(무한대·0) 절대 상한을 넘으면 거부한다.
+        for (snap, length) in [
+            (f64::INFINITY, 2000.0),
+            (0.0, 2000.0),
+            (150.0, 2000.0),
+            (30.0, 5000.0),
+            (30.0, f64::NAN),
+        ] {
+            let edited = RouteFile {
+                snap_distance_m: snap,
+                max_route_length_m: length,
+                ..file.clone()
+            };
+            let error = build_route_file_course(&edited, &straight).unwrap_err();
+            assert!(error.contains("must be a positive number"), "{error}");
+        }
+        // 저장한 경로 길이 상한도 적용한다.
+        let short = RouteFile {
+            max_route_length_m: 50.0,
+            ..file.clone()
+        };
+        let error = build_route_file_course(&short, &straight).unwrap_err();
+        assert!(error.contains("long"), "{error}");
+        let unknown = RouteFile {
+            width_source: "guess".to_owned(),
+            ..file
+        };
+        assert!(build_route_file_course(&unknown, &straight).is_err());
     }
 
     /// 저장소의 예제 경로 파일이 `--course map:` 로더로 읽히고, 같은 점으로 다시 계획하면 같은 파일이 되며,
@@ -804,7 +903,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(replanned, file);
-        let built = build_route_file_course(&file, &ways, 2000.0).unwrap();
+        let built = build_route_file_course(&file, &ways).unwrap();
         for junction in [5_143_358_021, 5_143_358_070, 5_239_572_002] {
             assert!(built.junctions.contains(&junction), "{:?}", built.junctions);
         }

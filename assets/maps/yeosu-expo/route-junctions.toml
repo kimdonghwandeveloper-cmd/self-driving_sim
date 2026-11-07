@@ -7,3 +7,5 @@ width_m = 4.0
 width_source = "default"
 corner_radius_m = 3.0
 stub_length_m = 10.0
+snap_distance_m = 30.0
+max_route_length_m = 2000.0
