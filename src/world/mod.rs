@@ -5,6 +5,7 @@
 pub mod course;
 pub mod junction;
 pub mod map;
+pub mod map_fetch;
 pub mod osm_graph;
 pub mod road_geom;
 pub mod route;

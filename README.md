@@ -180,6 +180,20 @@ cargo run --locked --release
 기본 실행에는 Rapier 플러그인을 등록하지 않습니다.
 게임패드 입력은 Bevy의 게임패드 API를 사용합니다. `3d`/`ui` 기능에 포함된 `default_platform`이 `bevy_gilrs`를 켜므로
 별도의 기능 설정이나 gilrs 직접 의존성은 없습니다.
+`ureq`(=3.5.1)는 Phase 4-4 지도 받기용 HTTP 클라이언트입니다. 기본 기능(rustls + ring 암호, webpki 루트 인증서, gzip)을
+쓰며, cmake·NASM이 필요한 aws-lc-rs는 쓰지 않습니다. ring은 `cc`로 C/어셈블리를 빌드하는데, `cc`는 이미
+Bevy 의존성(blake3)이 쓰고 있어 새 빌드 도구가 필요하지 않습니다.
+
+### 지도 받기 (Phase 4-4, 개발용)
+
+사용자가 요청할 때만 Overpass API에서 bbox(남,서,북,동) 안의 도로를 받아 `cache/maps/`에 저장합니다.
+`cache/`는 저장소에서 제외합니다. 창은 열리지 않습니다. 대한민국 범위 밖이거나 한 변이 2 km를 넘거나
+응답이 20 MB를 넘으면 오류로 끝납니다. `--offline`을 주면 네트워크를 쓰지 않고 캐시만 확인합니다.
+
+```powershell
+cargo run --locked -- --fetch-map 34.7480,127.7460,34.7590,127.7600
+cargo run --locked -- --fetch-map 34.7480,127.7460,34.7590,127.7600 --offline
+```
 
 창과 렌더러를 자동 실행하고 약 5초 후 종료하려면 다음 명령을 사용합니다.
 이 검증은 GPU 초기화와 실행 오류 확인용이며 화면의 시각적 검수를 대체하지 않습니다.
