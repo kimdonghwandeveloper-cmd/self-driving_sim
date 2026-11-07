@@ -337,7 +337,7 @@ pub fn check_simple_boundary(center: &[Vec2], half_width_m: f32) -> Result<(), S
 }
 
 /// 두 선분이 닿거나 교차하는지 판정한다(끝점 접촉·같은 직선 위 겹침 포함). 계산은 f64로 한다.
-fn segments_touch((p1, p2): (Vec2, Vec2), (q1, q2): (Vec2, Vec2)) -> bool {
+pub(crate) fn segments_touch((p1, p2): (Vec2, Vec2), (q1, q2): (Vec2, Vec2)) -> bool {
     let to64 = |v: Vec2| (f64::from(v.x), f64::from(v.y));
     let (p1, p2, q1, q2) = (to64(p1), to64(p2), to64(q1), to64(q2));
     let orient = |a: (f64, f64), b: (f64, f64), c: (f64, f64)| {
@@ -370,40 +370,50 @@ fn segments_touch((p1, p2): (Vec2, Vec2), (q1, q2): (Vec2, Vec2)) -> bool {
 /// 이음부의 꺾임 Δθ마다 **바깥쪽** 연석만 `(폭/2 + 두께)·tan(Δθ/2) + 0.02 m` 늘려 쐐기 틈을 덮는다.
 /// 안쪽 연석은 이음부에서 서로 겹치므로 늘리지 않으며, 그래서 노면 안으로 들어오지 않는다.
 pub fn curb_rects(center: &[Vec2], width_m: f32, curb_m: f32) -> Vec<GroundRect> {
-    let n = center.len();
-    let reach = width_m / 2.0 + curb_m;
+    let mut rects = side_curb_rects(center, width_m / 2.0, curb_m, -1.0);
+    rects.extend(side_curb_rects(center, width_m / 2.0, curb_m, 1.0));
+    rects
+}
+
+/// 선 `line`의 한쪽(`side`: 오른쪽 +1, 왼쪽 -1)에 선에서 `inner_m`부터 `inner_m + curb_m`까지의 연석 직사각형을 만든다.
+///
+/// 이음부에서 이 쪽이 바깥이면 `(inner + 두께)·tan(Δθ/2) + 0.02 m`만큼 늘려 틈을 덮는다(교차로 모서리 연석에도 쓴다).
+pub fn side_curb_rects(line: &[Vec2], inner_m: f32, curb_m: f32, side: f32) -> Vec<GroundRect> {
+    let n = line.len();
+    let reach = inner_m + curb_m;
     // 이음부의 부호 있는 꺾임(rad). 양수면 오른쪽(right_of 쪽)으로 꺾여 왼쪽(-1)이 바깥이다.
     let joint_turn = |i: usize| {
         if i == 0 || i == n - 1 {
             0.0
         } else {
-            (center[i] - center[i - 1]).angle_to(center[i + 1] - center[i])
+            (line[i] - line[i - 1]).angle_to(line[i + 1] - line[i])
         }
     };
-    let mut rects = Vec::with_capacity(2 * (n - 1));
-    for i in 0..n - 1 {
-        let (a, b) = (center[i], center[i + 1]);
-        let length = a.distance(b);
-        let forward = (b - a) / length;
-        // 쪽 `side`가 이음부 꺾임 `turn`의 바깥이면 늘릴 길이, 아니면 0.
-        let extend = |turn: f32, side: f32| {
-            if turn * side < 0.0 {
-                reach * (turn.abs() / 2.0).tan() + CURB_JOINT_OVERLAP_M
-            } else {
-                0.0
-            }
-        };
-        for side in [-1.0, 1.0] {
-            let (back, front) = (extend(joint_turn(i), side), extend(joint_turn(i + 1), side));
-            let middle = (a + b) / 2.0
-                + right_of(forward) * side * (width_m / 2.0 + curb_m / 2.0)
-                + forward * (front - back) / 2.0;
-            rects.push(GroundRect {
-                center: middle,
-                half_size: Vec2::new(curb_m / 2.0, (length + back + front) / 2.0),
-                heading_rad: heading_of(forward),
-            });
+    // 이음부 꺾임 `turn`에서 이 쪽이 바깥이면 늘릴 길이, 아니면 0.
+    let extend = |turn: f32| {
+        if turn * side < 0.0 {
+            reach * (turn.abs() / 2.0).tan() + CURB_JOINT_OVERLAP_M
+        } else {
+            0.0
         }
+    };
+    let mut rects = Vec::with_capacity(n.saturating_sub(1));
+    for i in 0..n.saturating_sub(1) {
+        let (a, b) = (line[i], line[i + 1]);
+        let length = a.distance(b);
+        if length <= 0.0 {
+            continue;
+        }
+        let forward = (b - a) / length;
+        let (back, front) = (extend(joint_turn(i)), extend(joint_turn(i + 1)));
+        let middle = (a + b) / 2.0
+            + right_of(forward) * side * (inner_m + curb_m / 2.0)
+            + forward * (front - back) / 2.0;
+        rects.push(GroundRect {
+            center: middle,
+            half_size: Vec2::new(curb_m / 2.0, (length + back + front) / 2.0),
+            heading_rad: heading_of(forward),
+        });
     }
     rects
 }

@@ -278,6 +278,62 @@ pub(crate) mod fixtures {
         ]
     }
 
+    /// 좁은 팔: 동서 직선 중간 노드 10에서 동쪽 팔과 20°만 벌어진 팔이 붙는다. 25° 미만이라 거부 대상.
+    pub fn narrow_arms() -> Vec<FixtureWay<'static>> {
+        let (s, c) = 20f64.to_radians().sin_cos();
+        vec![
+            (
+                140,
+                "service",
+                &[],
+                vec![(1, -50.0, 0.0), (10, 0.0, 0.0), (2, 50.0, 0.0)],
+            ),
+            (
+                141,
+                "service",
+                &[],
+                vec![(10, 0.0, 0.0), (3, 50.0 * c, 50.0 * s)],
+            ),
+        ]
+    }
+
+    /// 가까운 교차로: 동서 직선 위 4 m 떨어진 노드 10·11에 각각 남·북 팔이 붙는다. 잘라 낼 거리가 겹쳐 거부 대상.
+    pub fn close_junctions() -> Vec<FixtureWay<'static>> {
+        vec![
+            (
+                150,
+                "service",
+                &[],
+                vec![
+                    (1, -50.0, 0.0),
+                    (10, 0.0, 0.0),
+                    (11, 4.0, 0.0),
+                    (2, 50.0, 0.0),
+                ],
+            ),
+            (151, "service", &[], vec![(10, 0.0, 0.0), (3, 0.0, -50.0)]),
+            (152, "service", &[], vec![(11, 4.0, 0.0), (4, 4.0, 50.0)]),
+        ]
+    }
+
+    /// 일방통행 팔: T자 교차로의 남쪽 팔이 `oneway=yes`다. 1차 판에서는 거부 대상.
+    pub fn oneway_arm() -> Vec<FixtureWay<'static>> {
+        vec![
+            (
+                160,
+                "service",
+                &[],
+                vec![(1, -50.0, 0.0), (10, 0.0, 0.0), (2, 50.0, 0.0)],
+            ),
+            (
+                161,
+                "service",
+                &[("oneway", "yes")],
+                vec![(10, 0.0, 0.0), (3, 0.0, -50.0)],
+            ),
+        ]
+    }
+
     /// 좌표만 같고 노드 ID가 다른 교차: 두 way가 (0, 0)에서 겹치지만 공유 노드가 없어 연결이 아니다.
     pub fn crossing_without_shared_node() -> Vec<FixtureWay<'static>> {
         vec![

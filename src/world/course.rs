@@ -140,6 +140,15 @@ pub struct Strip {
     pub right: Vec<Vec2>,
 }
 
+/// 중심에서 본 별 모양 다각형 노면(교차로 면, Phase 4-2). 중심에서 부채꼴 삼각형으로 그린다.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Area {
+    /// 부채꼴 중심(다각형 안, 모든 경계점이 보이는 점).
+    pub center: Vec2,
+    /// 경계 꼭짓점(반시계 순서).
+    pub boundary: Vec<Vec2>,
+}
+
 /// 코스 하나의 전체 정의.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CourseDef {
@@ -153,6 +162,8 @@ pub struct CourseDef {
     pub surfaces: Vec<GroundRect>,
     /// 굽은 길 노면·표시선 띠(시각 표시). 지도 코스에서 쓴다.
     pub strips: Vec<Strip>,
+    /// 교차로 면 노면(시각 표시).
+    pub areas: Vec<Area>,
     /// 노면 표시.
     pub markings: Vec<Marking>,
     /// 충돌 경계.
@@ -222,6 +233,7 @@ pub fn training_course() -> CourseDef {
         start: Motion::default(),
         surfaces: vec![rect_between((-half, half), (rear, front))],
         strips: Vec::new(),
+        areas: Vec::new(),
         markings: vec![
             edge_line(-1.0, (rear, NARROW_START_Z_M)),
             edge_line(1.0, (rear, NARROW_START_Z_M)),
@@ -270,6 +282,7 @@ pub fn calibration_course() -> CourseDef {
         start: Motion::default(),
         surfaces: Vec::new(),
         strips: Vec::new(),
+        areas: Vec::new(),
         markings: Vec::new(),
         colliders: vec![
             // 정면 30 m 앞의 벽

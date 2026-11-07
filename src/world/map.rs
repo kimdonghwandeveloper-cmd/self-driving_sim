@@ -14,7 +14,7 @@ use std::path::Path;
 use bevy::prelude::*;
 use serde::Deserialize;
 
-use super::course::{Collider, ColliderKind, CourseDef, Strip, StripKind};
+use super::course::{Area, Collider, ColliderKind, CourseDef, Strip, StripKind};
 use super::road_geom::{self, RoadSpec};
 use crate::vehicle::{DynamicsParams, GroundRect, Motion, VEHICLE_FOOTPRINT};
 
@@ -27,7 +27,7 @@ const JOIN_TOLERANCE_M: f32 = 0.5;
 /// 임시 폭 허용 범위(m).
 pub const WIDTH_RANGE_M: std::ops::RangeInclusive<f32> = 2.5..=12.0;
 /// 연석 두께(m)와 표시 높이(m).
-const CURB_THICKNESS_M: f32 = 0.3;
+pub(crate) const CURB_THICKNESS_M: f32 = 0.3;
 const CURB_HEIGHT_M: f32 = 0.25;
 /// 끝 벽 두께(m)와 표시 높이(m).
 const END_WALL_THICKNESS_M: f32 = 0.5;
@@ -238,7 +238,21 @@ pub fn build_road_course_with(
     spec: &RoadSpec,
     notices: Vec<String>,
 ) -> Result<CourseDef, String> {
-    let width_m = spec.width_m;
+    check_width(spec.width_m)?;
+    let piece = road_piece(centerline, spec, [true, true])?;
+    let start = start_pose(&piece.centerline)?;
+    finish_course(
+        name,
+        notices,
+        start,
+        piece.strips,
+        Vec::new(),
+        piece.colliders,
+    )
+}
+
+/// 임시 폭이 허용 범위([`WIDTH_RANGE_M`]) 안인지 검사한다.
+pub(crate) fn check_width(width_m: f32) -> Result<(), String> {
     if !WIDTH_RANGE_M.contains(&width_m) {
         return Err(format!(
             "temporary width {width_m} m must be within {}..={} m",
@@ -246,37 +260,49 @@ pub fn build_road_course_with(
             WIDTH_RANGE_M.end()
         ));
     }
-    let points = clean_polyline(centerline)?;
+    Ok(())
+}
+
+/// 도로 조각 하나(경로 조각·교차로 곁가지 공통)의 생성 결과.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct RoadPiece {
+    /// 필렛을 넣은 매끄러운 중심선.
+    pub centerline: Vec<Vec2>,
+    /// 노면 띠와 양쪽 가장자리 표시선 띠.
+    pub strips: Vec<Strip>,
+    /// 양옆 연석과 요청한 끝 벽.
+    pub colliders: Vec<Collider>,
+    /// 연석 바깥선으로 닫은 다각형(왼쪽 앞으로, 오른쪽 거꾸로). 조각끼리 겹침 검사에 쓴다.
+    pub outline: Vec<Vec2>,
+}
+
+/// 중심선 점들로 도로 조각을 만든다. `walls`는 [시작 쪽, 끝 쪽]에 끝 벽을 세울지다.
+///
+/// 중복점 정리, 필렛, 연석 바깥선 단순 다각형 검사를 거친다. 교차로에 붙는 쪽은 벽 없이 열어 둔다.
+pub(crate) fn road_piece(
+    points: &[Vec2],
+    spec: &RoadSpec,
+    walls: [bool; 2],
+) -> Result<RoadPiece, String> {
+    let points = clean_polyline(points)?;
     let geometry = road_geom::build_geometry(&points, spec)?;
-    let center = &geometry.centerline;
-    let curb = spec.curb_thickness_m;
-    road_geom::check_simple_boundary(center, width_m / 2.0 + curb)?;
-
-    let rear_overhang = VEHICLE_FOOTPRINT.length_m / 2.0 - VEHICLE_FOOTPRINT.rear_axle_to_center_m;
-    let front_reach = VEHICLE_FOOTPRINT.rear_axle_to_center_m + VEHICLE_FOOTPRINT.length_m / 2.0;
-    let start_offset = START_REAR_CLEARANCE_M + rear_overhang;
-    let length = road_geom::polyline_length(center);
-    if length < start_offset + front_reach {
-        return Err(format!(
-            "course is {length:.1} m long; at least {:.1} m is needed for the start pose",
-            start_offset + front_reach
-        ));
-    }
-
+    let center = geometry.centerline;
+    let (width_m, curb) = (spec.width_m, spec.curb_thickness_m);
+    road_geom::check_simple_boundary(&center, width_m / 2.0 + curb)?;
     let half = width_m / 2.0;
     let line_outer = half - EDGE_LINE_INSET_M;
     let line_inner = line_outer - EDGE_LINE_WIDTH_M;
     let strip = |kind, left: f32, right: f32| Strip {
         kind,
-        left: road_geom::offset_line(center, left),
-        right: road_geom::offset_line(center, right),
+        left: road_geom::offset_line(&center, left),
+        right: road_geom::offset_line(&center, right),
     };
     let strips = vec![
         strip(StripKind::Road, -half, half),
         strip(StripKind::EdgeLine, -line_outer, -line_inner),
         strip(StripKind::EdgeLine, line_inner, line_outer),
     ];
-    let mut colliders: Vec<Collider> = road_geom::curb_rects(center, width_m, curb)
+    let mut colliders: Vec<Collider> = road_geom::curb_rects(&center, width_m, curb)
         .into_iter()
         .map(|rect| Collider {
             rect,
@@ -284,10 +310,14 @@ pub fn build_road_course_with(
             kind: ColliderKind::Curb,
         })
         .collect();
-    // 양 끝 벽: 끝점 바깥쪽으로 벽 두께 절반만큼 물려 둔다.
+    // 끝 벽: 끝점 바깥쪽으로 벽 두께 절반만큼 물려 둔다.
     let wall_width = width_m + 2.0 * curb;
     let last = center.len() - 1;
-    for (end, inner) in [(center[0], center[1]), (center[last], center[last - 1])] {
+    let ends = [(center[0], center[1]), (center[last], center[last - 1])];
+    for (wanted, (end, inner)) in walls.into_iter().zip(ends) {
+        if !wanted {
+            continue;
+        }
         let outward = (end - inner).normalize();
         colliders.push(Collider {
             rect: GroundRect {
@@ -299,22 +329,58 @@ pub fn build_road_course_with(
             kind: ColliderKind::Wall,
         });
     }
+    let reach = half + curb;
+    let mut outline = road_geom::offset_line(&center, -reach);
+    outline.extend(road_geom::offset_line(&center, reach).into_iter().rev());
+    Ok(RoadPiece {
+        centerline: center,
+        strips,
+        colliders,
+        outline,
+    })
+}
 
+/// 중심선 시작 쪽 끝 벽에서 차체 뒤끝까지 [`START_REAR_CLEARANCE_M`]인 곳의 시작 자세를 만든다. 짧으면 오류.
+pub(crate) fn start_pose(center: &[Vec2]) -> Result<Motion, String> {
+    let rear_overhang = VEHICLE_FOOTPRINT.length_m / 2.0 - VEHICLE_FOOTPRINT.rear_axle_to_center_m;
+    let front_reach = VEHICLE_FOOTPRINT.rear_axle_to_center_m + VEHICLE_FOOTPRINT.length_m / 2.0;
+    let start_offset = START_REAR_CLEARANCE_M + rear_overhang;
+    let length = road_geom::polyline_length(center);
+    if length < start_offset + front_reach {
+        return Err(format!(
+            "course is {length:.1} m long; at least {:.1} m is needed for the start pose",
+            start_offset + front_reach
+        ));
+    }
     let (axle, direction) = road_geom::point_at_distance(center, start_offset)
         .ok_or_else(|| "course is too short for the start pose".to_owned())?;
-    let start = Motion {
+    Ok(Motion {
         x_m: axle.x,
         z_m: axle.y,
         heading_rad: road_geom::heading_of(direction),
         ..Motion::default()
-    };
+    })
+}
+
+/// 시작 자세 비접촉과 코스 크기 상한([`MAX_EXTENT_M`])을 검사하고 코스 정의를 완성한다.
+pub(crate) fn finish_course(
+    name: &str,
+    notices: Vec<String>,
+    start: Motion,
+    strips: Vec<Strip>,
+    areas: Vec<Area>,
+    colliders: Vec<Collider>,
+) -> Result<CourseDef, String> {
     let rects: Vec<GroundRect> = colliders.iter().map(|collider| collider.rect).collect();
     if crate::vehicle::collision::in_contact(&VEHICLE_FOOTPRINT, &start, &rects) {
         return Err("start pose touches a curb or wall".to_owned());
     }
     let size = extent_of(
         rects.iter(),
-        strips.iter().flat_map(|s| s.left.iter().chain(&s.right)),
+        strips
+            .iter()
+            .flat_map(|s| s.left.iter().chain(&s.right))
+            .chain(areas.iter().flat_map(|a| a.boundary.iter())),
     );
     let (long, short) = (size.max_element(), size.min_element());
     if long > MAX_EXTENT_M.0 || short > MAX_EXTENT_M.1 {
@@ -329,6 +395,7 @@ pub fn build_road_course_with(
         start,
         surfaces: Vec::new(),
         strips,
+        areas,
         markings: Vec::new(),
         colliders,
     })
@@ -385,6 +452,7 @@ mod tests {
     use super::*;
     use crate::vehicle::collision::{ContactState, in_contact, step_with_obstacles};
     use crate::vehicle::{DynamicsParams, Gear, VehicleCommand, VehicleInput, VehicleState};
+    use crate::world::test_drive::{FollowResult, follow_path};
 
     /// 테스트 기준점(여수 부근 임의 좌표; 실제 대상 통로 아님).
     const ORIGIN: LatLon = LatLon {
@@ -729,23 +797,8 @@ mod tests {
         }
     }
 
-    /// 경로 추종 주행 결과.
-    #[derive(Debug)]
-    struct FollowResult {
-        /// 멈춘 곳에서 중심선 끝까지 남은 길이(m).
-        remaining_m: f32,
-        /// 이동이 막힌 충돌 횟수.
-        impacts: usize,
-        /// 중심선에서 가장 멀리 벗어난 거리(m, 후륜축 기준).
-        max_offset_m: f32,
-    }
-
-    /// 시험용 경로 추종 조향기(pure pursuit)로 코스 노면 띠의 가운데 선을 따라 목표 속도로 달린다.
-    ///
-    /// 중심선을 따라 6 m 앞의 목표점으로 조향각 `atan(2L·sin α / Ld)`를 정하고, 속도는 비례 제어한다.
-    /// 끝 벽 앞 12 m(중심선 길이 기준)에 닿거나 시간이 다하면 멈춘다. 운동 모델·충돌 판정은 실제 것을 쓴다.
+    /// 코스 노면 띠(첫 띠)의 가운데 선을 경로 추종 조향기로 따라간다.
     fn follow_course(course: &CourseDef, target_speed_mps: f32) -> FollowResult {
-        const LOOKAHEAD_M: f32 = 6.0;
         let road = &course.strips[0];
         let path: Vec<Vec2> = road
             .left
@@ -753,72 +806,7 @@ mod tests {
             .zip(&road.right)
             .map(|(l, r)| (*l + *r) / 2.0)
             .collect();
-        let cumulative: Vec<f32> = std::iter::once(0.0)
-            .chain(path.windows(2).scan(0.0, |acc, p| {
-                *acc += p[0].distance(p[1]);
-                Some(*acc)
-            }))
-            .collect();
-        let total = *cumulative.last().unwrap();
-        let params = DynamicsParams::default();
-        let max_steer = params.max_steer_angle_deg.to_radians();
-        let obstacles = course.collision_rects();
-        let mut state = ready_in(Gear::Drive);
-        let mut motion = course.start;
-        let mut contact = ContactState::default();
-        let (mut impacts, mut segment, mut along, mut max_offset) = (0, 0usize, 0.0f32, 0.0f32);
-        for _ in 0..64 * 600 {
-            let axle = Vec2::new(motion.x_m, motion.z_m);
-            // 가까운 구간은 지금 구간부터 앞쪽 창 안에서만 찾아 되돌아가지 않게 하고, 구간 위 투영점으로 위치를 잰다.
-            let window_end = (segment + 200).min(path.len() - 1);
-            let (best, offset, position) = (segment..window_end)
-                .map(|k| {
-                    let (a, b) = (path[k], path[k + 1]);
-                    let length = a.distance(b);
-                    let t = ((axle - a).dot(b - a) / (length * length)).clamp(0.0, 1.0);
-                    (k, axle.distance(a.lerp(b, t)), cumulative[k] + t * length)
-                })
-                .min_by(|x, y| x.1.total_cmp(&y.1))
-                .unwrap();
-            (segment, along) = (best, position);
-            max_offset = max_offset.max(offset);
-            if total - along < 12.0 {
-                break;
-            }
-            let target = road_geom::point_at_distance(&path, (along + LOOKAHEAD_M).min(total))
-                .map_or(path[path.len() - 1], |(point, _)| point);
-            let (fx, fz) = motion.forward();
-            let forward = Vec2::new(fx, fz);
-            let relative = target - axle;
-            let alpha = relative
-                .dot(road_geom::right_of(forward))
-                .atan2(relative.dot(forward));
-            let steer = (2.0 * params.wheelbase_m * alpha.sin() / LOOKAHEAD_M).atan();
-            let speed = state.speed_mps();
-            state.set_input(VehicleInput {
-                throttle: ((target_speed_mps - speed) * 2.0).clamp(0.0, 1.0),
-                brake: ((speed - target_speed_mps) * 2.0).clamp(0.0, 1.0),
-                steering: (steer / max_steer).clamp(-1.0, 1.0),
-            });
-            if step_with_obstacles(
-                &mut state,
-                &mut motion,
-                &params,
-                1.0 / 64.0,
-                &VEHICLE_FOOTPRINT,
-                &obstacles,
-                &mut contact,
-            )
-            .is_some()
-            {
-                impacts += 1;
-            }
-        }
-        FollowResult {
-            remaining_m: total - along,
-            impacts,
-            max_offset_m: max_offset,
-        }
+        follow_path(course, &path, target_speed_mps)
     }
 
     /// 띠 메시가 유한한 점만 쓰고, 이웃한 두 쌍의 점이 만드는 사각형이 모두 같은 방향으로 감겨

@@ -169,6 +169,7 @@ pub fn ground_square(course: &CourseDef) -> (Vec2, f32) {
         .strips
         .iter()
         .flat_map(|strip| strip.left.iter().chain(&strip.right))
+        .chain(course.areas.iter().flat_map(|area| area.boundary.iter()))
     {
         low = low.min(*point);
         high = high.max(*point);

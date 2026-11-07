@@ -3,9 +3,13 @@
 //! 지도 코스([`map`])가 없거나 읽지 못해도 [`course`]의 개발 코스만으로 조작·카메라를 검증할 수 있다.
 
 pub mod course;
+pub mod junction;
 pub mod map;
 pub mod osm_graph;
 pub mod road_geom;
+pub mod route;
+#[cfg(test)]
+pub(crate) mod test_drive;
 
 use std::path::PathBuf;
 
@@ -16,7 +20,7 @@ use bevy::prelude::*;
 pub use course::{CourseDef, CourseId};
 
 use crate::vehicle::{GroundRect, Obstacle};
-use course::{ColliderKind, MarkingKind, Strip, StripKind};
+use course::{Area, ColliderKind, MarkingKind, Strip, StripKind};
 
 /// 노면 표시 높이(m). 바닥 격자선(높이 0.01 m)을 덮는다.
 const SURFACE_Y_M: f32 = 0.012;
@@ -135,6 +139,26 @@ pub fn strip_mesh(strip: &Strip, y: f32) -> Mesh {
     .with_inserted_indices(Indices::U32(indices))
 }
 
+/// 별 모양 다각형 노면을 중심에서 부채꼴 삼각형으로 나눈 높이 `y`의 위를 향한 메시로 만든다.
+pub fn area_mesh(area: &Area, y: f32) -> Mesh {
+    let mut positions = vec![[area.center.x, y, area.center.y]];
+    positions.extend(area.boundary.iter().map(|p| [p.x, y, p.y]));
+    let count = area.boundary.len() as u32;
+    let mut indices = Vec::new();
+    for k in 0..count {
+        let triangle = [0, 1 + k, 1 + (k + 1) % count];
+        indices.extend(upward(&positions, triangle));
+    }
+    let normals = vec![[0.0, 1.0, 0.0]; positions.len()];
+    Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::default(),
+    )
+    .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
+    .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
+    .with_inserted_indices(Indices::U32(indices))
+}
+
 /// 삼각형의 법선이 +Y를 보도록 감는 순서를 정한다(반시계 = 앞면).
 fn upward(positions: &[[f32; 3]], [a, b, c]: [u32; 3]) -> [u32; 3] {
     let p = |i: u32| Vec3::from(positions[i as usize]);
@@ -165,6 +189,13 @@ pub fn spawn_course(
     }
     let edge = materials.add(Color::srgb(0.92, 0.92, 0.88));
     let stop = materials.add(Color::srgb(0.98, 0.98, 0.98));
+    for area in &course.areas {
+        commands.spawn((
+            Mesh3d(meshes.add(area_mesh(area, SURFACE_Y_M))),
+            MeshMaterial3d(road.clone()),
+            Transform::default(),
+        ));
+    }
     for strip in &course.strips {
         let (material, y) = match strip.kind {
             StripKind::Road => (road.clone(), SURFACE_Y_M),
