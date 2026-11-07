@@ -51,3 +51,9 @@ out body geom;
 
 검증에 쓰는 실제 사례(노드 ID 기준, 허용 종류 service·pedestrian·residential·unclassified·tertiary만 셈)는
 [`docs/map-data.md`](../../../docs/map-data.md)의 "Phase 4 선행 자료" 절에 있다.
+
+## 경로 파일 예제 (Phase 4-3)
+
+`route-junctions.toml`은 위 노드 ID 스냅샷과 찍은 점 두 개로 계획한 **경로 파일**이다. 실제 운행 경로가 아니다.
+`--course map:assets/maps/yeosu-expo/route-junctions.toml`로 실행한다. 저장소 테스트가 같은 점으로 다시 계획한 결과와
+이 파일이 같은지 확인한다. 형식은 [`docs/map-data.md`](../../../docs/map-data.md)의 "도로 그래프와 경로 탐색" 절에 있다.

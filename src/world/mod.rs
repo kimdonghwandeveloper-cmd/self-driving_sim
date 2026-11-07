@@ -8,6 +8,7 @@ pub mod map;
 pub mod osm_graph;
 pub mod road_geom;
 pub mod route;
+pub mod route_plan;
 #[cfg(test)]
 pub(crate) mod test_drive;
 

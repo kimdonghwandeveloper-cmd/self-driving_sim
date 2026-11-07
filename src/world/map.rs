@@ -248,6 +248,7 @@ pub fn build_road_course_with(
         piece.strips,
         Vec::new(),
         piece.colliders,
+        MAX_EXTENT_M,
     )
 }
 
@@ -362,7 +363,9 @@ pub(crate) fn start_pose(center: &[Vec2]) -> Result<Motion, String> {
     })
 }
 
-/// 시작 자세 비접촉과 코스 크기 상한([`MAX_EXTENT_M`])을 검사하고 코스 정의를 완성한다.
+/// 시작 자세 비접촉과 코스 크기 상한 `max_extent_m`(긴 변, 짧은 변; m)을 검사하고 코스 정의를 완성한다.
+///
+/// 단일 통로 코스는 [`MAX_EXTENT_M`], 경로 코스는 [`super::route::ROUTE_MAX_EXTENT_M`]을 쓴다.
 pub(crate) fn finish_course(
     name: &str,
     notices: Vec<String>,
@@ -370,6 +373,7 @@ pub(crate) fn finish_course(
     strips: Vec<Strip>,
     areas: Vec<Area>,
     colliders: Vec<Collider>,
+    max_extent_m: (f32, f32),
 ) -> Result<CourseDef, String> {
     let rects: Vec<GroundRect> = colliders.iter().map(|collider| collider.rect).collect();
     if crate::vehicle::collision::in_contact(&VEHICLE_FOOTPRINT, &start, &rects) {
@@ -383,10 +387,10 @@ pub(crate) fn finish_course(
             .chain(areas.iter().flat_map(|a| a.boundary.iter())),
     );
     let (long, short) = (size.max_element(), size.min_element());
-    if long > MAX_EXTENT_M.0 || short > MAX_EXTENT_M.1 {
+    if long > max_extent_m.0 || short > max_extent_m.1 {
         return Err(format!(
             "course spans {:.0} x {:.0} m (x by z); limit is {} x {} m",
-            size.x, size.y, MAX_EXTENT_M.0, MAX_EXTENT_M.1
+            size.x, size.y, max_extent_m.0, max_extent_m.1
         ));
     }
     Ok(CourseDef {
@@ -439,12 +443,21 @@ pub fn build_map_course(file: &MapCourseFile, base_dir: &Path) -> Result<CourseD
 }
 
 /// 선택 파일 경로에서 지도 코스를 읽는다. 파일 없음·TOML 오류·변환 오류는 모두 `Err`다.
+///
+/// 최상위에 `format` 키가 있으면 경로 파일([`super::route_plan::RouteFile`], Phase 4-3)로,
+/// 없으면 단일 통로 선택 파일([`MapCourseFile`])로 읽는다.
 pub fn load_map_course(path: &Path) -> Result<CourseDef, String> {
     let text = std::fs::read_to_string(path)
         .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
-    let file: MapCourseFile =
-        toml::from_str(&text).map_err(|error| format!("invalid {}: {error}", path.display()))?;
-    build_map_course(&file, path.parent().unwrap_or(Path::new(".")))
+    let invalid = |error: toml::de::Error| format!("invalid {}: {error}", path.display());
+    let table: toml::Table = toml::from_str(&text).map_err(invalid)?;
+    let base_dir = path.parent().unwrap_or(Path::new("."));
+    if table.contains_key("format") {
+        let file: super::route_plan::RouteFile = toml::from_str(&text).map_err(invalid)?;
+        return super::route_plan::load_route_course(&file, base_dir);
+    }
+    let file: MapCourseFile = toml::from_str(&text).map_err(invalid)?;
+    build_map_course(&file, base_dir)
 }
 
 #[cfg(test)]

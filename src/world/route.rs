@@ -3,7 +3,7 @@
 //! 경로는 OSM 노드 ID 순서다(경로 탐색은 PLAN 4-3). 경로 중간의 연결 차수 3 이상 노드를 교차로로 보고,
 //! 교차로마다 [`junction::junction_shape`]로 교차로 면과 모서리 원호를 만든다.
 //! - 경로 조각: 교차로 사이(또는 경로 끝과 교차로 사이)의 경로를 각 교차로의 잘라 낼 거리만큼 잘라 도로 조각으로 만든다.
-//! - 곁가지: 경로에 포함되지 않은 팔은 잘라 낸 곳부터 [`STUB_LENGTH_M`]만 만들고 끝을 벽으로 막는다.
+//! - 곁가지: 경로에 포함되지 않은 팔은 잘라 낸 곳부터 곁가지 길이(기본 [`STUB_LENGTH_M`])만 만들고 끝을 벽으로 막는다.
 //! - 연석: 도로 조각 양옆과 교차로 모서리에만 둔다. 팔이 열린 쪽에는 두지 않는다.
 //!
 //! 1차 판에서 거부하는 경우: 시작 노드가 교차로, 노드 재방문, 이웃한 팔 사이 각 [`MIN_ARM_GAP_DEG`] 미만,
@@ -20,10 +20,46 @@ use super::map::{self, CURB_THICKNESS_M, LatLon, project};
 use super::osm_graph::{OsmGraphWay, node_degrees};
 use super::road_geom::{self, RoadSpec};
 
-/// 교차로 모서리 원호 반경(m). 임시값.
+/// 교차로 모서리 원호 반경 기본값(m). 임시값.
 pub const CORNER_RADIUS_M: f32 = 3.0;
-/// 경로에 포함되지 않은 교차로 팔(곁가지)의 길이(m). 임시값.
+/// 경로에 포함되지 않은 교차로 팔(곁가지)의 길이 기본값(m). 임시값.
 pub const STUB_LENGTH_M: f32 = 10.0;
+/// 경로 코스(연석·끝 벽 포함)의 x·z 축 정렬 범위 상한(m). PLAN 4 공통 계약의 개발상 임시값 1.5 × 1.5 km.
+pub const ROUTE_MAX_EXTENT_M: (f32, f32) = (1500.0, 1500.0);
+
+/// 교차로 형상 설정값(모두 임시값, 실측 아님).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct JunctionSettings {
+    /// 교차로 모서리 원호 반경(m).
+    pub corner_radius_m: f32,
+    /// 곁가지 길이(m).
+    pub stub_length_m: f32,
+}
+
+impl Default for JunctionSettings {
+    /// [`CORNER_RADIUS_M`], [`STUB_LENGTH_M`] 기본값을 쓴다.
+    fn default() -> Self {
+        Self {
+            corner_radius_m: CORNER_RADIUS_M,
+            stub_length_m: STUB_LENGTH_M,
+        }
+    }
+}
+
+impl JunctionSettings {
+    /// 값이 유한한 양수인지 검사한다.
+    pub fn validate(&self) -> Result<(), String> {
+        for (name, value) in [
+            ("corner_radius_m", self.corner_radius_m),
+            ("stub_length_m", self.stub_length_m),
+        ] {
+            if !(value.is_finite() && value > 0.0) {
+                return Err(format!("{name} must be a positive number, got {value}"));
+            }
+        }
+        Ok(())
+    }
+}
 /// 이웃한 팔 사이 최소 각(deg). 이보다 좁으면 거부한다.
 pub const MIN_ARM_GAP_DEG: f32 = 25.0;
 /// 교차로에서 잘라 낼 거리까지 팔이 곧은 직선에서 벗어나도 되는 거리(m).
@@ -148,7 +184,7 @@ impl<'a> Graph<'a> {
 }
 
 /// `oneway` 태그가 일방통행을 뜻하는지 판정한다.
-fn is_oneway(way: &OsmGraphWay) -> bool {
+pub(crate) fn is_oneway(way: &OsmGraphWay) -> bool {
     matches!(
         way.tags.get("oneway").map(String::as_str),
         Some("yes" | "1" | "-1" | "true" | "reversible")
@@ -234,9 +270,7 @@ struct Outline {
     attached: BTreeSet<usize>,
 }
 
-/// 경로 노드 ID 순서와 저장한 그래프 자료로 교차로를 포함한 코스를 만든다.
-///
-/// 지역 좌표 원점은 경로 첫 노드다. `width_m`은 모든 도로의 훈련용 임시 폭이다.
+/// 기본 교차로 형상 설정값으로 경로 코스를 만든다. [`build_route_course_with`] 참고.
 pub fn build_route_course(
     name: &str,
     ways: &[OsmGraphWay],
@@ -245,7 +279,25 @@ pub fn build_route_course(
     width_m: f32,
     notices: Vec<String>,
 ) -> Result<RouteCourse, String> {
+    let settings = JunctionSettings::default();
+    build_route_course_with(name, ways, allowed, route, width_m, &settings, notices)
+}
+
+/// 경로 노드 ID 순서와 저장한 그래프 자료로 교차로를 포함한 코스를 만든다.
+///
+/// 지역 좌표 원점은 경로 첫 노드다. `width_m`은 모든 도로에 같이 쓰는 폭이다.
+/// 코스 범위 상한은 [`ROUTE_MAX_EXTENT_M`]이다.
+pub fn build_route_course_with(
+    name: &str,
+    ways: &[OsmGraphWay],
+    allowed: &BTreeSet<&str>,
+    route: &[u64],
+    width_m: f32,
+    settings: &JunctionSettings,
+    notices: Vec<String>,
+) -> Result<RouteCourse, String> {
     map::check_width(width_m)?;
+    settings.validate()?;
     let graph = Graph::new(ways, allowed)?;
     if route.len() < 2 {
         return Err("route needs at least 2 nodes".to_owned());
@@ -296,7 +348,7 @@ pub fn build_route_course(
             .collect();
         builds.insert(
             i,
-            build_junction(&graph, id, &route_neighbors, origin, &spec)?,
+            build_junction(&graph, id, &route_neighbors, origin, &spec, settings)?,
         );
     }
 
@@ -370,7 +422,15 @@ pub fn build_route_course(
     }
     check_outline_overlaps(&outlines, &zones)?;
     let start = map::start_pose(&first_piece.unwrap())?;
-    let course = map::finish_course(name, notices, start, strips, areas, colliders)?;
+    let course = map::finish_course(
+        name,
+        notices,
+        start,
+        strips,
+        areas,
+        colliders,
+        ROUTE_MAX_EXTENT_M,
+    )?;
     Ok(RouteCourse {
         course,
         guide,
@@ -385,6 +445,7 @@ fn build_junction(
     route_neighbors: &[u64],
     origin: LatLon,
     spec: &RoadSpec,
+    settings: &JunctionSettings,
 ) -> Result<JunctionBuild, String> {
     let center = project(origin, graph.pos[&id]);
     let neighbors = &graph.adjacent[&id];
@@ -412,7 +473,7 @@ fn build_junction(
     let shape = junction::junction_shape(
         center,
         &arms,
-        CORNER_RADIUS_M,
+        settings.corner_radius_m,
         spec.arc_step_deg,
         MIN_ARM_GAP_DEG,
     )?;
@@ -441,7 +502,7 @@ fn build_junction(
         }
         cut.insert(neighbor, cut_m);
         if !route_neighbors.contains(&neighbor) {
-            let end = (cut_m + STUB_LENGTH_M).min(length);
+            let end = (cut_m + settings.stub_length_m).min(length);
             let stub_points = trim(points, cut_m, length - end)?;
             stubs.push(map::road_piece(&stub_points, spec, [false, true])?);
         }
