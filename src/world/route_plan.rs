@@ -24,7 +24,8 @@ use serde::{Deserialize, Serialize};
 
 use super::course::CourseDef;
 use super::map::{self, LatLon};
-use super::osm_graph::{OsmGraphWay, OsmNode, parse_overpass_graph};
+use super::osm_graph::{OsmGraphWay, OsmNode};
+use super::road_snapshot::{self, Connectivity};
 use super::route::RouteCourse;
 use super::route::{self, JunctionSettings};
 
@@ -472,13 +473,15 @@ fn korean_points(points: &[[f64; 2]]) -> Result<Vec<LatLon>, String> {
 ///
 /// 점마다 도로에 붙이고, 이웃한 점 사이를 A*로 이어 노드 순서를 만든 뒤, 폭을 정하고 실제로 코스를 만들어 본다.
 /// 붙일 도로 없음·끊긴 그래프·상한 초과·코스 생성 실패는 모두 오류다.
+///
+/// 연결 정보가 없는 스냅샷(Overpass)용이다. Geofabrik 추출은 [`plan_route_detailed`]에 연결 정보를 넘긴다.
 pub fn plan_route(
     ways: &[OsmGraphWay],
     snapshot: &str,
     points: &[[f64; 2]],
     config: &RoadGraphConfig,
 ) -> Result<RouteFile, String> {
-    plan_route_detailed(ways, snapshot, points, config).map(|planned| planned.file)
+    plan_route_detailed(ways, None, snapshot, points, config).map(|planned| planned.file)
 }
 
 /// 경로 계획 결과(경로 선택 화면 표시용).
@@ -495,8 +498,11 @@ pub struct PlannedRoute {
 }
 
 /// [`plan_route`]와 같고, 만든 코스·경로 길이·노드 위치도 함께 돌려준다.
+///
+/// `connectivity`가 있으면(Geofabrik 추출) 코스를 만들기 전에 경계 연결 검사를 한다([`build_route_file_course`]).
 pub fn plan_route_detailed(
     ways: &[OsmGraphWay],
+    connectivity: Option<&Connectivity>,
     snapshot: &str,
     points: &[[f64; 2]],
     config: &RoadGraphConfig,
@@ -555,7 +561,7 @@ pub fn plan_route_detailed(
         snap_distance_m: config.snap_distance_m,
         max_route_length_m: config.max_route_length_m,
     };
-    let course = build_route_file_course(&file, ways)?;
+    let course = build_route_file_course(&file, ways, connectivity)?;
     let path = file
         .nodes
         .iter()
@@ -573,9 +579,13 @@ pub fn plan_route_detailed(
 ///
 /// 파일은 사용자가 고쳤거나 다른 스냅샷과 짝지어졌을 수 있으므로 계획 때와 같은 조건을 모두 다시 검사한다:
 /// 형식, 점 붙이기 거리·경로 길이 상한 값과 그 적용, 대한민국 범위, 폭 출처, 폭·교차로 형상 값.
+///
+/// `connectivity`가 있으면(Geofabrik 추출) 경로 파일의 허용 도로 목록이 연결 정보와 같은지, 코스 형상에 쓰는 노드가
+/// 불완전 노드가 아닌지 검사한다([`road_snapshot::check_route_connectivity`]). 경로 계획과 재생이 모두 여기를 거친다.
 pub fn build_route_file_course(
     file: &RouteFile,
     ways: &[OsmGraphWay],
+    connectivity: Option<&Connectivity>,
 ) -> Result<RouteCourse, String> {
     if file.format != ROUTE_FORMAT {
         return Err(format!(
@@ -622,6 +632,14 @@ pub fn build_route_file_course(
         "Virtual training course from an OSM route (not a surveyed road)".to_owned(),
         width_notice,
     ];
+    if let Some(connectivity) = connectivity {
+        road_snapshot::check_route_connectivity(
+            connectivity,
+            &snapped.ways,
+            &file.allowed_highways,
+            &file.nodes,
+        )?;
+    }
     let settings = JunctionSettings {
         corner_radius_m: file.corner_radius_m,
         stub_length_m: file.stub_length_m,
@@ -638,12 +656,12 @@ pub fn build_route_file_course(
 }
 
 /// 경로 파일 내용과 그 파일이 있는 폴더로 코스를 만든다. 스냅샷은 `base_dir` 기준 상대 경로다.
+///
+/// 스냅샷은 [`road_snapshot::load_road_snapshot`]으로 읽으므로 Geofabrik 추출이면 연결 정보 검사를 건너뛰지 않는다.
 pub fn load_route_course(file: &RouteFile, base_dir: &Path) -> Result<CourseDef, String> {
-    let source = base_dir.join(&file.snapshot);
-    let json = std::fs::read_to_string(&source)
-        .map_err(|error| format!("cannot read {}: {error}", source.display()))?;
-    let ways = parse_overpass_graph(&json)?;
-    build_route_file_course(file, &ways).map(|built| built.course)
+    let snapshot = road_snapshot::load_road_snapshot(&base_dir.join(&file.snapshot))?;
+    build_route_file_course(file, &snapshot.ways, snapshot.connectivity.as_ref())
+        .map(|built| built.course)
 }
 
 /// 경로 파일 내용을 TOML 문자열로 만든다.
@@ -655,6 +673,7 @@ pub fn route_file_toml(file: &RouteFile) -> Result<String, String> {
 mod tests {
     use super::*;
     use crate::world::osm_graph::fixtures::{self, FixtureWay};
+    use crate::world::osm_graph::parse_overpass_graph;
     use crate::world::test_drive::follow_path;
 
     /// 폭 시험 사례: (추가 태그, 기대 폭과 출처).
@@ -763,8 +782,8 @@ mod tests {
         let text = route_file_toml(&file).unwrap();
         let reread: RouteFile = toml::from_str(&text).unwrap();
         assert_eq!(reread, file);
-        let first = build_route_file_course(&file, &ways).unwrap();
-        let second = build_route_file_course(&reread, &ways).unwrap();
+        let first = build_route_file_course(&file, &ways, None).unwrap();
+        let second = build_route_file_course(&reread, &ways, None).unwrap();
         assert_eq!(first, second);
         assert_eq!(first.junctions, vec![10]);
         let result = follow_path(&first.course, &first.guide, 3.0);
@@ -847,7 +866,7 @@ mod tests {
         let mut file =
             plan_route(&ways, "f.json", &[at(-40.0, 0.0), at(40.0, 0.0)], &config).unwrap();
         file.format = "route-v0".to_owned();
-        let error = build_route_file_course(&file, &ways).unwrap_err();
+        let error = build_route_file_course(&file, &ways, None).unwrap_err();
         assert!(error.contains("format"), "{error}");
     }
 
@@ -873,13 +892,13 @@ mod tests {
             (file.snap_distance_m, file.max_route_length_m),
             (30.0, 2000.0)
         );
-        assert!(build_route_file_course(&file, &straight).is_ok());
+        assert!(build_route_file_course(&file, &straight, None).is_ok());
         // 저장한 점을 약 111 m 북쪽으로 옮긴 파일(사용자 수정)은 거부한다.
         let mut moved = file.clone();
         for point in &mut moved.points {
             point[0] += 0.001;
         }
-        let error = build_route_file_course(&moved, &straight).unwrap_err();
+        let error = build_route_file_course(&moved, &straight, None).unwrap_err();
         assert!(error.contains("nearest"), "{error}");
         // 스냅샷이 바뀌어 가까운 도로가 사라지고 먼 도로만 남으면 거부한다.
         let changed = parse(vec![(
@@ -888,7 +907,7 @@ mod tests {
             &[],
             vec![(3, 0.0, 120.0), (4, 100.0, 120.0)],
         )]);
-        let error = build_route_file_course(&file, &changed).unwrap_err();
+        let error = build_route_file_course(&file, &changed, None).unwrap_err();
         assert!(error.contains("nearest"), "{error}");
         // 상한 값이 없거나(무한대·0) 절대 상한을 넘으면 거부한다.
         for (snap, length) in [
@@ -903,7 +922,7 @@ mod tests {
                 max_route_length_m: length,
                 ..file.clone()
             };
-            let error = build_route_file_course(&edited, &straight).unwrap_err();
+            let error = build_route_file_course(&edited, &straight, None).unwrap_err();
             assert!(error.contains("must be a positive number"), "{error}");
         }
         // 저장한 경로 길이 상한도 적용한다.
@@ -911,13 +930,13 @@ mod tests {
             max_route_length_m: 50.0,
             ..file.clone()
         };
-        let error = build_route_file_course(&short, &straight).unwrap_err();
+        let error = build_route_file_course(&short, &straight, None).unwrap_err();
         assert!(error.contains("long"), "{error}");
         let unknown = RouteFile {
             width_source: "guess".to_owned(),
             ..file
         };
-        assert!(build_route_file_course(&unknown, &straight).is_err());
+        assert!(build_route_file_course(&unknown, &straight, None).is_err());
     }
 
     /// 저장소의 예제 경로 파일이 `--course map:` 로더로 읽히고, 같은 점으로 다시 계획하면 같은 파일이 되며,
@@ -936,7 +955,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(replanned, file);
-        let built = build_route_file_course(&file, &ways).unwrap();
+        let built = build_route_file_course(&file, &ways, None).unwrap();
         for junction in [5_143_358_021, 5_143_358_070, 5_239_572_002] {
             assert!(built.junctions.contains(&junction), "{:?}", built.junctions);
         }

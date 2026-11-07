@@ -183,6 +183,31 @@ impl<'a> Graph<'a> {
     }
 }
 
+/// 교차로 팔을 따라 걷는 최대 거리(m). 팔 방향·곧은 구간 검사·곁가지 형상은 이 범위의 노드로 만든다.
+const ARM_WALK_M: f32 = 80.0;
+
+/// 경로 코스 형상을 만드는 데 쓰는 OSM 노드 ID 집합을 돌려준다(Phase 4-5G 경계 연결 검증용).
+///
+/// 경로 노드 전부와, 경로 위 교차로마다 모든 팔을 [`ARM_WALK_M`] 또는 다음 교차로·way 끝까지 따라간 노드다.
+/// 코스 생성([`build_route_course_with`])과 같은 그래프·같은 걷기 규칙을 쓴다. 가상 노드도 포함한다.
+pub(crate) fn shape_nodes(
+    ways: &[OsmGraphWay],
+    allowed: &BTreeSet<&str>,
+    route: &[u64],
+) -> Result<BTreeSet<u64>, String> {
+    let graph = Graph::new(ways, allowed)?;
+    let mut used: BTreeSet<u64> = route.iter().copied().collect();
+    let Some(origin) = route.first().and_then(|id| graph.pos.get(id)).copied() else {
+        return Ok(used);
+    };
+    for &id in route.iter().filter(|&&id| graph.is_junction(id)) {
+        for &(neighbor, _) in graph.adjacent.get(&id).into_iter().flatten() {
+            used.extend(graph.walk(id, neighbor, ARM_WALK_M, origin));
+        }
+    }
+    Ok(used)
+}
+
 /// `oneway` 태그가 일방통행을 뜻하는지 판정한다.
 pub(crate) fn is_oneway(way: &OsmGraphWay) -> bool {
     matches!(
@@ -459,7 +484,7 @@ fn build_junction(
                 way.id
             ));
         }
-        let walked = graph.walk(id, neighbor, 80.0, origin);
+        let walked = graph.walk(id, neighbor, ARM_WALK_M, origin);
         let points: Vec<Vec2> = walked
             .iter()
             .map(|&n| project(origin, graph.pos[&n]))

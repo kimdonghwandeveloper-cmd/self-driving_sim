@@ -220,6 +220,19 @@ cargo run --locked -- --fetch-map 34.7480,127.7460,34.7590,127.7600
 cargo run --locked -- --fetch-map 34.7480,127.7460,34.7590,127.7600 --offline
 ```
 
+### Geofabrik 지역 추출 (Phase 4-5G G-1, 개발용)
+
+로컬에 있는 Geofabrik `.osm.pbf`에서 bbox(남,서,북,동) 주변 도로만 잘라 `cache/extracts/`에 저장합니다.
+네트워크를 쓰지 않고 창도 열리지 않습니다. 전국 파일이면 허용 도로 전체를 메모리에 올리므로 시간이 걸립니다.
+결과 폴더의 `graph.osm.json`은 `--pick-route <파일>`로 열 수 있고, 경계에서 연결이 끊긴 도로를 지나는 경로는 거부됩니다.
+자세한 규칙은 `docs/map-data.md`의 "Geofabrik 지역 추출"을 참고하세요.
+
+```powershell
+cargo run --locked -- --extract-pbf <south-korea.osm.pbf> --bbox 34.7480,127.7460,34.7590,127.7600
+cargo run --locked -- --audit-extract <세대 폴더> --pbf <south-korea.osm.pbf>
+cargo run --locked -- --compare-overpass assets/maps/yeosu-expo/graph-2026-11-06.osm.json --extract <세대 폴더> --pbf <south-korea.osm.pbf>
+```
+
 창과 렌더러를 자동 실행하고 약 5초 후 종료하려면 다음 명령을 사용합니다.
 이 검증은 GPU 초기화와 실행 오류 확인용이며 화면의 시각적 검수를 대체하지 않습니다.
 

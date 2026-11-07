@@ -22,7 +22,7 @@ use crate::vehicle::VehicleMotion;
 use crate::world::ActiveCourse;
 use crate::world::map::OSM_ATTRIBUTION;
 use crate::world::map_fetch::{self, Bbox, FetchJob, FetchPolicy, FetchSettings};
-use crate::world::osm_graph::parse_overpass_graph;
+use crate::world::road_snapshot;
 use crate::world::route_plan::{self, RoadGraphConfig};
 use model::PickerModel;
 
@@ -99,11 +99,9 @@ pub fn bbox_around(lat: f64, lon: f64) -> Result<Bbox, String> {
     Ok(bbox)
 }
 
-/// 스냅샷 파일을 읽어 경로 선택 상태를 만든다.
+/// 스냅샷 파일을 읽어 경로 선택 상태를 만든다. Geofabrik 추출이면 연결 정보를 함께 읽어 검사에 쓴다.
 pub fn load_model(path: &Path) -> Result<PickerModel, String> {
-    let json = std::fs::read_to_string(path)
-        .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
-    let ways = parse_overpass_graph(&json)?;
+    let snapshot = road_snapshot::load_road_snapshot(path)?;
     let config = std::fs::read_to_string(route_plan::ROAD_GRAPH_CONFIG_PATH)
         .map_err(|error| error.to_string())
         .and_then(|text| route_plan::parse_road_graph_config(&text))
@@ -111,7 +109,8 @@ pub fn load_model(path: &Path) -> Result<PickerModel, String> {
             warn!("road graph config unavailable ({error}); using defaults");
             RoadGraphConfig::default()
         });
-    PickerModel::new(path.to_path_buf(), ways, config)
+    PickerModel::new(path.to_path_buf(), snapshot.ways, config)
+        .map(|model| model.with_connectivity(snapshot.connectivity))
 }
 
 /// 경로 선택 화면 플러그인. 앱이 [`AppMode::RoutePicking`]으로 시작할 때만 등록한다.

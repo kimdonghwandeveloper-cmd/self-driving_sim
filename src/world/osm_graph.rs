@@ -39,9 +39,16 @@ impl OsmGraphWay {
     }
 }
 
+/// Geofabrik 추출 본문(Phase 4-5G)의 `generator` 값 앞부분. 이 본문은 연결 정보와 함께
+/// [`super::road_snapshot`]으로만 읽어야 하므로 [`parse_overpass_graph`]는 거부한다.
+pub const EXTRACT_GENERATOR_PREFIX: &str = "self-driving-sim geofabrik-extract";
+
 /// Overpass JSON 응답 중 필요한 부분.
 #[derive(Debug, Deserialize)]
 struct GraphResponse {
+    /// 본문을 만든 프로그램. Overpass 응답은 `Overpass API ...`, Geofabrik 추출은 [`EXTRACT_GENERATOR_PREFIX`]로 시작한다.
+    #[serde(default)]
+    generator: Option<String>,
     elements: Vec<GraphElement>,
 }
 
@@ -64,9 +71,27 @@ struct GraphElement {
 ///
 /// way에 노드 ID 배열이 없거나, ID와 좌표 개수가 다르거나, 좌표가 빠졌거나(`null`) 범위를 벗어나거나,
 /// 노드가 2개 미만이면 오류로 처리한다. way가 하나도 없어도 오류다.
+///
+/// Geofabrik 추출 본문([`EXTRACT_GENERATOR_PREFIX`])은 경계 연결 검증을 건너뛰지 않도록 거부한다.
 pub fn parse_overpass_graph(json: &str) -> Result<Vec<OsmGraphWay>, String> {
+    let (generator, ways) = parse_graph_body(json)?;
+    if generator
+        .as_deref()
+        .is_some_and(|g| g.starts_with(EXTRACT_GENERATOR_PREFIX))
+    {
+        return Err(
+            "this snapshot is a Geofabrik extract; load it with its connectivity record (road_snapshot)"
+                .to_owned(),
+        );
+    }
+    Ok(ways)
+}
+
+/// 본문의 `generator` 값과 way 목록을 읽는다(출처 확인 없이). 검사 규칙은 [`parse_overpass_graph`]와 같다.
+pub(crate) fn parse_graph_body(json: &str) -> Result<(Option<String>, Vec<OsmGraphWay>), String> {
     let response: GraphResponse =
         serde_json::from_str(json).map_err(|error| format!("invalid Overpass JSON: {error}"))?;
+    let generator = response.generator;
     let mut ways = Vec::new();
     for element in response.elements.into_iter().filter(|e| e.kind == "way") {
         let id = element.id;
@@ -106,7 +131,7 @@ pub fn parse_overpass_graph(json: &str) -> Result<Vec<OsmGraphWay>, String> {
     if ways.is_empty() {
         return Err("the response contains no ways".to_string());
     }
-    Ok(ways)
+    Ok((generator, ways))
 }
 
 /// 허용한 `highway` 종류의 way만으로 노드 ID별 연결 차수를 센다.

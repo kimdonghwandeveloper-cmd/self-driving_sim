@@ -7,7 +7,13 @@ pub mod junction;
 pub mod map;
 pub mod map_fetch;
 pub mod osm_graph;
+pub mod pbf_audit;
+pub mod pbf_compare;
+pub mod pbf_extract;
+#[cfg(test)]
+pub(crate) mod pbf_fixture;
 pub mod road_geom;
+pub mod road_snapshot;
 pub mod route;
 pub mod route_plan;
 #[cfg(test)]

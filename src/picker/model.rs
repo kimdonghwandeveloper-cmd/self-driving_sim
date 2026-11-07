@@ -9,6 +9,7 @@ use bevy::math::Vec2;
 
 use crate::world::map::{self, LatLon};
 use crate::world::osm_graph::OsmGraphWay;
+use crate::world::road_snapshot::Connectivity;
 use crate::world::route_plan::{self, PlannedRoute, RoadGraphConfig, WidthSource};
 
 /// 이보다 좁은 폭이면 경고한다(m). 차체 폭 1.8 m + 양옆 0.6 m(개발 코스 좁은 통로와 같은 기준, 임시값).
@@ -34,6 +35,8 @@ pub struct PickerModel {
     pub snapshot_path: PathBuf,
     /// 스냅샷 way.
     pub ways: Vec<OsmGraphWay>,
+    /// 경계 연결 정보(Geofabrik 추출). Overpass 스냅샷이면 `None`(연결 검증 정보 없음).
+    pub connectivity: Option<Connectivity>,
     /// 경로 계획 설정.
     pub config: RoadGraphConfig,
     /// 화면 좌표 원점(스냅샷 도로 범위의 가운데).
@@ -82,12 +85,19 @@ impl PickerModel {
         Ok(Self {
             snapshot_path,
             ways,
+            connectivity: None,
             config,
             origin,
             segments,
             points: Vec::new(),
             planned: None,
         })
+    }
+
+    /// 경계 연결 정보를 붙인다. 이후 경로 계산은 이 정보로 경계 연결 검사를 한다.
+    pub fn with_connectivity(mut self, connectivity: Option<Connectivity>) -> Self {
+        self.connectivity = connectivity;
+        self
     }
 
     /// 위경도를 화면 좌표로 바꾼다.
@@ -157,8 +167,15 @@ impl PickerModel {
 
     /// 점이 2개 이상이면 경로를 다시 계산한다.
     fn recompute(&mut self) {
-        self.planned = (self.points.len() >= 2)
-            .then(|| route_plan::plan_route_detailed(&self.ways, "", &self.points, &self.config));
+        self.planned = (self.points.len() >= 2).then(|| {
+            route_plan::plan_route_detailed(
+                &self.ways,
+                self.connectivity.as_ref(),
+                "",
+                &self.points,
+                &self.config,
+            )
+        });
     }
 
     /// 계산된 경로 노드의 화면 좌표. 계산되지 않았으면 비어 있다.
@@ -172,6 +189,13 @@ impl PickerModel {
     /// 화면 안내 문구: 점 개수, 경로 길이·폭·출처, 경고(좁은 폭·임시 폭), 오류(돌 수 없는 꺾임·거부된 교차로 등).
     pub fn status_lines(&self) -> Vec<String> {
         let mut lines = vec![format!("Points: {}", self.points.len())];
+        lines.push(match &self.connectivity {
+            Some(connectivity) => format!(
+                "Road data: Geofabrik extract, boundary connections checked ({} incomplete node(s) near the edge)",
+                connectivity.incomplete.len()
+            ),
+            None => "Road data: no boundary connectivity record (Overpass snapshot)".to_owned(),
+        });
         match &self.planned {
             None => lines.push("Click at least 2 points on the roads (start, end)".to_owned()),
             Some(Ok(planned)) => {
