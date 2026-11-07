@@ -2,6 +2,7 @@ mod app;
 
 use std::path::PathBuf;
 
+use self_driving_sim::picker::{PickerSource, parse_points};
 use self_driving_sim::world::CourseSelection;
 use self_driving_sim::world::map_fetch::{self, Bbox, FetchJob, FetchPolicy, FetchSettings};
 
@@ -12,6 +13,10 @@ use self_driving_sim::world::map_fetch::{self, Bbox, FetchJob, FetchPolicy, Fetc
 /// - `--window <폭>x<높이>`: 창 크기(기본 1280x720). 기준 사진 비교 캡처에 쓴다.
 /// - `--course <training|calibration|map:<선택 파일>>`: 주행 코스(기본 training).
 ///   모르는 이름이면 경고 후 기본 코스. 지도 코스를 읽지 못해도 경고 후 기본 코스로 실행한다.
+/// - `--pick-route <yeosu|latlon:<위도>,<경도>|<스냅샷 파일>>`: 경로 선택 화면으로 시작한다(Phase 4-5).
+///   "주행 시작"으로 경로 파일을 `cache/routes/`에 저장하고 그 코스로 주행한다. `latlon:`은 주변 1.5 km를 받는다.
+///   값이 잘못되면 오류 종료한다. `--pick-points "<위도>,<경도>;..."`로 점을 미리 찍어 둘 수 있고,
+///   `--auto-start`를 주면 지도를 불러오는 대로 주행을 시작한다(화면 전환 자동 검증용).
 /// - `--fetch-map <남,서,북,동>`: 창 없이 Overpass에서 지도 그래프를 받아 `cache/maps/`에 저장하고 끝낸다
 ///   (Phase 4-4 개발용). `--offline`을 함께 주면 네트워크를 쓰지 않고 캐시만 확인한다.
 fn main() -> bevy::app::AppExit {
@@ -48,11 +53,34 @@ fn main() -> bevy::app::AppExit {
             })
         })
         .unwrap_or_default();
+    let pick_route = match value_after("--pick-route").map(|text| PickerSource::parse(text)) {
+        Some(Ok(source)) => Some(source),
+        Some(Err(error)) => {
+            eprintln!("invalid --pick-route: {error}");
+            return bevy::app::AppExit::error();
+        }
+        None if args.iter().any(|argument| argument == "--pick-route") => {
+            eprintln!("--pick-route needs yeosu, latlon:<lat>,<lon> or a snapshot path");
+            return bevy::app::AppExit::error();
+        }
+        None => None,
+    };
+    let pick_points = match value_after("--pick-points").map(|text| parse_points(text)) {
+        Some(Ok(points)) => points,
+        Some(Err(error)) => {
+            eprintln!("invalid --pick-points: {error}");
+            return bevy::app::AppExit::error();
+        }
+        None => Vec::new(),
+    };
     app::run(app::RunOptions {
         smoke_test: args.iter().any(|argument| argument == "--smoke-test"),
         capture_dir: value_after("--capture-views").map(PathBuf::from),
         window,
         course,
+        pick_route,
+        pick_points,
+        auto_start: args.iter().any(|argument| argument == "--auto-start"),
     })
 }
 

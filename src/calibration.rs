@@ -44,7 +44,12 @@ impl Plugin for CalibrationPlugin {
                     .in_set(SimSet::Control)
                     .after(crate::vehicle::controller::apply_controls),
             )
-            .add_systems(FixedUpdate, record_trials.after(step_motion));
+            .add_systems(
+                FixedUpdate,
+                record_trials
+                    .after(step_motion)
+                    .run_if(crate::driving_active),
+            );
     }
 }
 

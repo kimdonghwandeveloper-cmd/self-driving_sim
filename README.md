@@ -47,7 +47,7 @@ HUD 아래쪽에는 차량 파라미터 보정용 회전반경·예상 정지거
 | --- | --- |
 | `training` | 폭 6 m 직선 차로(z=+6 ~ -66), 양옆 연석(충돌 경계), 가장자리 흰 선(표시만), 정지선 z=-20, 차로 오른쪽 고정 장애물 z=-32, 좁은 통로 z=-42 ~ -54(폭 3.0 m = 차체 폭 1.8 m + 양옆 0.6 m), 앞·뒤 끝 벽 |
 | `calibration` | Phase 2-5에서 쓰던 넓은 평지와 장애물 4개(회전반경·제동 시험용) |
-| `map:<선택 파일>` | OSM 중심선에서 만든 지도 코스. 여수 가상 교육 코스는 `map:assets/maps/yeosu-expo/course.toml`(way 532526349, 약 292 m, 임시 폭 4 m; 실제 운행 경로 아님). 굽은 길 확인용은 `map:assets/maps/yeosu-expo/curved-course.toml`(way 529495041, 약 321 m). 교차로를 지나는 경로 파일 예제는 `map:assets/maps/yeosu-expo/route-junctions.toml`(Phase 4-3, 교차로 3곳, 임시 폭 4 m). 형식과 제약은 `docs/map-data.md` 참고. 읽지 못하면 경고 후 `training`으로 실행 |
+| `map:<선택 파일>` | OSM 중심선에서 만든 지도 코스. 여수 가상 교육 코스는 `map:assets/maps/yeosu-expo/course.toml`(way 532526349, 약 292 m, 임시 폭 4 m; 실제 운행 경로 아님). 굽은 길 확인용은 `map:assets/maps/yeosu-expo/curved-course.toml`(way 529495041, 약 321 m). 교차로를 지나는 경로 파일 예제는 `map:assets/maps/yeosu-expo/route-junctions.toml`(Phase 4-3, 교차로 4곳, 임시 폭 4 m). 형식과 제약은 `docs/map-data.md` 참고. 읽지 못하면 경고 후 `training`으로 실행 |
 
 - 화면 상자와 충돌 판정은 `src/world/course.rs`의 같은 정의에서 만들어서 어긋나지 않습니다. 흰 선은 시각 표시일 뿐이고 실제 경계는 연석입니다.
 - 시작 위치 복귀(`R`)는 선택한 코스의 시작 자세로 되돌립니다.
@@ -183,6 +183,31 @@ cargo run --locked --release
 `ureq`(=3.5.1)는 Phase 4-4 지도 받기용 HTTP 클라이언트입니다. 기본 기능(rustls + ring 암호, webpki 루트 인증서, gzip)을
 쓰며, cmake·NASM이 필요한 aws-lc-rs는 쓰지 않습니다. ring은 `cc`로 C/어셈블리를 빌드하는데, `cc`는 이미
 Bevy 의존성(blake3)이 쓰고 있어 새 빌드 도구가 필요하지 않습니다.
+
+### 경로 선택 화면 (Phase 4-5)
+
+`--pick-route`로 경로 선택 화면부터 시작합니다. 도로 그래프를 위에서 본 선으로 그립니다(지도 타일 없음).
+경로 탐색에 쓰는 도로는 밝게, 그 밖은 어둡게 보입니다. OSM 출처 표기는 화면 아래에 계속 보입니다.
+
+| 조작 | 입력 |
+| --- | --- |
+| 점 추가(시작 → 경유 → 끝) | 왼쪽 클릭 |
+| 화면 이동 / 확대·축소 | 왼쪽 끌기 / 휠 |
+| 점 지우기 | 오른쪽 클릭(가까운 점), `Backspace`(마지막 점), `C`(모두) |
+| 주행 시작 | `Enter` 또는 오른쪽 위 버튼 |
+
+화면에는 경로 길이, 교차로 수, 폭과 그 출처, 경고가 표시됩니다. 경고는 임시 폭, 3 m 미만의 좁은 폭, 돌 수 없는 꺾임,
+거부된 교차로 등입니다. 주행을 시작하면 경로 파일을 `cache/routes/route-<UTC 시각>.toml`에 저장하고 그 코스로 주행합니다.
+저장한 파일은 `--course map:cache/routes/<파일>`로 다시 열 수 있고, 같은 코스가 나옵니다.
+지역은 `yeosu`(저장된 여수 스냅샷), 스냅샷 파일 경로, `latlon:<위도>,<경도>` 중 하나로 고릅니다.
+`latlon:`은 주변 1.5 km를 Overpass에서 받습니다(사용자 요청 시에만 네트워크 사용). 장소 이름 검색은 없습니다.
+
+```powershell
+cargo run --locked -- --pick-route yeosu
+```
+
+`--pick-points "34.75264,127.74712;34.74972,127.74816"`로 점을 미리 찍어 둘 수 있습니다. `--auto-start`를 함께 주면
+지도를 불러오는 대로 주행을 시작합니다. 이 옵션은 화면 전환 자동 검증용입니다.
 
 ### 지도 받기 (Phase 4-4, 개발용)
 

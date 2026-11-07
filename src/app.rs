@@ -3,10 +3,12 @@ use std::path::{Path, PathBuf};
 use bevy::render::view::screenshot::{Capturing, Screenshot, save_to_disk};
 use bevy::{app::AppExit, prelude::*};
 use self_driving_sim::{
+    AppMode,
     calibration::CalibrationPlugin,
     camera::{ActiveView, CameraPlugin, ViewDirection},
     config, configure_sim_sets,
     input::InputPlugin,
+    picker::{PickerPlugin, PickerSource},
     scene::ScenePlugin,
     training::TrainingPlugin,
     ui::{HudPlugin, hud::VehicleHud},
@@ -32,6 +34,12 @@ pub struct RunOptions {
     pub window: Option<(u32, u32)>,
     /// 주행 코스.
     pub course: CourseSelection,
+    /// 경로 선택 화면으로 시작할 지역. 있으면 [`AppMode::RoutePicking`]으로 시작한다.
+    pub pick_route: Option<PickerSource>,
+    /// 경로 선택 화면에 미리 찍어 둘 점 [위도, 경도].
+    pub pick_points: Vec<[f64; 2]>,
+    /// 경로 선택 화면에서 지도를 불러오면 곧바로 주행을 시작한다(자동 검증용).
+    pub auto_start: bool,
 }
 
 /// `"1498x700"` 형식의 창 크기를 읽는다. 0이나 형식 오류는 `None`.
@@ -85,6 +93,20 @@ pub fn run(options: RunOptions) -> AppExit {
         CameraPlugin,
         HudPlugin,
     ));
+    match options.pick_route {
+        Some(source) => {
+            info!("starting in the route picker");
+            app.insert_state(AppMode::RoutePicking)
+                .add_plugins(PickerPlugin {
+                    source,
+                    preset_points: options.pick_points,
+                    auto_start: options.auto_start,
+                });
+        }
+        None => {
+            app.init_state::<AppMode>();
+        }
+    }
 
     if options.smoke_test {
         app.add_systems(Update, finish_smoke_test);

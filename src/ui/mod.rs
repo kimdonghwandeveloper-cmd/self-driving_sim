@@ -12,7 +12,8 @@ pub struct HudPlugin;
 impl Plugin for HudPlugin {
     /// HUD 시스템을 앱에 등록한다.
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, hud::spawn_hud)
+        app.add_systems(Startup, hud::spawn_hud.run_if(crate::driving_active))
+            .add_systems(crate::entering_driving_from_picker(), hud::spawn_hud)
             .add_systems(Update, hud::update_hud.in_set(SimSet::Display));
     }
 }

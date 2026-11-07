@@ -69,7 +69,7 @@ impl Plugin for VehiclePlugin {
             .init_resource::<VehicleContact>()
             .add_message::<CollisionEvent>()
             .add_systems(RunFixedMainLoop, apply_controls.in_set(SimSet::Control))
-            .add_systems(FixedUpdate, step_motion);
+            .add_systems(FixedUpdate, step_motion.run_if(crate::driving_active));
     }
 }
 

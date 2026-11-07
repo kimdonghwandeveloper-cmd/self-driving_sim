@@ -4,6 +4,7 @@ pub mod calibration;
 pub mod camera;
 pub mod config;
 pub mod input;
+pub mod picker;
 pub mod scene;
 pub mod training;
 pub mod ui;
@@ -25,14 +26,41 @@ pub enum SimSet {
     Display,
 }
 
-/// [`SimSet`] 실행 위치와 순서를 앱에 설정한다.
+/// 앱 상태(Phase 4-5). 경로 선택 화면으로 시작하면 [`AppMode::RoutePicking`]이고, "주행 시작"으로
+/// [`AppMode::Driving`]에 들어간다. 기본값은 주행이며, 경로 선택 없이 실행하면 처음부터 주행 상태다.
+#[derive(States, Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum AppMode {
+    /// 경로 선택 화면.
+    RoutePicking,
+    /// 주행(기존 시뮬레이터 화면).
+    #[default]
+    Driving,
+}
+
+/// 주행용 시스템을 돌릴지 판정한다. 주행 상태이거나, 앱 상태가 아예 없으면(창 없는 시험 앱) 참이다.
+pub fn driving_active(mode: Option<Res<State<AppMode>>>) -> bool {
+    mode.is_none_or(|mode| *mode.get() == AppMode::Driving)
+}
+
+/// 경로 선택에서 주행으로 넘어갈 때 도는 일정. 주행 화면을 만드는 시작 시스템을 여기에도 등록한다.
+pub fn entering_driving_from_picker() -> OnTransition<AppMode> {
+    OnTransition {
+        exited: AppMode::RoutePicking,
+        entered: AppMode::Driving,
+    }
+}
+
+/// [`SimSet`] 실행 위치와 순서를 앱에 설정한다. 세 묶음 모두 [`driving_active`]일 때만 돈다.
 pub fn configure_sim_sets(app: &mut App) {
     app.configure_sets(
         RunFixedMainLoop,
         (SimSet::Input, SimSet::Control)
             .chain()
             .in_set(RunFixedMainLoopSystems::BeforeFixedMainLoop),
-    );
+    )
+    .configure_sets(RunFixedMainLoop, SimSet::Input.run_if(driving_active))
+    .configure_sets(RunFixedMainLoop, SimSet::Control.run_if(driving_active))
+    .configure_sets(Update, SimSet::Display.run_if(driving_active));
 }
 
 #[cfg(test)]
@@ -536,6 +564,31 @@ mod tests {
         let mut app = headless_app();
         let gamepad = connect_gamepad(&mut app);
         set_pad_button(&mut app, gamepad, GamepadButton::Start, 1.0);
+        update_with_keys(&mut app, &[KeyCode::Enter]);
+        assert_eq!(
+            app.world().resource::<Vehicle>().0.engine(),
+            EngineState::Ready
+        );
+    }
+
+    /// 경로 선택 상태에서는 주행 입력·운동 계산이 돌지 않고, 주행 상태로 넘어가면 같은 키가 적용되는지 확인한다
+    /// (Phase 4-5 앱 상태).
+    #[test]
+    fn route_picking_pauses_driving_systems() {
+        let mut app = headless_app();
+        app.add_plugins(bevy::state::app::StatesPlugin)
+            .insert_state(AppMode::RoutePicking);
+        app.update();
+        update_with_keys(&mut app, &[KeyCode::Enter]);
+        update_with_keys(&mut app, &[]);
+        assert_eq!(
+            app.world().resource::<Vehicle>().0.engine(),
+            EngineState::Off
+        );
+        app.world_mut()
+            .resource_mut::<NextState<AppMode>>()
+            .set(AppMode::Driving);
+        app.update();
         update_with_keys(&mut app, &[KeyCode::Enter]);
         assert_eq!(
             app.world().resource::<Vehicle>().0.engine(),

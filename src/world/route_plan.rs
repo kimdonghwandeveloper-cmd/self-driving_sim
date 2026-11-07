@@ -478,6 +478,29 @@ pub fn plan_route(
     points: &[[f64; 2]],
     config: &RoadGraphConfig,
 ) -> Result<RouteFile, String> {
+    plan_route_detailed(ways, snapshot, points, config).map(|planned| planned.file)
+}
+
+/// 경로 계획 결과(경로 선택 화면 표시용).
+#[derive(Debug, Clone, PartialEq)]
+pub struct PlannedRoute {
+    /// 경로 파일 내용.
+    pub file: RouteFile,
+    /// 만든 코스와 안내선.
+    pub course: RouteCourse,
+    /// 노드 순서 기준 경로 길이(m).
+    pub length_m: f64,
+    /// 경로 노드의 위경도(노드 순서, 가상 노드 포함).
+    pub path: Vec<LatLon>,
+}
+
+/// [`plan_route`]와 같고, 만든 코스·경로 길이·노드 위치도 함께 돌려준다.
+pub fn plan_route_detailed(
+    ways: &[OsmGraphWay],
+    snapshot: &str,
+    points: &[[f64; 2]],
+    config: &RoadGraphConfig,
+) -> Result<PlannedRoute, String> {
     config.validate()?;
     let allowed: BTreeSet<&str> = config.allowed_highways.iter().map(String::as_str).collect();
     let picked = korean_points(points)?;
@@ -532,8 +555,18 @@ pub fn plan_route(
         snap_distance_m: config.snap_distance_m,
         max_route_length_m: config.max_route_length_m,
     };
-    build_route_file_course(&file, ways)?;
-    Ok(file)
+    let course = build_route_file_course(&file, ways)?;
+    let path = file
+        .nodes
+        .iter()
+        .map(|id| unlocal(picked[0], graph.pos[id]))
+        .collect();
+    Ok(PlannedRoute {
+        file,
+        course,
+        length_m: length,
+        path,
+    })
 }
 
 /// 경로 파일과 스냅샷 way로 코스를 만든다. 찍은 점을 같은 방법으로 다시 붙여 가상 노드를 복원한다.

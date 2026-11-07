@@ -365,6 +365,14 @@ pub fn fetch_snapshot(
     unreachable!("the loop returns on the last attempt")
 }
 
+/// 지금 시각을 파일 이름에 쓰기 좋은 UTC 문자열(`20261107T004604Z`)로 만든다.
+pub fn utc_now_compact() -> String {
+    utc_now()
+        .chars()
+        .filter(char::is_ascii_alphanumeric)
+        .collect()
+}
+
 /// 지금 시각을 UTC RFC 3339 문자열(초 단위)로 만든다.
 fn utc_now() -> String {
     let seconds = SystemTime::now()
@@ -624,8 +632,8 @@ impl Drop for InFlightGuard {
 
 /// 백그라운드 받기 작업. 화면 갱신을 막지 않도록 별도 스레드에서 [`obtain_snapshot`]을 실행한다.
 pub struct FetchJob {
-    /// 결과 수신 통로.
-    receiver: Receiver<Result<Obtained, String>>,
+    /// 결과 수신 통로. Bevy 리소스(여러 스레드에서 공유)에 넣을 수 있도록 잠금으로 감싼다.
+    receiver: std::sync::Mutex<Receiver<Result<Obtained, String>>>,
 }
 
 impl FetchJob {
@@ -672,12 +680,18 @@ impl FetchJob {
             FETCH_IN_FLIGHT.store(false, Ordering::SeqCst);
             return Err(format!("cannot start the map download: {error}"));
         }
-        Ok(Self { receiver })
+        Ok(Self {
+            receiver: std::sync::Mutex::new(receiver),
+        })
     }
 
     /// 결과가 나왔으면 돌려주고, 아직이면 `None`. 기다리지 않는다.
     pub fn try_result(&self) -> Option<Result<Obtained, String>> {
-        match self.receiver.try_recv() {
+        let receiver = match self.receiver.lock() {
+            Ok(receiver) => receiver,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        match receiver.try_recv() {
             Ok(result) => Some(result),
             Err(TryRecvError::Empty) => None,
             Err(TryRecvError::Disconnected) => {
@@ -689,6 +703,8 @@ impl FetchJob {
     /// 결과가 나올 때까지 기다린다(화면 없는 명령줄 받기용).
     pub fn wait(self) -> Result<Obtained, String> {
         self.receiver
+            .into_inner()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .recv()
             .unwrap_or_else(|_| Err("the map download stopped unexpectedly".to_owned()))
     }

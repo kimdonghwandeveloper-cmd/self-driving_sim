@@ -42,7 +42,8 @@ pub struct ScenePlugin;
 impl Plugin for ScenePlugin {
     /// 장면 생성(시작 시)과 매 프레임 차량 도형 갱신 시스템을 등록한다.
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, setup_scene)
+        app.add_systems(Startup, setup_scene.run_if(crate::driving_active))
+            .add_systems(crate::entering_driving_from_picker(), setup_scene)
             .add_systems(Update, sync_vehicle_body.in_set(SimSet::Display));
     }
 }
