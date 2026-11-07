@@ -1,21 +1,21 @@
 //! 경로 선택 화면의 상태와 계산(Bevy와 무관한 순수 로직, Phase 4-5).
 //!
-//! 화면 좌표는 지역 평면(x=동쪽 m, z=남쪽 m, [`map::project`]와 같은 규칙)이고 원점은 스냅샷 도로 범위의 가운데다.
+//! 화면 좌표는 배경 지도 타일과 같은 웹 메르카토르 평면([`tiles::to_view`], x=동쪽, z=남쪽, 메르카토르 m)이다.
+//! 대한민국 위도에서 메르카토르 1 m는 실제 약 0.8 m다. 코스 계산은 위경도로 한다.
 //! 점을 찍거나 지울 때마다 [`route_plan::plan_route_detailed`]로 경로를 다시 계산하고, 길이·폭·경고 문구를 만든다.
 
 use std::path::{Component, Path, PathBuf};
 
 use bevy::math::Vec2;
 
-use crate::world::map::{self, LatLon};
+use super::tiles;
+use crate::world::map::LatLon;
 use crate::world::osm_graph::OsmGraphWay;
 use crate::world::road_snapshot::Connectivity;
 use crate::world::route_plan::{self, PlannedRoute, RoadGraphConfig, WidthSource};
 
 /// 이보다 좁은 폭이면 경고한다(m). 차체 폭 1.8 m + 양옆 0.6 m(개발 코스 좁은 통로와 같은 기준, 임시값).
 pub const NARROW_WIDTH_M: f32 = 3.0;
-/// 지구 평균 반지름(m). [`map::project`]와 같은 값.
-const EARTH_RADIUS_M: f64 = 6_371_008.8;
 
 /// 화면에 그릴 도로 선분.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -39,7 +39,7 @@ pub struct PickerModel {
     pub connectivity: Option<Connectivity>,
     /// 경로 계획 설정.
     pub config: RoadGraphConfig,
-    /// 화면 좌표 원점(스냅샷 도로 범위의 가운데).
+    /// 스냅샷 도로 범위의 가운데.
     pub origin: LatLon,
     /// 그릴 도로 선분.
     pub segments: Vec<RoadSegment>,
@@ -76,8 +76,8 @@ impl PickerModel {
                 let usable = way.highway().is_some_and(|kind| allowed.contains(&kind))
                     && !crate::world::route::is_oneway(way);
                 way.nodes.windows(2).map(move |pair| RoadSegment {
-                    from: map::project(origin, pair[0].pos),
-                    to: map::project(origin, pair[1].pos),
+                    from: tiles::to_view(pair[0].pos),
+                    to: tiles::to_view(pair[1].pos),
                     usable,
                 })
             })
@@ -102,17 +102,24 @@ impl PickerModel {
 
     /// 위경도를 화면 좌표로 바꾼다.
     pub fn to_view(&self, point: LatLon) -> Vec2 {
-        map::project(self.origin, point)
+        tiles::to_view(point)
     }
 
     /// 화면 좌표를 [위도, 경도]로 바꾼다([`map::project`]의 역변환).
     pub fn from_view(&self, view: Vec2) -> [f64; 2] {
-        let (east, north) = (f64::from(view.x), -f64::from(view.y));
-        [
-            self.origin.lat + (north / EARTH_RADIUS_M).to_degrees(),
-            self.origin.lon
-                + (east / (EARTH_RADIUS_M * self.origin.lat.to_radians().cos())).to_degrees(),
-        ]
+        let point = tiles::from_view(view);
+        [point.lat, point.lon]
+    }
+
+    /// 도로 전체의 화면 범위 (최소, 최대).
+    pub fn view_bounds(&self) -> (Vec2, Vec2) {
+        bounds(self.segments.iter().flat_map(|s| [s.from, s.to]))
+    }
+
+    /// 계산된 경로의 화면 범위. 경로가 없으면 `None`.
+    pub fn route_bounds(&self) -> Option<(Vec2, Vec2)> {
+        let route = self.route_views();
+        (route.len() >= 2).then(|| bounds(route))
     }
 
     /// 찍은 점들의 화면 좌표.
@@ -244,6 +251,14 @@ impl PickerModel {
     }
 }
 
+/// 점들의 (최소, 최대).
+fn bounds(points: impl IntoIterator<Item = Vec2>) -> (Vec2, Vec2) {
+    points.into_iter().fold(
+        (Vec2::splat(f32::INFINITY), Vec2::splat(f32::NEG_INFINITY)),
+        |(lo, hi), p| (lo.min(p), hi.max(p)),
+    )
+}
+
 /// 경로 계획 오류를 화면 문구로 바꾼다. 꺾임·교차로 거부는 종류를 앞에 붙인다.
 pub fn describe_error(error: &str) -> String {
     let kind = if error.contains("too sharp") || error.contains("short for the road width") {
@@ -290,6 +305,7 @@ pub fn relative_path(from_dir: &Path, to_file: &Path) -> Result<String, String> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::world::map;
     use crate::world::osm_graph::{fixtures, parse_overpass_graph};
 
     /// 저장소의 실제 스냅샷 경로.

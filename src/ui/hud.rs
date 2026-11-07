@@ -22,6 +22,7 @@ pub struct VehicleHud;
 /// 화면 왼쪽 위에 HUD 텍스트를 만든다.
 pub fn spawn_hud(mut commands: Commands) {
     commands.spawn((
+        crate::driving_scope(),
         Node {
             position_type: PositionType::Absolute,
             top: Val::Px(12.0),

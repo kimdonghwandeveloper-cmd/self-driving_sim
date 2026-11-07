@@ -122,6 +122,14 @@ fn main() -> bevy::app::AppExit {
         pick_route,
         pick_points,
         auto_start: args.iter().any(|argument| argument == "--auto-start"),
+        main_menu: [
+            "--course",
+            "--pick-route",
+            "--smoke-test",
+            "--capture-views",
+        ]
+        .iter()
+        .all(|flag| !args.iter().any(|argument| argument == flag)),
     })
 }
 

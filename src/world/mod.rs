@@ -96,6 +96,7 @@ pub fn spawn_course_notice(commands: &mut Commands, course: &CourseDef) {
         return;
     }
     commands.spawn((
+        crate::driving_scope(),
         Node {
             position_type: PositionType::Absolute,
             bottom: Val::Px(12.0),
@@ -190,6 +191,7 @@ pub fn spawn_course(
         let (transform, size) =
             box_on_rect(rect, SURFACE_Y_M - PAINT_THICKNESS_M, PAINT_THICKNESS_M);
         commands.spawn((
+            crate::driving_scope(),
             Mesh3d(meshes.add(Cuboid::from_size(size))),
             MeshMaterial3d(road.clone()),
             transform,
@@ -199,6 +201,7 @@ pub fn spawn_course(
     let stop = materials.add(Color::srgb(0.98, 0.98, 0.98));
     for area in &course.areas {
         commands.spawn((
+            crate::driving_scope(),
             Mesh3d(meshes.add(area_mesh(area, SURFACE_Y_M))),
             MeshMaterial3d(road.clone()),
             Transform::default(),
@@ -210,6 +213,7 @@ pub fn spawn_course(
             StripKind::EdgeLine => (edge.clone(), MARKING_Y_M),
         };
         commands.spawn((
+            crate::driving_scope(),
             Mesh3d(meshes.add(strip_mesh(strip, y))),
             MeshMaterial3d(material),
             Transform::default(),
@@ -226,6 +230,7 @@ pub fn spawn_course(
             PAINT_THICKNESS_M,
         );
         commands.spawn((
+            crate::driving_scope(),
             Mesh3d(meshes.add(Cuboid::from_size(size))),
             MeshMaterial3d(material),
             transform,
@@ -244,6 +249,7 @@ pub fn spawn_course(
         };
         let (transform, size) = box_on_rect(&collider.rect, 0.0, collider.height_m);
         commands.spawn((
+            crate::driving_scope(),
             Mesh3d(meshes.add(Cuboid::from_size(size))),
             MeshMaterial3d(material),
             transform,

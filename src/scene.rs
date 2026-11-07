@@ -42,8 +42,11 @@ pub struct ScenePlugin;
 impl Plugin for ScenePlugin {
     /// 장면 생성(시작 시)과 매 프레임 차량 도형 갱신 시스템을 등록한다.
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, setup_scene.run_if(crate::driving_active))
-            .add_systems(crate::entering_driving_from_picker(), setup_scene)
+        app.add_systems(Startup, setup_scene.run_if(crate::no_app_state))
+            .add_systems(
+                OnEnter(crate::AppMode::Driving),
+                setup_scene.in_set(crate::SessionSet::Spawn),
+            )
             .add_systems(Update, sync_vehicle_body.in_set(SimSet::Display));
     }
 }
@@ -57,6 +60,7 @@ fn setup_scene(
 ) {
     let (ground_center, ground_size) = ground_square(&course.0);
     commands.spawn((
+        crate::driving_scope(),
         Mesh3d(meshes.add(Plane3d::default().mesh().size(ground_size, ground_size))),
         MeshMaterial3d(materials.add(Color::srgb(0.25, 0.30, 0.30))),
         Transform::from_xyz(ground_center.x, 0.0, ground_center.y),
@@ -73,7 +77,12 @@ fn setup_scene(
     let body = meshes.add(Cuboid::from_size(BODY_SIZE_M));
     let front_marker = meshes.add(Cuboid::new(BODY_SIZE_M.x * 0.8, 0.3, 0.3));
     commands
-        .spawn((Transform::default(), Visibility::default(), VehicleBody))
+        .spawn((
+            Transform::default(),
+            Visibility::default(),
+            VehicleBody,
+            crate::driving_scope(),
+        ))
         .with_children(|parent| {
             parent.spawn((
                 Mesh3d(body),
@@ -97,12 +106,14 @@ fn setup_scene(
 
     // 1인칭(기본 레이어)과 외부 디버그(외관 레이어) 카메라 모두에서 같은 조명을 쓴다.
     commands.spawn((
+        crate::driving_scope(),
         DirectionalLight::default(),
         Transform::from_xyz(4.0, 8.0, 4.0).looking_at(Vec3::ZERO, Vec3::Y),
         RenderLayers::from_layers(&[0, EXTERIOR_LAYER]),
     ));
     // 반대쪽 약한 보조광: 주광과 반대 방향을 보는 실내 면이 완전히 검게 보이지 않게 한다.
     commands.spawn((
+        crate::driving_scope(),
         DirectionalLight {
             illuminance: FILL_LIGHT_LUX,
             ..default()
@@ -137,11 +148,13 @@ fn spawn_grid(
         let z_material = if iz == 0 { &axis } else { &line };
         let x_material = if ix == 0 { &axis } else { &line };
         commands.spawn((
+            crate::driving_scope(),
             Mesh3d(along_x.clone()),
             MeshMaterial3d(z_material.clone()),
             Transform::from_xyz(center.x, 0.005, iz as f32 * GRID_SPACING_M),
         ));
         commands.spawn((
+            crate::driving_scope(),
             Mesh3d(along_z.clone()),
             MeshMaterial3d(x_material.clone()),
             Transform::from_xyz(ix as f32 * GRID_SPACING_M, 0.005, center.y),

@@ -1,49 +1,70 @@
-//! 경로 선택 화면(Phase 4-5).
+//! 경로 선택 화면(Phase 4-5, 4-5b 전국 배경 지도).
 //!
-//! 앱 상태 [`AppMode::RoutePicking`]에서 도로 그래프를 위에서 본 선으로 그리고, 마우스로 점을 찍어 경로를 계산한다.
-//! "주행 시작"(버튼 또는 Enter)을 누르면 경로 파일을 `cache/routes/`에 저장하고 그 코스로 [`AppMode::Driving`]에
-//! 들어간다. 지도 타일 이미지는 쓰지 않고 받은 벡터 자료만 그리며, OSM 출처 표기를 계속 보인다.
+//! 앱 상태 [`AppMode::RoutePicking`]에서 OSM 표준 래스터 타일([`tiles`])을 배경으로 깔고, 받은 도로 그래프를
+//! 그 위에 선으로 그린다. 타일은 **보기 전용**이며, 코스 형상·재현은 계속 노드 ID 스냅샷(벡터)으로만 한다.
+//! 타일을 받지 못하면 그 칸은 빈 회색이고, 도로 받기·경로 계산·저장·주행은 그대로 된다.
+//!
+//! 흐름: 전국 지도에서 지역을 찾고 확대 → "이 지역 도로 받기"(`L`)로 화면 가운데 1.5 × 1.5 km를 4-4
+//! `FetchJob`으로 받기(이미 받은 범위 안이면 캐시만 사용) → 도로 위에 점 찍기 → "주행 시작"(`Enter`).
 //!
 //! 조작(개발용):
 //! - 왼쪽 클릭: 점 추가(시작 → 경유 → 끝). 왼쪽 끌기: 화면 이동. 휠: 확대·축소.
 //! - 오른쪽 클릭: 가까운 점 지우기. `Backspace`: 마지막 점 지우기. `C`: 모두 지우기. `Enter`: 주행 시작.
+//! - `L`: 이 지역 도로 받기. 맞춤 보기: `K` 전국, `G` 받은 지역, `F` 경로. `Esc` 두 번: 메인 화면.
+//!
+//! 자동 맞춤은 지역을 받았을 때 그 지역에, 경로를 처음 계산했을 때 경로에 **한 번씩만** 한다. 그 뒤에는 사용자가
+//! 화면을 움직여도 다시 맞추지 않는다.
 
 pub mod model;
+pub mod tiles;
 
+use std::collections::HashMap;
 use std::f32::consts::FRAC_PI_2;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
+use bevy::asset::RenderAssetUsages;
+use bevy::image::{CompressedImageFormats, ImageSampler, ImageType};
 use bevy::input::mouse::{AccumulatedMouseScroll, MouseScrollUnit};
+use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 
 use crate::AppMode;
 use crate::vehicle::VehicleMotion;
 use crate::world::ActiveCourse;
-use crate::world::map::OSM_ATTRIBUTION;
+use crate::world::map::{LatLon, OSM_ATTRIBUTION};
 use crate::world::map_fetch::{self, Bbox, FetchJob, FetchPolicy, FetchSettings};
 use crate::world::road_snapshot;
 use crate::world::route_plan::{self, RoadGraphConfig};
 use model::PickerModel;
+use tiles::{TileFetcher, TileId, TileOutcome, TileSettings, UreqTileTransport};
 
 /// 미리 정한 지역 이름과 그 지역의 저장된 노드 ID 스냅샷.
 pub const PRESET_REGIONS: [(&str, &str); 1] =
     [("yeosu", "assets/maps/yeosu-expo/graph-2026-11-06.osm.json")];
-/// 위경도 입력으로 받을 범위의 반 변(m). 한 변 1.5 km(PLAN 코스 범위 상한과 같음, 2 km 받기 상한 안).
+/// 위경도 입력·"이 지역 도로 받기"로 받을 범위의 반 변(m). 한 변 1.5 km(PLAN 코스 범위 상한과 같음, 2 km 받기 상한 안).
 pub const FETCH_HALF_SIDE_M: f64 = 750.0;
 /// 경로 파일 저장 폴더(실행 폴더 기준, 저장소에서 제외되는 `cache/` 아래).
 pub const ROUTE_DIR: &str = "cache/routes";
-/// 카메라 높이(m). 직교 투영이라 값 자체는 보이는 크기에 영향이 없다.
+/// 카메라 높이. 직교 투영이라 값 자체는 보이는 크기에 영향이 없다.
 const CAMERA_HEIGHT_M: f32 = 500.0;
-/// 처음 확대 수준(m/px)과 허용 범위.
-const START_SCALE: f32 = 1.0;
-const SCALE_RANGE: (f32, f32) = (0.05, 5.0);
+/// 확대 수준 허용 범위(화면 1 px당 메르카토르 m). 전국(약 3 km/px)부터 거리(0.15 m/px)까지.
+const SCALE_RANGE: (f32, f32) = (0.15, 3000.0);
+/// 도로 받기를 허용하는 최대 축척(m/px). 이보다 멀리서 보면 확대하라고 안내한다.
+const LOAD_MAX_SCALE: f32 = 20.0;
 /// 이 픽셀보다 많이 움직이면 클릭이 아니라 끌기로 본다.
 const DRAG_THRESHOLD_PX: f32 = 5.0;
 /// 오른쪽 클릭으로 점을 지울 수 있는 화면 거리(px).
 const REMOVE_RADIUS_PX: f32 = 14.0;
 /// 점 표시 반경(px).
 const POINT_RADIUS_PX: f32 = 6.0;
+/// 한 화면에 그릴 타일 수 상한.
+const MAX_VISIBLE_TILES: usize = 48;
+/// 메모리에 둘 타일 이미지 수 상한(임시값). 넘으면 오래 안 보인 것부터 버린다.
+const MEMORY_BUDGET_TILES: usize = 256;
+/// 타일을 그리는 높이(도로 선 아래).
+const TILE_Y: f32 = -2.0;
 
 /// 경로 선택 화면이 다룰 지역.
 #[derive(Debug, Clone, PartialEq)]
@@ -113,14 +134,59 @@ pub fn load_model(path: &Path) -> Result<PickerModel, String> {
         .map(|model| model.with_connectivity(snapshot.connectivity))
 }
 
-/// 경로 선택 화면 플러그인. 앱이 [`AppMode::RoutePicking`]으로 시작할 때만 등록한다.
+/// 캐시 폴더에서 이미 받은 범위 목록을 읽는다(`bbox_<남>_<서>_<북>_<동>` 폴더 중 최신 세대가 있는 것).
+pub fn cached_regions(root: &Path) -> Vec<Bbox> {
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return Vec::new();
+    };
+    let mut regions: Vec<Bbox> = entries
+        .flatten()
+        .filter(|entry| entry.path().join(map_fetch::LATEST_FILE).exists())
+        .filter_map(|entry| {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let values: Vec<f64> = name
+                .strip_prefix("bbox_")?
+                .split('_')
+                .map(|part| part.parse::<f64>().ok())
+                .collect::<Option<_>>()?;
+            let [south, west, north, east] = values[..] else {
+                return None;
+            };
+            let bbox = Bbox {
+                south,
+                west,
+                north,
+                east,
+            };
+            bbox.validate().ok().map(|()| bbox)
+        })
+        .collect();
+    regions.sort_by_key(Bbox::cache_name);
+    regions
+}
+
+/// "이 지역 도로 받기"의 범위와 정책: 화면 가운데가 이미 받은 범위 안이면 그 범위를 캐시만으로, 아니면 가운데
+/// 주변 1.5 km를 새로 받는다.
+pub fn region_to_load(center: LatLon, cached: &[Bbox]) -> Result<(Bbox, FetchPolicy), String> {
+    if let Some(bbox) = cached.iter().find(|bbox| {
+        (bbox.south..=bbox.north).contains(&center.lat)
+            && (bbox.west..=bbox.east).contains(&center.lon)
+    }) {
+        return Ok((*bbox, FetchPolicy::CacheOnly));
+    }
+    Ok((bbox_around(center.lat, center.lon)?, FetchPolicy::Refresh))
+}
+
+/// 경로 선택 화면 플러그인. 메인 화면의 "맵 생성하기"나 `--pick-route`로 들어온다.
 pub struct PickerPlugin {
-    /// 다룰 지역.
-    pub source: PickerSource,
+    /// 처음 다룰 지역(`--pick-route`). 없으면 전국 지도에서 시작한다.
+    pub source: Option<PickerSource>,
     /// 지도를 불러온 뒤 미리 찍어 둘 점 [위도, 경도].
     pub preset_points: Vec<[f64; 2]>,
     /// 지도를 불러오면 곧바로 주행 시작을 요청한다(화면 전환 자동 검증용).
     pub auto_start: bool,
+    /// 배경 타일 설정(자동 검증이면 네트워크 끔).
+    pub tiles: TileSettings,
 }
 
 /// `위도,경도;위도,경도;...` 형식의 점 목록을 읽는다.
@@ -142,26 +208,33 @@ pub fn parse_points(text: &str) -> Result<Vec<[f64; 2]>, String> {
 }
 
 impl Plugin for PickerPlugin {
-    /// 화면 구성(상태 진입 시)과 매 프레임 입력·그리기·안내 갱신을 등록한다.
+    /// 화면 구성(상태 진입 시), 매 프레임 입력·타일·그리기·안내 갱신, 나갈 때 정리를 등록한다.
     fn build(&self, app: &mut App) {
         let picking = in_state(AppMode::RoutePicking);
         app.insert_resource(Picker {
-            source: Some(self.source.clone()),
+            source: self.source.clone(),
             preset_points: self.preset_points.clone(),
             auto_start: self.auto_start,
             ..default()
         })
+        .insert_resource(TileLayer {
+            settings: self.tiles.clone(),
+            ..default()
+        })
         .add_systems(
             OnEnter(AppMode::RoutePicking),
-            (spawn_picker, start_loading),
+            (enter_picker, spawn_picker, start_loading).chain(),
         )
+        .add_systems(OnExit(AppMode::RoutePicking), leave_picker)
         .add_systems(
             Update,
             (
                 poll_loading,
                 handle_pointer,
                 handle_keys,
+                apply_fit,
                 start_driving,
+                update_tiles,
                 draw_picker,
                 update_picker_text,
             )
@@ -171,37 +244,65 @@ impl Plugin for PickerPlugin {
     }
 }
 
+/// 맞춤 보기 대상.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Fit {
+    /// 대한민국 전체.
+    Korea,
+    /// 받은 지역(도로 범위).
+    Region,
+    /// 계산된 경로.
+    Route,
+}
+
 /// 경로 선택 화면 상태.
 #[derive(Resource, Default)]
 pub struct Picker {
-    /// 다룰 지역.
+    /// 처음 다룰 지역. 화면에 들어올 때 한 번 쓴다.
     source: Option<PickerSource>,
-    /// 불러온 상태. 받는 중이거나 실패하면 `None`.
+    /// 불러온 상태. 받는 중이거나 아직 고르지 않았으면 `None`.
     model: Option<PickerModel>,
-    /// 진행 중인 지도 받기.
-    loading: Option<FetchJob>,
+    /// 진행 중인 지도 받기와 그 범위.
+    loading: Option<(FetchJob, Bbox)>,
     /// 마지막 알림(불러오기 실패, 저장 결과 등).
     message: Option<String>,
     /// 왼쪽 버튼을 누른 곳(px)과 끌기 중인지.
     press: Option<(Vec2, bool)>,
     /// 주행 시작 요청.
     start_requested: bool,
+    /// 도로 받기 요청.
+    load_requested: bool,
     /// 지도를 불러온 뒤 미리 찍어 둘 점.
     preset_points: Vec<[f64; 2]>,
     /// 지도를 불러오면 곧바로 주행 시작을 요청할지.
     auto_start: bool,
+    /// 다음 프레임에 맞출 보기.
+    fit: Option<Fit>,
+    /// 이번 지역에서 경로에 한 번 자동으로 맞췄는지.
+    route_fitted: bool,
+    /// 이미 받은 범위.
+    cached: Vec<Bbox>,
 }
 
 impl Picker {
-    /// 불러온 상태를 받아 들이고, 미리 찍을 점과 자동 시작 요청을 적용한다.
+    /// 불러온 상태를 받아 들이고, 미리 찍을 점과 자동 시작 요청을 적용한다. 그 지역에 한 번 맞춘다.
     fn accept(&mut self, mut model: PickerModel) {
         if !self.preset_points.is_empty() {
             model.set_points(&std::mem::take(&mut self.preset_points));
         }
         self.model = Some(model);
+        self.fit = Some(Fit::Region);
+        self.route_fitted = false;
         if self.auto_start {
             self.start_requested = true;
         }
+    }
+
+    /// 메인 화면의 "맵 생성하기"로 들어갈 때: 처음 지역 없이 전국 지도에서 시작한다.
+    pub fn prepare_browse(&mut self) {
+        self.source = None;
+        self.preset_points.clear();
+        self.auto_start = false;
     }
 }
 
@@ -212,6 +313,23 @@ impl Default for PickerSource {
     }
 }
 
+/// 배경 타일 상태.
+#[derive(Resource, Default)]
+pub struct TileLayer {
+    /// 받기 설정.
+    settings: TileSettings,
+    /// 백그라운드 받기(처음 들어올 때 시작).
+    fetcher: Option<TileFetcher>,
+    /// 받은 타일 재질과 마지막으로 보인 프레임.
+    materials: HashMap<TileId, (Handle<StandardMaterial>, u64)>,
+    /// 지금 그리는 타일 엔티티.
+    entities: HashMap<TileId, Entity>,
+    /// 타일 사각형 메시(가로세로 1, 위에서 본 이미지 방향).
+    mesh: Option<Handle<Mesh>>,
+    /// 프레임 번호.
+    frame: u64,
+}
+
 /// 경로 선택 화면의 위에서 본 카메라.
 #[derive(Component)]
 pub struct PickerCamera;
@@ -220,17 +338,45 @@ pub struct PickerCamera;
 #[derive(Component)]
 struct PickerText;
 
-/// 주행 시작 버튼.
-#[derive(Component)]
-struct StartButton;
+/// 화면 오른쪽 위 버튼이 하는 일.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+enum PickerButton {
+    /// 주행 시작.
+    Start,
+    /// 이 지역 도로 받기.
+    Load,
+    /// 맞춤 보기.
+    Fit(Fit),
+}
 
-/// 위에서 본 직교 카메라, 안내 문구, 출처 표기, 주행 시작 버튼을 만든다. 모두 상태를 나가면 지운다.
+/// 화면에 들어올 때: 눌린 키를 비우고, 이전 방문의 상태(점·경로·알림·받기)를 지운다. 처음 지역 인자는 남긴다.
+fn enter_picker(world: &mut World) {
+    crate::clear_pressed_buttons(world);
+    let mut picker = world.resource_mut::<Picker>();
+    picker.model = None;
+    picker.loading = None;
+    picker.message = None;
+    picker.press = None;
+    picker.start_requested = false;
+    picker.load_requested = false;
+    picker.route_fitted = false;
+    picker.fit = Some(Fit::Korea);
+    picker.cached = cached_regions(Path::new(map_fetch::CACHE_DIR));
+}
+
+/// 화면을 나갈 때: 타일 엔티티 기록을 지운다(엔티티는 상태 수명으로 지워진다). 받던 지도는 결과를 버린다.
+fn leave_picker(mut layer: ResMut<TileLayer>, mut picker: ResMut<Picker>) {
+    layer.entities.clear();
+    picker.loading = None;
+}
+
+/// 위에서 본 직교 카메라, 안내 문구, 출처 표기, 버튼 줄을 만든다. 모두 상태를 나가면 지운다.
 fn spawn_picker(mut commands: Commands) {
     let scoped = DespawnOnExit(AppMode::RoutePicking);
     commands.spawn((
         Camera3d::default(),
         Projection::Orthographic(OrthographicProjection {
-            scale: START_SCALE,
+            scale: 1.0,
             far: CAMERA_HEIGHT_M * 2.0,
             ..OrthographicProjection::default_3d()
         }),
@@ -239,81 +385,146 @@ fn spawn_picker(mut commands: Commands) {
         PickerCamera,
         scoped.clone(),
     ));
-    let panel = |top: Option<f32>, bottom: Option<f32>| Node {
-        position_type: PositionType::Absolute,
-        top: top.map_or(Val::Auto, Val::Px),
-        bottom: bottom.map_or(Val::Auto, Val::Px),
-        left: Val::Px(12.0),
-        padding: UiRect::all(Val::Px(8.0)),
-        ..default()
-    };
     commands.spawn((
-        panel(Some(12.0), None),
-        BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.6)),
-        Text::new("Loading map data..."),
-        TextFont::from_font_size(16.0),
+        Node {
+            position_type: PositionType::Absolute,
+            top: Val::Px(12.0),
+            left: Val::Px(12.0),
+            max_width: Val::Percent(60.0),
+            padding: UiRect::all(Val::Px(8.0)),
+            ..default()
+        },
+        BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.65)),
+        Text::new("Loading..."),
+        TextFont::from_font_size(15.0),
         TextColor(Color::WHITE),
         PickerText,
         scoped.clone(),
     ));
+    // 정책상 출처 표기는 지도 오른쪽 아래에 늘 보이고 다른 UI가 가리지 않게 한다.
     commands.spawn((
-        panel(None, Some(12.0)),
-        BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.6)),
+        Node {
+            position_type: PositionType::Absolute,
+            bottom: Val::Px(0.0),
+            right: Val::Px(0.0),
+            padding: UiRect::axes(Val::Px(8.0), Val::Px(4.0)),
+            ..default()
+        },
+        BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.85)),
         Text::new(format!(
-            "{OSM_ATTRIBUTION}\nVirtual training course (not a surveyed road). Vector data only, no map tiles."
+            "{OSM_ATTRIBUTION} | Map tiles: OpenStreetMap | Virtual training course (not a surveyed road)"
         )),
-        TextFont::from_font_size(14.0),
-        TextColor(Color::WHITE),
+        TextFont::from_font_size(13.0),
+        TextColor(Color::BLACK),
+        GlobalZIndex(100),
         scoped.clone(),
     ));
+    let buttons = [
+        (
+            "Start driving (Enter)",
+            PickerButton::Start,
+            Color::srgb(0.15, 0.45, 0.2),
+        ),
+        (
+            "Load roads here (L)",
+            PickerButton::Load,
+            Color::srgb(0.15, 0.35, 0.55),
+        ),
+        (
+            "Korea (K)",
+            PickerButton::Fit(Fit::Korea),
+            Color::srgb(0.3, 0.3, 0.35),
+        ),
+        (
+            "Region (G)",
+            PickerButton::Fit(Fit::Region),
+            Color::srgb(0.3, 0.3, 0.35),
+        ),
+        (
+            "Route (F)",
+            PickerButton::Fit(Fit::Route),
+            Color::srgb(0.3, 0.3, 0.35),
+        ),
+    ];
     commands
         .spawn((
             Node {
                 position_type: PositionType::Absolute,
                 top: Val::Px(12.0),
                 right: Val::Px(12.0),
-                padding: UiRect::axes(Val::Px(14.0), Val::Px(8.0)),
+                flex_direction: FlexDirection::Column,
+                row_gap: Val::Px(6.0),
                 ..default()
             },
-            Button,
-            BackgroundColor(Color::srgb(0.15, 0.45, 0.2)),
-            StartButton,
             scoped,
         ))
-        .with_child((
-            Text::new("Start driving (Enter)"),
-            TextFont::from_font_size(16.0),
-            TextColor(Color::WHITE),
-        ));
+        .with_children(|parent| {
+            for (label, action, color) in buttons {
+                parent
+                    .spawn((
+                        Node {
+                            padding: UiRect::axes(Val::Px(14.0), Val::Px(6.0)),
+                            ..default()
+                        },
+                        Button,
+                        BackgroundColor(color),
+                        action,
+                    ))
+                    .with_child((
+                        Text::new(label),
+                        TextFont::from_font_size(15.0),
+                        TextColor(Color::WHITE),
+                    ));
+            }
+        });
 }
 
-/// 지역 스냅샷을 불러오거나, 위경도 지역이면 백그라운드 받기를 시작한다.
+/// 처음 지역 인자가 있으면 불러오거나 받기를 시작한다. 없으면 전국 지도에서 기다린다.
 fn start_loading(mut picker: ResMut<Picker>) {
-    match picker.source.clone().unwrap_or_default() {
-        PickerSource::Snapshot(path) => match load_model(&path) {
+    match picker.source.take() {
+        Some(PickerSource::Snapshot(path)) => match load_model(&path) {
             Ok(model) => picker.accept(model),
             Err(error) => picker.message = Some(format!("Cannot load the map: {error}")),
         },
-        PickerSource::Fetch(bbox) => {
-            match FetchJob::start(
-                PathBuf::from(map_fetch::CACHE_DIR),
-                bbox,
-                FetchPolicy::Refresh,
-                FetchSettings::default(),
-            ) {
-                Ok(job) => {
-                    picker.loading = Some(job);
-                    picker.message = Some("Downloading map data from Overpass...".to_owned());
-                }
-                Err(error) => picker.message = Some(format!("Cannot download the map: {error}")),
-            }
+        Some(PickerSource::Fetch(bbox)) => begin_fetch(&mut picker, bbox, FetchPolicy::Refresh),
+        None => {
+            picker.message = Some(
+                "Find an area on the map, zoom in and press \"Load roads here\" (L)".to_owned(),
+            )
         }
+    }
+}
+
+/// 백그라운드 받기를 시작한다. 이미 받는 중이면 알림만 남긴다(동시 작업 1개).
+fn begin_fetch(picker: &mut Picker, bbox: Bbox, policy: FetchPolicy) {
+    if picker.loading.is_some() {
+        picker.message = Some("Already loading roads; please wait".to_owned());
+        return;
+    }
+    match FetchJob::start(
+        PathBuf::from(map_fetch::CACHE_DIR),
+        bbox,
+        policy,
+        FetchSettings::default(),
+    ) {
+        Ok(job) => {
+            picker.loading = Some((job, bbox));
+            picker.message = Some(match policy {
+                FetchPolicy::CacheOnly => "Opening roads saved for this area...".to_owned(),
+                _ => "Downloading roads from Overpass...".to_owned(),
+            });
+        }
+        Err(error) => picker.message = Some(format!("Cannot download the map: {error}")),
     }
 }
 
 /// 받기 작업이 끝났으면 받은(또는 캐시의) 스냅샷을 불러온다. 기다리지 않는다.
 fn poll_loading(mut picker: ResMut<Picker>) {
-    let Some(result) = picker.loading.as_ref().and_then(FetchJob::try_result) else {
+    let Some(result) = picker
+        .loading
+        .as_ref()
+        .and_then(|(job, _)| job.try_result())
+    else {
         return;
     };
     picker.loading = None;
@@ -324,27 +535,35 @@ fn poll_loading(mut picker: ResMut<Picker>) {
     }) {
         Ok((model, warning)) => {
             picker.accept(model);
+            picker.cached = cached_regions(Path::new(map_fetch::CACHE_DIR));
             picker.message = warning.map(|warning| format!("Warning: {warning}"));
         }
         Err(error) => picker.message = Some(format!("Cannot load the map: {error}")),
     }
 }
 
-/// 화면 위치(px)를 지역 평면 좌표로 바꾼다. 카메라가 북쪽을 위로 두고 똑바로 내려다본다는 전제다.
+/// 화면 위치(px)를 화면 평면 좌표로 바꾼다. 카메라가 북쪽을 위로 두고 똑바로 내려다본다는 전제다.
 fn cursor_to_ground(cursor: Vec2, window_size: Vec2, camera: Vec3, scale: f32) -> Vec2 {
     let offset = (cursor - window_size / 2.0) * scale;
     Vec2::new(camera.x + offset.x, camera.z + offset.y)
 }
 
+/// 화면 범위 (최소, 최대)를 창 크기에 맞춰 보이도록 카메라 위치(가운데)와 축척을 정한다(여백 10 %).
+pub fn fit_view(min: Vec2, max: Vec2, window_size: Vec2) -> (Vec2, f32) {
+    let size = (max - min).max(Vec2::splat(1.0)) * 1.1;
+    let scale = (size.x / window_size.x.max(1.0)).max(size.y / window_size.y.max(1.0));
+    ((min + max) / 2.0, scale.clamp(SCALE_RANGE.0, SCALE_RANGE.1))
+}
+
 /// 마우스: 휠 확대·축소(커서 위치 고정), 왼쪽 끌기 이동, 왼쪽 클릭 점 추가, 오른쪽 클릭 점 지우기.
-/// 주행 시작 버튼 위에서는 점을 찍지 않는다.
+/// 버튼 위에서는 점을 찍지 않는다.
 fn handle_pointer(
     mut picker: ResMut<Picker>,
     buttons: Res<ButtonInput<MouseButton>>,
     scroll: Res<AccumulatedMouseScroll>,
     windows: Query<&Window, With<PrimaryWindow>>,
     mut cameras: Query<(&mut Transform, &mut Projection), With<PickerCamera>>,
-    start_button: Query<&Interaction, With<StartButton>>,
+    ui_buttons: Query<&Interaction, With<PickerButton>>,
 ) {
     let (Ok(window), Ok((mut transform, mut projection))) =
         (windows.single(), cameras.single_mut())
@@ -359,7 +578,7 @@ fn handle_pointer(
         return;
     };
     let size = window.size();
-    let over_button = start_button
+    let over_button = ui_buttons
         .iter()
         .any(|interaction| *interaction != Interaction::None);
     // 휠: 커서 아래 지점이 그대로 있도록 카메라를 옮기며 확대·축소한다.
@@ -369,7 +588,7 @@ fn handle_pointer(
     };
     if steps != 0.0 {
         let before = cursor_to_ground(cursor, size, transform.translation, ortho.scale);
-        ortho.scale = (ortho.scale * 1.2f32.powf(-steps)).clamp(SCALE_RANGE.0, SCALE_RANGE.1);
+        ortho.scale = (ortho.scale * 1.25f32.powf(-steps)).clamp(SCALE_RANGE.0, SCALE_RANGE.1);
         let after = cursor_to_ground(cursor, size, transform.translation, ortho.scale);
         transform.translation.x += before.x - after.x;
         transform.translation.z += before.y - after.y;
@@ -392,6 +611,10 @@ fn handle_pointer(
             let ground = cursor_to_ground(cursor, size, transform.translation, ortho.scale);
             if let Some(model) = picker.model.as_mut() {
                 model.add_point(ground);
+            } else {
+                picker.message = Some(
+                    "No roads loaded here yet: press \"Load roads here\" (L) first".to_owned(),
+                );
             }
         }
         picker.press = None;
@@ -405,11 +628,12 @@ fn handle_pointer(
     }
 }
 
-/// 키: `Backspace` 마지막 점 지우기, `C` 모두 지우기, `Enter` 주행 시작. 버튼을 눌러도 주행 시작을 요청한다.
+/// 키와 버튼: `Backspace` 마지막 점 지우기, `C` 모두 지우기, `Enter` 주행 시작, `L` 도로 받기,
+/// `K`·`G`·`F` 맞춤 보기.
 fn handle_keys(
     mut picker: ResMut<Picker>,
     keys: Res<ButtonInput<KeyCode>>,
-    pressed: Query<&Interaction, (Changed<Interaction>, With<StartButton>)>,
+    pressed: Query<(&Interaction, &PickerButton), Changed<Interaction>>,
 ) {
     if keys.just_pressed(KeyCode::Backspace)
         && let Some(model) = picker.model.as_mut()
@@ -421,12 +645,82 @@ fn handle_keys(
     {
         model.clear();
     }
-    if keys.just_pressed(KeyCode::Enter)
-        || pressed
-            .iter()
-            .any(|interaction| *interaction == Interaction::Pressed)
-    {
-        picker.start_requested = true;
+    let mut actions: Vec<PickerButton> = pressed
+        .iter()
+        .filter(|(interaction, _)| **interaction == Interaction::Pressed)
+        .map(|(_, action)| *action)
+        .collect();
+    for (key, action) in [
+        (KeyCode::Enter, PickerButton::Start),
+        (KeyCode::KeyL, PickerButton::Load),
+        (KeyCode::KeyK, PickerButton::Fit(Fit::Korea)),
+        (KeyCode::KeyG, PickerButton::Fit(Fit::Region)),
+        (KeyCode::KeyF, PickerButton::Fit(Fit::Route)),
+    ] {
+        if keys.just_pressed(key) {
+            actions.push(action);
+        }
+    }
+    for action in actions {
+        match action {
+            PickerButton::Start => picker.start_requested = true,
+            PickerButton::Load => picker.load_requested = true,
+            PickerButton::Fit(fit) => picker.fit = Some(fit),
+        }
+    }
+}
+
+/// 맞춤 보기 요청과 도로 받기 요청을 카메라 기준으로 처리하고, 경로를 처음 계산하면 한 번 경로에 맞춘다.
+fn apply_fit(
+    mut picker: ResMut<Picker>,
+    windows: Query<&Window, With<PrimaryWindow>>,
+    mut cameras: Query<(&mut Transform, &mut Projection), With<PickerCamera>>,
+) {
+    let (Ok(window), Ok((mut transform, mut projection))) =
+        (windows.single(), cameras.single_mut())
+    else {
+        return;
+    };
+    let Projection::Orthographic(ortho) = projection.as_mut() else {
+        return;
+    };
+    if std::mem::take(&mut picker.load_requested) {
+        if ortho.scale > LOAD_MAX_SCALE {
+            picker.message =
+                Some("Zoom in closer before loading roads (about 1.5 km area)".to_owned());
+        } else {
+            let center =
+                tiles::from_view(Vec2::new(transform.translation.x, transform.translation.z));
+            match region_to_load(center, &picker.cached) {
+                Ok((bbox, policy)) => begin_fetch(&mut picker, bbox, policy),
+                Err(error) => picker.message = Some(format!("Cannot load roads here: {error}")),
+            }
+        }
+    }
+    let has_route = picker
+        .model
+        .as_ref()
+        .is_some_and(|model| model.route_bounds().is_some());
+    if has_route && !picker.route_fitted && picker.fit.is_none() {
+        picker.route_fitted = true;
+        picker.fit = Some(Fit::Route);
+    }
+    let Some(fit) = picker.fit.take() else {
+        return;
+    };
+    let target = match fit {
+        Fit::Korea => Some(tiles::view_rect(tiles::KOREA_VIEW)),
+        Fit::Region => picker.model.as_ref().map(PickerModel::view_bounds),
+        Fit::Route => picker.model.as_ref().and_then(PickerModel::route_bounds),
+    };
+    match target {
+        Some((min, max)) => {
+            let (center, scale) = fit_view(min, max, window.size());
+            transform.translation.x = center.x;
+            transform.translation.z = center.y;
+            ortho.scale = scale;
+        }
+        None => picker.message = Some("Nothing to fit yet".to_owned()),
     }
 }
 
@@ -468,31 +762,184 @@ fn start_driving(
     }
 }
 
-/// 도로(경로 탐색에 쓰는 도로는 밝게, 그 밖은 어둡게), 계산된 경로, 찍은 점을 그린다.
+/// 위에서 본 타일 사각형 메시(가로세로 1, x·z 0..1). 북서쪽 모서리(0,0)가 이미지 왼쪽 위다.
+fn tile_mesh() -> Mesh {
+    Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::RENDER_WORLD,
+    )
+    .with_inserted_attribute(
+        Mesh::ATTRIBUTE_POSITION,
+        vec![
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [1.0, 0.0, 1.0],
+            [0.0, 0.0, 1.0],
+        ],
+    )
+    .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, vec![[0.0, 1.0, 0.0]; 4])
+    .with_inserted_attribute(
+        Mesh::ATTRIBUTE_UV_0,
+        vec![[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
+    )
+    .with_inserted_indices(Indices::U32(vec![0, 2, 1, 0, 3, 2]))
+}
+
+/// 배경 타일: 화면에 보이는 타일만 요청하고, 받은 타일을 사각형으로 깔고, 안 보이는 타일은 지운다.
+/// 메모리 예산을 넘으면 오래 안 보인 타일 재질을 버린다.
+#[allow(clippy::too_many_arguments)]
+fn update_tiles(
+    mut commands: Commands,
+    mut layer: ResMut<TileLayer>,
+    mut images: ResMut<Assets<Image>>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    windows: Query<&Window, With<PrimaryWindow>>,
+    cameras: Query<(&Transform, &Projection), With<PickerCamera>>,
+) {
+    let (Ok(window), Ok((transform, Projection::Orthographic(ortho)))) =
+        (windows.single(), cameras.single())
+    else {
+        return;
+    };
+    let layer = &mut *layer;
+    layer.frame += 1;
+    let frame = layer.frame;
+    if layer.fetcher.is_none() {
+        layer.fetcher = Some(TileFetcher::start(
+            layer.settings.clone(),
+            Arc::new(UreqTileTransport),
+        ));
+    }
+    let mesh = layer
+        .mesh
+        .get_or_insert_with(|| meshes.add(tile_mesh()))
+        .clone();
+    let half = window.size() / 2.0 * ortho.scale;
+    let center = Vec2::new(transform.translation.x, transform.translation.z);
+    let zoom = tiles::zoom_for_scale(ortho.scale);
+    let wanted = tiles::visible_tiles(center - half, center + half, zoom, MAX_VISIBLE_TILES);
+    let fetcher = layer.fetcher.as_mut().expect("fetcher started");
+    let missing: Vec<TileId> = wanted
+        .iter()
+        .filter(|tile| !layer.materials.contains_key(tile))
+        .copied()
+        .collect();
+    fetcher.request(&missing);
+    for (tile, outcome) in fetcher.poll() {
+        let TileOutcome::Image(bytes) = outcome else {
+            continue;
+        };
+        let Ok(image) = Image::from_buffer(
+            &bytes,
+            ImageType::Extension("png"),
+            CompressedImageFormats::NONE,
+            true,
+            ImageSampler::linear(),
+            RenderAssetUsages::RENDER_WORLD,
+        ) else {
+            continue;
+        };
+        let material = materials.add(StandardMaterial {
+            base_color_texture: Some(images.add(image)),
+            unlit: true,
+            cull_mode: None,
+            ..default()
+        });
+        layer.materials.insert(tile, (material, frame));
+    }
+    for tile in &wanted {
+        if let Some((material, seen)) = layer.materials.get_mut(tile) {
+            *seen = frame;
+            if !layer.entities.contains_key(tile) {
+                let (min, max) = tile.view_rect();
+                let entity = commands
+                    .spawn((
+                        Mesh3d(mesh.clone()),
+                        MeshMaterial3d(material.clone()),
+                        Transform::from_xyz(min.x, TILE_Y, min.y).with_scale(Vec3::new(
+                            max.x - min.x,
+                            1.0,
+                            max.y - min.y,
+                        )),
+                        DespawnOnExit(AppMode::RoutePicking),
+                    ))
+                    .id();
+                layer.entities.insert(*tile, entity);
+            }
+        }
+    }
+    let stale: Vec<TileId> = layer
+        .entities
+        .keys()
+        .filter(|tile| !wanted.contains(tile))
+        .copied()
+        .collect();
+    for tile in stale {
+        if let Some(entity) = layer.entities.remove(&tile) {
+            commands.entity(entity).despawn();
+        }
+    }
+    if layer.materials.len() > MEMORY_BUDGET_TILES {
+        let mut by_age: Vec<(u64, TileId)> = layer
+            .materials
+            .iter()
+            .filter(|(tile, _)| !layer.entities.contains_key(tile))
+            .map(|(tile, (_, seen))| (*seen, *tile))
+            .collect();
+        by_age.sort();
+        let extra = layer.materials.len() - MEMORY_BUDGET_TILES;
+        for (_, tile) in by_age.into_iter().take(extra) {
+            layer.materials.remove(&tile);
+        }
+    }
+}
+
+/// 이미 받은 범위(노랑)·받는 중인 범위(하늘색), 도로(경로 탐색에 쓰는 도로는 진하게, 그 밖은 옅게),
+/// 계산된 경로, 찍은 점을 그린다.
 fn draw_picker(
     picker: Res<Picker>,
     mut gizmos: Gizmos,
     cameras: Query<&Projection, With<PickerCamera>>,
 ) {
-    let Some(model) = picker.model.as_ref() else {
-        return;
-    };
     let scale = match cameras.single() {
         Ok(Projection::Orthographic(ortho)) => ortho.scale,
         _ => 1.0,
     };
     let at = |p: Vec2, y: f32| Vec3::new(p.x, y, p.y);
+    let outline = |gizmos: &mut Gizmos, bbox: &Bbox, color: Color| {
+        let (min, max) = tiles::view_rect([bbox.south, bbox.west, bbox.north, bbox.east]);
+        let corners = [
+            min,
+            Vec2::new(max.x, min.y),
+            max,
+            Vec2::new(min.x, max.y),
+            min,
+        ];
+        for pair in corners.windows(2) {
+            gizmos.line(at(pair[0], 0.5), at(pair[1], 0.5), color);
+        }
+    };
+    for bbox in &picker.cached {
+        outline(&mut gizmos, bbox, Color::srgb(0.95, 0.75, 0.1));
+    }
+    if let Some((_, bbox)) = &picker.loading {
+        outline(&mut gizmos, bbox, Color::srgb(0.2, 0.8, 1.0));
+    }
+    let Some(model) = picker.model.as_ref() else {
+        return;
+    };
     for segment in &model.segments {
         let color = if segment.usable {
-            Color::srgb(0.95, 0.95, 0.95)
+            Color::srgb(0.1, 0.25, 0.75)
         } else {
-            Color::srgb(0.35, 0.38, 0.42)
+            Color::srgb(0.45, 0.45, 0.5)
         };
         gizmos.line(at(segment.from, 0.0), at(segment.to, 0.0), color);
     }
     let route = model.route_views();
     let route_color = match &model.planned {
-        Some(Ok(_)) => Color::srgb(1.0, 0.55, 0.0),
+        Some(Ok(_)) => Color::srgb(1.0, 0.45, 0.0),
         _ => Color::srgb(0.9, 0.1, 0.1),
     };
     for pair in route.windows(2) {
@@ -502,7 +949,7 @@ fn draw_picker(
     let last = points.len().saturating_sub(1);
     for (index, point) in points.iter().enumerate() {
         let color = match index {
-            0 => Color::srgb(0.1, 0.85, 0.2),
+            0 => Color::srgb(0.1, 0.75, 0.2),
             i if i == last => Color::srgb(0.9, 0.15, 0.15),
             _ => Color::srgb(0.2, 0.5, 1.0),
         };
@@ -514,21 +961,30 @@ fn draw_picker(
     }
 }
 
-/// 안내 문구를 갱신한다: 조작법, 점·경로·폭·경고, 마지막 알림.
-fn update_picker_text(picker: Res<Picker>, mut texts: Query<&mut Text, With<PickerText>>) {
+/// 안내 문구를 갱신한다: 조작법, 지도 상태, 점·경로·폭·경고, 마지막 알림.
+fn update_picker_text(
+    picker: Res<Picker>,
+    layer: Res<TileLayer>,
+    mut texts: Query<&mut Text, With<PickerText>>,
+) {
     let Ok(mut text) = texts.single_mut() else {
         return;
     };
     let mut lines = vec![
-        "Route picker - left click: add point, drag: move, wheel: zoom".to_owned(),
+        "Route picker - left click: add point, drag: move, wheel: zoom, Esc twice: menu".to_owned(),
         "Right click: remove point, Backspace: remove last, C: clear, Enter: start".to_owned(),
+        "L: load roads here, K/G/F: fit Korea/region/route. Bright blue = usable roads, yellow box = saved area"
+            .to_owned(),
     ];
+    if !layer.settings.network {
+        lines.push("Map tiles: offline (cached tiles only)".to_owned());
+    }
     match &picker.model {
         Some(model) => {
             lines.push(format!("Map: {}", model.snapshot_path.display()));
             lines.extend(model.status_lines());
         }
-        None if picker.loading.is_some() => lines.push("Downloading map data...".to_owned()),
+        None if picker.loading.is_some() => lines.push("Loading roads...".to_owned()),
         None => {}
     }
     if let Some(message) = &picker.message {
@@ -590,5 +1046,66 @@ mod tests {
             cursor_to_ground(Vec2::new(500.0, 400.0), size, camera, 2.0),
             Vec2::new(210.0, 180.0)
         );
+    }
+
+    /// 받은 범위 목록: `bbox_` 폴더 중 최신 세대 포인터가 있는 것만, 이름의 좌표로 읽는다.
+    #[test]
+    fn cached_regions_are_read_from_folder_names() {
+        let root = std::env::temp_dir().join(format!("sds-cached-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let bbox = bbox_around(34.75, 127.75).unwrap();
+        let dir = root.join(bbox.cache_name());
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(map_fetch::LATEST_FILE), "generation = \"x\"\n").unwrap();
+        std::fs::create_dir_all(root.join("bbox_1_2_3_4")).unwrap();
+        std::fs::create_dir_all(root.join("other")).unwrap();
+        let found = cached_regions(&root);
+        assert_eq!(found.len(), 1);
+        assert!(
+            (found[0].south - bbox.south).abs() < 1e-6 && (found[0].east - bbox.east).abs() < 1e-6
+        );
+        // 받은 범위 안의 가운데는 캐시만, 밖은 새로 받기(1.5 km).
+        let inside = LatLon {
+            lat: 34.75,
+            lon: 127.75,
+        };
+        assert!(matches!(
+            region_to_load(inside, &found),
+            Ok((_, FetchPolicy::CacheOnly))
+        ));
+        let outside = LatLon {
+            lat: 37.5665,
+            lon: 126.978,
+        };
+        assert!(matches!(
+            region_to_load(outside, &found),
+            Ok((_, FetchPolicy::Refresh))
+        ));
+        assert!(
+            region_to_load(
+                LatLon {
+                    lat: 45.0,
+                    lon: 140.0
+                },
+                &found
+            )
+            .is_err()
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// 맞춤 보기: 범위 가운데로 옮기고 창에 들어오는 축척(여백 10 %)을 고른다.
+    #[test]
+    fn fit_view_centers_and_scales() {
+        let (center, scale) = fit_view(
+            Vec2::new(0.0, 0.0),
+            Vec2::new(1000.0, 500.0),
+            Vec2::new(1000.0, 1000.0),
+        );
+        assert_eq!(center, Vec2::new(500.0, 250.0));
+        assert!((scale - 1.1).abs() < 1e-5);
+        let (korea_min, korea_max) = tiles::view_rect(tiles::KOREA_VIEW);
+        let (_, scale) = fit_view(korea_min, korea_max, Vec2::new(1280.0, 720.0));
+        assert!(scale > 500.0 && scale <= SCALE_RANGE.1, "{scale}");
     }
 }
