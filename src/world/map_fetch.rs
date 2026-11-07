@@ -4,6 +4,9 @@
 //! 저장소가 추적하지 않는 캐시 폴더([`CACHE_DIR`])에 질의·받은 시각·`timestamp_osm_base`와 함께 저장하며,
 //! 코스는 저장된 스냅샷만으로 다시 만든다(오프라인 재현).
 //!
+//! 캐시 구조: `<CACHE_DIR>/<bbox 이름>/<세대>/{graph.osm.json, meta.toml}`과 최신 세대 포인터 `latest.toml`.
+//! 세대 폴더는 받을 때마다 새로 만들고 고치지 않으므로, 경로 파일이 세대 폴더의 원본을 가리키면 다시 받아도 바뀌지 않는다.
+//!
 //! - 요청 범위: bbox는 대한민국 근사 사각형([`route_plan::KOREA_LAT`]·[`route_plan::KOREA_LON`]) 안이어야 하고
 //!   한 변이 [`MAX_BBOX_SIDE_M`] 이하여야 한다. 응답은 [`MAX_RESPONSE_BYTES`] 이하여야 한다.
 //! - 요청: 응답 시간 제한, 동시 요청 1개([`FetchJob`]), 429/504 응답 시 대기 후 재시도, 개인 정보가 없는 일반
@@ -32,10 +35,12 @@ pub const MAX_BBOX_SIDE_M: f64 = 2000.0;
 pub const MAX_RESPONSE_BYTES: u64 = 20 * 1024 * 1024;
 /// 캐시 폴더(실행 폴더 기준). `.gitignore`의 `/cache/`로 저장소에서 뺀다.
 pub const CACHE_DIR: &str = "cache/maps";
-/// 캐시 폴더 안의 원본 응답 파일 이름.
+/// 세대 폴더 안의 원본 응답 파일 이름.
 pub const SNAPSHOT_FILE: &str = "graph.osm.json";
-/// 캐시 폴더 안의 받은 기록 파일 이름.
+/// 세대 폴더 안의 받은 기록 파일 이름.
 pub const META_FILE: &str = "meta.toml";
+/// bbox 폴더 안의 최신 세대 포인터 파일 이름.
+pub const LATEST_FILE: &str = "latest.toml";
 /// 재시도 대기 시간 상한(s). 서버가 더 긴 `Retry-After`를 보내도 이만큼만 기다린다.
 const MAX_RETRY_WAIT_S: u64 = 60;
 /// 지구 평균 반지름(m). [`super::map::project`]와 같은 값.
@@ -409,37 +414,81 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
     })
 }
 
-/// 스냅샷을 `cache_root/<bbox 이름>/`에 원본 응답과 받은 기록으로 저장하고 그 폴더를 돌려준다.
+/// 바이트열의 64비트 FNV-1a 해시. 세대 폴더 이름에서 내용을 구별하는 데만 쓴다(보안 용도 아님).
+fn fnv1a64(bytes: &[u8]) -> u64 {
+    bytes.iter().fold(0xcbf2_9ce4_8422_2325, |hash, &byte| {
+        (hash ^ u64::from(byte)).wrapping_mul(0x0000_0100_0000_01b3)
+    })
+}
+
+/// 스냅샷의 세대 이름: 받은 시각(UTC, 구분 기호 없음)과 원본 해시. 예: `20261107T004604Z-0123456789abcdef`.
+pub fn generation_name(snapshot: &Snapshot) -> String {
+    let time: String = snapshot
+        .meta
+        .fetched_at
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .collect();
+    format!("{time}-{:016x}", fnv1a64(&snapshot.body))
+}
+
+/// 최신 세대 포인터(`latest.toml`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Latest {
+    /// 최신 세대 폴더 이름.
+    generation: String,
+}
+
+/// 스냅샷을 새 세대 폴더 `cache_root/<bbox 이름>/<세대>/`에 원본 응답과 받은 기록으로 저장하고, 최신 포인터를
+/// 그 세대로 바꾼 뒤 세대 폴더를 돌려준다.
 ///
-/// 원본을 먼저 쓰고 기록을 나중에 쓴다. 기록이 있는 폴더만 캐시로 인정하므로 중간 실패는 캐시로 보이지 않는다.
+/// 이미 있는 세대 폴더는 고치지 않는다(경로 파일이 가리키는 원본이 바뀌지 않는다). 새 세대는 임시 폴더에 모두 쓰고
+/// 다시 읽어 검사한 뒤 폴더 이름을 바꿔 게시하고, 그다음에 포인터 파일을 바꿔 단다. 어느 단계에서 실패해도
+/// 기존 세대와 기존 포인터는 그대로 남는다.
 pub fn save_snapshot(cache_root: &Path, snapshot: &Snapshot) -> Result<PathBuf, String> {
-    let dir = cache_root.join(snapshot.meta.bbox.cache_name());
-    std::fs::create_dir_all(&dir)
-        .map_err(|error| format!("cannot create {}: {error}", dir.display()))?;
-    let meta = toml::to_string(&snapshot.meta)
-        .map_err(|error| format!("cannot write snapshot record: {error}"))?;
-    let _ = std::fs::remove_file(dir.join(META_FILE));
-    write_atomic(&dir.join(SNAPSHOT_FILE), &snapshot.body)?;
-    write_atomic(&dir.join(META_FILE), meta.as_bytes())?;
+    let bbox_dir = cache_root.join(snapshot.meta.bbox.cache_name());
+    std::fs::create_dir_all(&bbox_dir)
+        .map_err(|error| format!("cannot create {}: {error}", bbox_dir.display()))?;
+    let generation = generation_name(snapshot);
+    let dir = bbox_dir.join(&generation);
+    if !dir.exists() {
+        let meta = toml::to_string(&snapshot.meta)
+            .map_err(|error| format!("cannot write snapshot record: {error}"))?;
+        let staging = bbox_dir.join(format!(".partial-{generation}"));
+        let _ = std::fs::remove_dir_all(&staging);
+        let staged = std::fs::create_dir(&staging)
+            .map_err(|error| format!("cannot create {}: {error}", staging.display()))
+            .and_then(|()| write_atomic(&staging.join(SNAPSHOT_FILE), &snapshot.body))
+            .and_then(|()| write_atomic(&staging.join(META_FILE), meta.as_bytes()))
+            .and_then(|()| load_generation(&staging, &snapshot.meta.bbox).map(|_| ()))
+            .and_then(|()| {
+                std::fs::rename(&staging, &dir)
+                    .map_err(|error| format!("cannot publish {}: {error}", dir.display()))
+            });
+        if let Err(error) = staged {
+            let _ = std::fs::remove_dir_all(&staging);
+            return Err(error);
+        }
+    }
+    let pointer = toml::to_string(&Latest { generation })
+        .map_err(|error| format!("cannot write cache pointer: {error}"))?;
+    write_atomic(&bbox_dir.join(LATEST_FILE), pointer.as_bytes())?;
     Ok(dir)
 }
 
-/// 캐시에 저장된 스냅샷.
+/// 캐시에 저장된 스냅샷(세대 하나).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Cached {
-    /// 캐시 폴더.
+    /// 세대 폴더. 경로 파일은 이 폴더의 [`SNAPSHOT_FILE`]을 가리키면 이후 받기와 무관하게 같은 원본을 쓴다.
     pub dir: PathBuf,
     /// 받은 기록.
     pub meta: SnapshotMeta,
 }
 
-/// `cache_root`에서 bbox의 캐시를 찾는다. 없으면 `Ok(None)`, 있는데 기록·원본이 맞지 않으면 `Err`다.
-pub fn load_cached(cache_root: &Path, bbox: &Bbox) -> Result<Option<Cached>, String> {
-    let dir = cache_root.join(bbox.cache_name());
+/// 세대 폴더 하나를 읽고 기록·원본이 맞는지(bbox, 바이트 수, 응답 검사) 확인한다.
+pub fn load_generation(dir: &Path, bbox: &Bbox) -> Result<Cached, String> {
     let meta_path = dir.join(META_FILE);
-    if !meta_path.exists() {
-        return Ok(None);
-    }
     let text = std::fs::read_to_string(&meta_path)
         .map_err(|error| format!("cannot read {}: {error}", meta_path.display()))?;
     let meta: SnapshotMeta = toml::from_str(&text)
@@ -462,7 +511,35 @@ pub fn load_cached(cache_root: &Path, bbox: &Bbox) -> Result<Option<Cached>, Str
         ));
     }
     check_response(&body)?;
-    Ok(Some(Cached { dir, meta }))
+    Ok(Cached {
+        dir: dir.to_path_buf(),
+        meta,
+    })
+}
+
+/// `cache_root`에서 bbox의 최신 세대를 찾는다. 포인터가 없으면 `Ok(None)`, 있는데 세대가 맞지 않으면 `Err`다.
+pub fn load_cached(cache_root: &Path, bbox: &Bbox) -> Result<Option<Cached>, String> {
+    let bbox_dir = cache_root.join(bbox.cache_name());
+    let pointer_path = bbox_dir.join(LATEST_FILE);
+    if !pointer_path.exists() {
+        return Ok(None);
+    }
+    let text = std::fs::read_to_string(&pointer_path)
+        .map_err(|error| format!("cannot read {}: {error}", pointer_path.display()))?;
+    let latest: Latest = toml::from_str(&text)
+        .map_err(|error| format!("invalid {}: {error}", pointer_path.display()))?;
+    if latest.generation.is_empty()
+        || !latest
+            .generation
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-')
+    {
+        return Err(format!(
+            "{} names an invalid generation",
+            pointer_path.display()
+        ));
+    }
+    load_generation(&bbox_dir.join(&latest.generation), bbox).map(Some)
 }
 
 /// 스냅샷을 구하는 방법.
@@ -486,6 +563,8 @@ pub struct Obtained {
 }
 
 /// 정책에 따라 bbox 스냅샷을 구한다. 캐시도 없고 받기도 실패하면 오류다.
+///
+/// 받기·저장에 실패하면 디스크의 캐시를 **다시 읽어** 온전할 때만 경고와 함께 쓴다.
 pub fn obtain_snapshot(
     cache_root: &Path,
     bbox: &Bbox,
@@ -495,9 +574,8 @@ pub fn obtain_snapshot(
     sleep: &dyn Fn(Duration),
 ) -> Result<Obtained, String> {
     bbox.validate()?;
-    let cached = load_cached(cache_root, bbox);
     if policy == FetchPolicy::CacheOnly {
-        return match cached? {
+        return match load_cached(cache_root, bbox)? {
             Some(cached) => Ok(Obtained {
                 cached,
                 downloaded: false,
@@ -512,19 +590,21 @@ pub fn obtain_snapshot(
     match fetch_snapshot(bbox, settings, transport, sleep)
         .and_then(|snapshot| save_snapshot(cache_root, &snapshot))
     {
-        Ok(_) => Ok(Obtained {
-            cached: load_cached(cache_root, bbox)?
-                .ok_or("the saved map snapshot could not be read back")?,
+        Ok(dir) => Ok(Obtained {
+            cached: load_generation(&dir, bbox)?,
             downloaded: true,
             warning: None,
         }),
-        Err(error) => match cached {
+        Err(error) => match load_cached(cache_root, bbox) {
             Ok(Some(cached)) => Ok(Obtained {
                 cached,
                 downloaded: false,
                 warning: Some(format!("{error}; using the cached snapshot")),
             }),
-            _ => Err(error),
+            Ok(None) => Err(error),
+            Err(cache_error) => Err(format!(
+                "{error}; the cached snapshot is also unusable: {cache_error}"
+            )),
         },
     }
 }
@@ -924,9 +1004,91 @@ mod tests {
         let reused = obtain_snapshot(&root, &bbox, cache_only, &settings, &never, &sleep).unwrap();
         assert_eq!(reused.cached, fresh.cached);
         assert!(never.queries.borrow().is_empty());
-        // 원본이 바뀐(잘린) 캐시는 거부한다.
+        // 원본이 바뀐(잘린) 캐시는 거부하고, 받기도 실패하면 두 이유를 함께 알린다.
         std::fs::write(fresh.cached.dir.join(SNAPSHOT_FILE), b"{}").unwrap();
         assert!(load_cached(&root, &bbox).is_err());
+        let failing = Scripted::new(vec![Err("map download timed out".to_owned())]);
+        let error =
+            obtain_snapshot(&root, &bbox, refresh, &settings, &failing, &sleep).unwrap_err();
+        assert!(error.contains("also unusable"), "{error}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// 고정 시각·본문으로 스냅샷을 만든다.
+    fn snapshot_at(fetched_at: &str, body: Vec<u8>) -> Snapshot {
+        Snapshot {
+            meta: SnapshotMeta {
+                bbox: Bbox::parse(YEOSU).unwrap(),
+                query: Bbox::parse(YEOSU).unwrap().query(90),
+                endpoint: OVERPASS_ENDPOINT.to_owned(),
+                user_agent: USER_AGENT.to_owned(),
+                fetched_at: fetched_at.to_owned(),
+                timestamp_osm_base: "2026-11-06T07:02:21Z".to_owned(),
+                bytes: body.len() as u64,
+            },
+            body,
+        }
+    }
+
+    /// 같은 bbox를 다시 받아도 이전 세대의 원본·기록이 바이트 그대로 남고 포인터만 새 세대로 바뀌며,
+    /// 저장 중 실패하면 기존 세대와 포인터가 온전하게 남는다(Codex 4-4 검토 P2 두 건의 회귀).
+    #[test]
+    fn refresh_keeps_old_generations_and_survives_failed_saves() {
+        let root = temp_cache("generations");
+        let bbox = Bbox::parse(YEOSU).unwrap();
+        let first = snapshot_at("2026-11-07T00:00:00Z", real_body());
+        let first_dir = save_snapshot(&root, &first).unwrap();
+        let first_meta = std::fs::read(first_dir.join(META_FILE)).unwrap();
+        let mut changed = real_body();
+        changed.push(b' ');
+        let second = snapshot_at("2026-11-07T01:00:00Z", changed.clone());
+        let second_dir = save_snapshot(&root, &second).unwrap();
+        assert_ne!(first_dir, second_dir);
+        assert_eq!(
+            std::fs::read(first_dir.join(SNAPSHOT_FILE)).unwrap(),
+            real_body()
+        );
+        assert_eq!(
+            std::fs::read(first_dir.join(META_FILE)).unwrap(),
+            first_meta
+        );
+        assert_eq!(
+            std::fs::read(second_dir.join(SNAPSHOT_FILE)).unwrap(),
+            changed
+        );
+        assert_eq!(load_cached(&root, &bbox).unwrap().unwrap().dir, second_dir);
+        assert!(load_generation(&first_dir, &bbox).is_ok());
+        // 같은 세대를 다시 저장하면 폴더를 고치지 않고 포인터만 맞춘다.
+        assert_eq!(save_snapshot(&root, &first).unwrap(), first_dir);
+        assert_eq!(load_cached(&root, &bbox).unwrap().unwrap().dir, first_dir);
+        // 새 세대가 저장 후 검사에 실패하면(빈 원본) 게시하지 않고 임시 폴더를 지우며, 기존 캐시는 그대로다.
+        let third = snapshot_at("2026-11-07T02:00:00Z", Vec::new());
+        let error = save_snapshot(&root, &third).unwrap_err();
+        assert!(error.contains("not Overpass JSON"), "{error}");
+        let bbox_dir = root.join(bbox.cache_name());
+        assert!(
+            !bbox_dir
+                .join(format!(".partial-{}", generation_name(&third)))
+                .exists()
+        );
+        assert!(!bbox_dir.join(generation_name(&third)).exists());
+        assert_eq!(load_cached(&root, &bbox).unwrap().unwrap().dir, first_dir);
+        // 포인터 바꾸기 실패: 기존 포인터·세대는 그대로이고, 받기 실패로 보고 이전 캐시를 경고와 함께 쓴다.
+        std::fs::create_dir_all(root.join(bbox.cache_name()).join("latest.partial")).unwrap();
+        let transport = Scripted::new(vec![reply(200, None, changed)]);
+        let obtained = obtain_snapshot(
+            &root,
+            &bbox,
+            FetchPolicy::Refresh,
+            &FetchSettings::default(),
+            &transport,
+            &|_| {},
+        )
+        .unwrap();
+        assert!(!obtained.downloaded);
+        assert!(obtained.warning.unwrap().contains("cached"));
+        assert_eq!(obtained.cached.dir, first_dir);
+        assert!(load_generation(&first_dir, &bbox).is_ok());
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -1008,7 +1170,14 @@ mod tests {
         }
         let reused = again.unwrap().wait().unwrap();
         assert!(!reused.downloaded);
-        assert!(reused.cached.dir.ends_with(bbox.cache_name()));
+        assert!(
+            reused
+                .cached
+                .dir
+                .parent()
+                .unwrap()
+                .ends_with(bbox.cache_name())
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 
