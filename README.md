@@ -47,7 +47,7 @@ HUD 아래쪽에는 차량 파라미터 보정용 회전반경·예상 정지거
 | --- | --- |
 | `training` | 폭 6 m 직선 차로(z=+6 ~ -66), 양옆 연석(충돌 경계), 가장자리 흰 선(표시만), 정지선 z=-20, 차로 오른쪽 고정 장애물 z=-32, 좁은 통로 z=-42 ~ -54(폭 3.0 m = 차체 폭 1.8 m + 양옆 0.6 m), 앞·뒤 끝 벽 |
 | `calibration` | Phase 2-5에서 쓰던 넓은 평지와 장애물 4개(회전반경·제동 시험용) |
-| `map:<선택 파일>` | OSM 중심선에서 만든 지도 코스. 여수 가상 교육 코스는 `map:assets/maps/yeosu-expo/course.toml`(way 532526349, 약 292 m, 임시 폭 4 m; 실제 운행 경로 아님). 형식과 제약은 `docs/map-data.md` 참고. 읽지 못하면 경고 후 `training`으로 실행 |
+| `map:<선택 파일>` | OSM 중심선에서 만든 지도 코스. 여수 가상 교육 코스는 `map:assets/maps/yeosu-expo/course.toml`(way 532526349, 약 292 m, 임시 폭 4 m; 실제 운행 경로 아님). 굽은 길 확인용은 `map:assets/maps/yeosu-expo/curved-course.toml`(way 529495041, 약 321 m). 교차로를 지나는 경로 파일 예제는 `map:assets/maps/yeosu-expo/route-junctions.toml`(Phase 4-3, 교차로 4곳, 임시 폭 4 m). 형식과 제약은 `docs/map-data.md` 참고. 읽지 못하면 경고 후 `training`으로 실행 |
 
 - 화면 상자와 충돌 판정은 `src/world/course.rs`의 같은 정의에서 만들어서 어긋나지 않습니다. 흰 선은 시각 표시일 뿐이고 실제 경계는 연석입니다.
 - 시작 위치 복귀(`R`)는 선택한 코스의 시작 자세로 되돌립니다.
@@ -180,6 +180,71 @@ cargo run --locked --release
 기본 실행에는 Rapier 플러그인을 등록하지 않습니다.
 게임패드 입력은 Bevy의 게임패드 API를 사용합니다. `3d`/`ui` 기능에 포함된 `default_platform`이 `bevy_gilrs`를 켜므로
 별도의 기능 설정이나 gilrs 직접 의존성은 없습니다.
+`ureq`(=3.5.1)는 Phase 4-4 지도 받기용 HTTP 클라이언트입니다. 기본 기능(rustls + ring 암호, webpki 루트 인증서, gzip)을
+쓰며, cmake·NASM이 필요한 aws-lc-rs는 쓰지 않습니다. ring은 `cc`로 C/어셈블리를 빌드하는데, `cc`는 이미
+Bevy 의존성(blake3)이 쓰고 있어 새 빌드 도구가 필요하지 않습니다.
+
+### 메인 화면 (Phase 4-5a)
+
+인자 없이 `cargo run --locked`로 실행하면 메인 화면에서 시작합니다. 개발 코스(training·calibration) 주행, 저장된 경로
+파일(`cache/routes/`, 최근 8개) 주행, 맵 생성하기(전국 지도 경로 선택), 종료를 고릅니다. 주행·경로 선택 화면에서
+`Esc`를 3초 안에 두 번 누르면 메인 화면으로 돌아옵니다. 다시 주행하면 차량 상태·위치·기록·시점이 처음으로 돌아갑니다.
+`--course`, `--pick-route`, `--smoke-test`, `--capture-views`를 주면 메인 화면을 건너뜁니다.
+
+### 경로 선택 화면 (Phase 4-5, 4-5b 전국 배경 지도)
+
+메인 화면의 "Create map route" 또는 `--pick-route`로 들어갑니다. 배경에 OSM 표준 지도 타일을 깔고(화면에 보이는 타일만
+받고 `cache/tiles/`에 캐시), 받은 도로 그래프를 그 위에 선으로 그립니다. 타일은 보기 전용이며 코스는 받은 도로 자료로만
+만듭니다. 타일을 받지 못하면 회색으로 비워 두고 나머지 기능은 그대로 됩니다. 출처 표기는 오른쪽 아래에 늘 보입니다.
+`--smoke-test`·`--capture-views` 실행에서는 타일을 받지 않습니다(OSM 타일 정책).
+
+| 조작 | 입력 |
+| --- | --- |
+| 화면 이동 / 확대·축소 | 왼쪽 끌기 / 휠 |
+| 이 지역 도로 받기(화면 가운데 1.5 km, 이미 받은 노란 테두리 안이면 캐시만) | `L` 또는 버튼 |
+| 맞춤 보기: 전국 / 받은 지역 / 경로 | `K` / `G` / `F` 또는 버튼 |
+| 점 추가(시작 → 경유 → 끝) | 왼쪽 클릭(도로를 받은 뒤) |
+| 점 지우기 | 오른쪽 클릭(가까운 점), `Backspace`(마지막 점), `C`(모두) |
+| 주행 시작 | `Enter` 또는 버튼 |
+| 메인 화면 | `Esc` 두 번 |
+
+경로 탐색에 쓰는 도로는 진한 파랑, 그 밖은 회색입니다. 화면에는 경로 길이, 교차로 수, 폭과 그 출처, 경고가 표시됩니다.
+경고는 임시 폭, 3 m 미만의 좁은 폭, 돌 수 없는 꺾임, 거부된 교차로 등입니다. 주행을 시작하면 경로 파일을
+`cache/routes/route-<UTC 시각>.toml`에 저장하고 그 코스로 주행합니다. 저장한 파일은 메인 화면이나
+`--course map:cache/routes/<파일>`로 다시 열 수 있고, 같은 코스가 나옵니다.
+`--pick-route`의 지역은 `yeosu`(저장된 여수 스냅샷), 스냅샷 파일 경로, `latlon:<위도>,<경도>`(주변 1.5 km를 Overpass에서
+받기) 중 하나입니다. 장소 이름 검색은 없습니다.
+
+```powershell
+cargo run --locked -- --pick-route yeosu
+```
+
+`--pick-points "34.75264,127.74712;34.74972,127.74816"`로 점을 미리 찍어 둘 수 있습니다. `--auto-start`를 함께 주면
+지도를 불러오는 대로 주행을 시작합니다. 이 옵션은 화면 전환 자동 검증용입니다.
+
+### 지도 받기 (Phase 4-4, 개발용)
+
+사용자가 요청할 때만 Overpass API에서 bbox(남,서,북,동) 안의 도로를 받아 `cache/maps/`에 저장합니다.
+`cache/`는 저장소에서 제외합니다. 창은 열리지 않습니다. 대한민국 범위 밖이거나 한 변이 2 km를 넘거나
+응답이 20 MB를 넘으면 오류로 끝납니다. `--offline`을 주면 네트워크를 쓰지 않고 캐시만 확인합니다.
+
+```powershell
+cargo run --locked -- --fetch-map 34.7480,127.7460,34.7590,127.7600
+cargo run --locked -- --fetch-map 34.7480,127.7460,34.7590,127.7600 --offline
+```
+
+### Geofabrik 지역 추출 (Phase 4-5G G-1, 개발용)
+
+로컬에 있는 Geofabrik `.osm.pbf`에서 bbox(남,서,북,동) 주변 도로만 잘라 `cache/extracts/`에 저장합니다.
+네트워크를 쓰지 않고 창도 열리지 않습니다. 전국 파일이면 허용 도로 전체를 메모리에 올리므로 시간이 걸립니다.
+결과 폴더의 `graph.osm.json`은 `--pick-route <파일>`로 열 수 있고, 경계에서 연결이 끊긴 도로를 지나는 경로는 거부됩니다.
+자세한 규칙은 `docs/map-data.md`의 "Geofabrik 지역 추출"을 참고하세요.
+
+```powershell
+cargo run --locked -- --extract-pbf <south-korea.osm.pbf> --bbox 34.7480,127.7460,34.7590,127.7600
+cargo run --locked -- --audit-extract <세대 폴더> --pbf <south-korea.osm.pbf>
+cargo run --locked -- --compare-overpass assets/maps/yeosu-expo/graph-2026-11-06.osm.json --extract <세대 폴더> --pbf <south-korea.osm.pbf>
+```
 
 창과 렌더러를 자동 실행하고 약 5초 후 종료하려면 다음 명령을 사용합니다.
 이 검증은 GPU 초기화와 실행 오류 확인용이며 화면의 시각적 검수를 대체하지 않습니다.

@@ -48,7 +48,11 @@ impl Plugin for CameraPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<CameraSettings>()
             .init_resource::<ActiveView>()
-            .add_systems(Startup, spawn_operator_camera)
+            .add_systems(Startup, spawn_operator_camera.run_if(crate::no_app_state))
+            .add_systems(
+                OnEnter(crate::AppMode::Driving),
+                spawn_operator_camera.in_set(crate::SessionSet::Spawn),
+            )
             .add_systems(
                 Update,
                 (select_view, sync_operator_camera)
@@ -66,6 +70,7 @@ fn spawn_operator_camera(
 ) {
     let view = &settings.0;
     commands.spawn((
+        crate::driving_scope(),
         Camera3d::default(),
         Projection::from(PerspectiveProjection {
             fov: view.vertical_fov_deg.to_radians(),

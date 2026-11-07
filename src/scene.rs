@@ -42,7 +42,11 @@ pub struct ScenePlugin;
 impl Plugin for ScenePlugin {
     /// 장면 생성(시작 시)과 매 프레임 차량 도형 갱신 시스템을 등록한다.
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, setup_scene)
+        app.add_systems(Startup, setup_scene.run_if(crate::no_app_state))
+            .add_systems(
+                OnEnter(crate::AppMode::Driving),
+                setup_scene.in_set(crate::SessionSet::Spawn),
+            )
             .add_systems(Update, sync_vehicle_body.in_set(SimSet::Display));
     }
 }
@@ -56,6 +60,7 @@ fn setup_scene(
 ) {
     let (ground_center, ground_size) = ground_square(&course.0);
     commands.spawn((
+        crate::driving_scope(),
         Mesh3d(meshes.add(Plane3d::default().mesh().size(ground_size, ground_size))),
         MeshMaterial3d(materials.add(Color::srgb(0.25, 0.30, 0.30))),
         Transform::from_xyz(ground_center.x, 0.0, ground_center.y),
@@ -72,7 +77,12 @@ fn setup_scene(
     let body = meshes.add(Cuboid::from_size(BODY_SIZE_M));
     let front_marker = meshes.add(Cuboid::new(BODY_SIZE_M.x * 0.8, 0.3, 0.3));
     commands
-        .spawn((Transform::default(), Visibility::default(), VehicleBody))
+        .spawn((
+            Transform::default(),
+            Visibility::default(),
+            VehicleBody,
+            crate::driving_scope(),
+        ))
         .with_children(|parent| {
             parent.spawn((
                 Mesh3d(body),
@@ -96,12 +106,14 @@ fn setup_scene(
 
     // 1인칭(기본 레이어)과 외부 디버그(외관 레이어) 카메라 모두에서 같은 조명을 쓴다.
     commands.spawn((
+        crate::driving_scope(),
         DirectionalLight::default(),
         Transform::from_xyz(4.0, 8.0, 4.0).looking_at(Vec3::ZERO, Vec3::Y),
         RenderLayers::from_layers(&[0, EXTERIOR_LAYER]),
     ));
     // 반대쪽 약한 보조광: 주광과 반대 방향을 보는 실내 면이 완전히 검게 보이지 않게 한다.
     commands.spawn((
+        crate::driving_scope(),
         DirectionalLight {
             illuminance: FILL_LIGHT_LUX,
             ..default()
@@ -136,11 +148,13 @@ fn spawn_grid(
         let z_material = if iz == 0 { &axis } else { &line };
         let x_material = if ix == 0 { &axis } else { &line };
         commands.spawn((
+            crate::driving_scope(),
             Mesh3d(along_x.clone()),
             MeshMaterial3d(z_material.clone()),
             Transform::from_xyz(center.x, 0.005, iz as f32 * GRID_SPACING_M),
         ));
         commands.spawn((
+            crate::driving_scope(),
             Mesh3d(along_z.clone()),
             MeshMaterial3d(x_material.clone()),
             Transform::from_xyz(ix as f32 * GRID_SPACING_M, 0.005, center.y),
@@ -150,7 +164,7 @@ fn spawn_grid(
 
 /// 코스 전체와 시작 위치를 덮는 정사각형 바닥의 (중심, 한 변 길이)를 구한다.
 ///
-/// 각 영역은 중심에서 반 크기 대각선까지의 원으로 넉넉히 감싼다. 둘레에 [`GROUND_MARGIN_M`]을 더하고,
+/// 각 영역은 중심에서 반 크기 대각선까지의 원으로 넉넉히 감싸고, 굽은 길 띠는 경계선 점을 모두 넣는다. 둘레에 [`GROUND_MARGIN_M`]을 더하고,
 /// 한 변은 [`GROUND_SIZE_M`] 이상이며 중심은 격자 간격의 정수배로 맞춘다.
 pub fn ground_square(course: &CourseDef) -> (Vec2, f32) {
     let start = Vec2::new(course.start.x_m, course.start.z_m);
@@ -164,6 +178,15 @@ pub fn ground_square(course: &CourseDef) -> (Vec2, f32) {
         let reach = rect.half_size.length();
         low = low.min(rect.center - Vec2::splat(reach));
         high = high.max(rect.center + Vec2::splat(reach));
+    }
+    for point in course
+        .strips
+        .iter()
+        .flat_map(|strip| strip.left.iter().chain(&strip.right))
+        .chain(course.areas.iter().flat_map(|area| area.boundary.iter()))
+    {
+        low = low.min(*point);
+        high = high.max(*point);
     }
     let center = ((low + high) / 2.0 / GRID_SPACING_M).round() * GRID_SPACING_M;
     let half = (high - center).max(center - low).max_element() + GROUND_MARGIN_M;

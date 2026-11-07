@@ -3,10 +3,13 @@ use std::path::{Path, PathBuf};
 use bevy::render::view::screenshot::{Capturing, Screenshot, save_to_disk};
 use bevy::{app::AppExit, prelude::*};
 use self_driving_sim::{
+    AppMode, VehicleTemplate,
     calibration::CalibrationPlugin,
     camera::{ActiveView, CameraPlugin, ViewDirection},
     config, configure_sim_sets,
     input::InputPlugin,
+    menu::MenuPlugin,
+    picker::{PickerPlugin, PickerSource, tiles::TileSettings},
     scene::ScenePlugin,
     training::TrainingPlugin,
     ui::{HudPlugin, hud::VehicleHud},
@@ -32,6 +35,14 @@ pub struct RunOptions {
     pub window: Option<(u32, u32)>,
     /// 주행 코스.
     pub course: CourseSelection,
+    /// 경로 선택 화면으로 시작할 지역. 있으면 [`AppMode::RoutePicking`]으로 시작한다.
+    pub pick_route: Option<PickerSource>,
+    /// 경로 선택 화면에 미리 찍어 둘 점 [위도, 경도].
+    pub pick_points: Vec<[f64; 2]>,
+    /// 경로 선택 화면에서 지도를 불러오면 곧바로 주행을 시작한다(자동 검증용).
+    pub auto_start: bool,
+    /// 메인 화면에서 시작한다(코스·경로 선택·자동 검증 인자가 없을 때).
+    pub main_menu: bool,
 }
 
 /// `"1498x700"` 형식의 창 크기를 읽는다. 0이나 형식 오류는 `None`.
@@ -69,21 +80,45 @@ pub fn run(options: RunOptions) -> AppExit {
     configure_sim_sets(&mut app);
     app.insert_resource(VehicleMotion(course.start))
         .insert_resource(ActiveCourse(course));
-    app.insert_resource(Vehicle(VehicleState::new(
+    let vehicle = Vehicle(VehicleState::new(
         vehicle_config.state_machine.stop_threshold_mps,
-    )))
-    .insert_resource(VehicleDynamics(vehicle_config.dynamics))
-    .insert_resource(key_bindings)
-    .insert_resource(gamepad_bindings)
-    .insert_resource(camera_settings)
-    .add_plugins((
-        InputPlugin,
-        VehiclePlugin,
-        TrainingPlugin,
-        CalibrationPlugin,
-        ScenePlugin,
-        CameraPlugin,
-        HudPlugin,
+    ));
+    app.insert_resource(VehicleTemplate(vehicle.clone()))
+        .insert_resource(vehicle)
+        .insert_resource(VehicleDynamics(vehicle_config.dynamics))
+        .insert_resource(key_bindings)
+        .insert_resource(gamepad_bindings)
+        .insert_resource(camera_settings)
+        .add_plugins((
+            InputPlugin,
+            VehiclePlugin,
+            TrainingPlugin,
+            CalibrationPlugin,
+            ScenePlugin,
+            CameraPlugin,
+            HudPlugin,
+        ));
+    // 자동 검증(창 확인·캡처)에서는 배경 타일을 받지 않는다(OSM 타일 정책: 자동 요청 금지).
+    let automated = options.smoke_test || options.capture_dir.is_some();
+    let start = if options.pick_route.is_some() {
+        info!("starting in the route picker");
+        AppMode::RoutePicking
+    } else if options.main_menu {
+        AppMode::MainMenu
+    } else {
+        AppMode::Driving
+    };
+    app.insert_state(start).add_plugins((
+        MenuPlugin,
+        PickerPlugin {
+            source: options.pick_route,
+            preset_points: options.pick_points,
+            auto_start: options.auto_start,
+            tiles: TileSettings {
+                network: !automated,
+                ..TileSettings::default()
+            },
+        },
     ));
 
     if options.smoke_test {

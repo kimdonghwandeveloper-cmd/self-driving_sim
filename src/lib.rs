@@ -4,6 +4,8 @@ pub mod calibration;
 pub mod camera;
 pub mod config;
 pub mod input;
+pub mod menu;
+pub mod picker;
 pub mod scene;
 pub mod training;
 pub mod ui;
@@ -25,14 +27,138 @@ pub enum SimSet {
     Display,
 }
 
-/// [`SimSet`] 실행 위치와 순서를 앱에 설정한다.
+/// 앱 상태(Phase 4-5, 4-5a). 인자 없이 실행하면 [`AppMode::MainMenu`]에서 시작한다. 메뉴의 "맵 생성하기"는
+/// [`AppMode::RoutePicking`], 코스·저장 경로 선택은 [`AppMode::Driving`]으로 간다. 기본값은 주행이며,
+/// 명령줄로 코스·자동 검증을 정하면 처음부터 주행 상태다.
+#[derive(States, Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum AppMode {
+    /// 메인 화면(메뉴).
+    MainMenu,
+    /// 경로 선택 화면.
+    RoutePicking,
+    /// 주행(기존 시뮬레이터 화면).
+    #[default]
+    Driving,
+}
+
+/// 주행용 시스템을 돌릴지 판정한다. 주행 상태이거나, 앱 상태가 아예 없으면(창 없는 시험 앱) 참이다.
+pub fn driving_active(mode: Option<Res<State<AppMode>>>) -> bool {
+    mode.is_none_or(|mode| *mode.get() == AppMode::Driving)
+}
+
+/// 앱 상태가 아예 없는지(창 없는 시험 앱). 이때는 주행 화면을 `Startup`에서 한 번 만든다.
+pub fn no_app_state(mode: Option<Res<State<AppMode>>>) -> bool {
+    mode.is_none()
+}
+
+/// 주행 화면 엔티티의 수명 표시. 주행 상태를 나가면(메뉴로 복귀) 지운다. 앱 상태가 없으면 아무 일도 하지 않는다.
+pub fn driving_scope() -> DespawnOnExit<AppMode> {
+    DespawnOnExit(AppMode::Driving)
+}
+
+/// 주행 상태에 들어갈 때의 순서: 이전 주행 상태 초기화 → 주행 화면 만들기.
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SessionSet {
+    /// [`reset_driving_session`].
+    Reset,
+    /// 장면·카메라·HUD 만들기.
+    Spawn,
+}
+
+/// 앱 시작 때의 차량 상태(시동 꺼짐, 설정의 정지 판정값). 주행에 들어갈 때마다 이 값으로 되돌린다.
+#[derive(Resource, Debug, Clone)]
+pub struct VehicleTemplate(pub vehicle::Vehicle);
+
+/// 이번 주행을 시작한 고정 주기 시각(s). 교육 기록 시각은 여기서부터 잰다(앱 시작 후 경과 시간과 구분).
+#[derive(Resource, Debug, Clone, Copy, Default, PartialEq)]
+pub struct SessionClock {
+    /// 주행 시작 시각(`Time<Fixed>` 경과, s).
+    pub started_s: f32,
+}
+
+/// 주행 상태에 들어갈 때 이전 주행의 상태를 지운다(4-5a, Codex 검토 목록).
+///
+/// - 차량 상태([`VehicleTemplate`])·위치(코스 시작 자세)·운전 입력·장치 입력 프레임·처리 결과·접촉·교육 기록·
+///   보정 기록·시점을 처음 값으로 되돌린다.
+/// - 처리하지 않은 메시지(제어 요청, 코스 복귀 요청·완료, 충돌)를 비운다.
+/// - 키·마우스 눌림 상태를 비워, 전환 때 누른 Enter·Esc·버튼이 주행 입력으로 넘어가지 않게 한다.
+/// - 입력 바인딩·차량 설정·게임패드 연결 상태(사용자 설정·장치 상태)는 그대로 둔다.
+/// - 교육 시각의 기준을 지금으로 옮긴다([`SessionClock`]).
+pub fn reset_driving_session(world: &mut World) {
+    use crate::calibration::CalibrationLog;
+    use crate::calibration::ResetCourseRequest;
+    use crate::camera::ActiveView;
+    use crate::input::{ControlRequest, DriverInput, merge::DeviceFrames};
+    use crate::training::TrainingLog;
+    use crate::vehicle::controller::ControlFeedback;
+    use crate::vehicle::{CollisionEvent, VehicleContact, VehicleMotion};
+    use bevy::ecs::message::Messages;
+
+    if let Some(template) = world.get_resource::<VehicleTemplate>().cloned() {
+        world.insert_resource(template.0);
+    }
+    if let Some(course) = world.get_resource::<crate::world::ActiveCourse>() {
+        let start = course.0.start;
+        world.insert_resource(VehicleMotion(start));
+    }
+    world.insert_resource(DriverInput::default());
+    world.insert_resource(DeviceFrames::default());
+    world.insert_resource(ControlFeedback::default());
+    world.insert_resource(VehicleContact::default());
+    world.insert_resource(TrainingLog::default());
+    world.insert_resource(CalibrationLog::default());
+    world.insert_resource(ActiveView::default());
+    if let Some(mut messages) = world.get_resource_mut::<Messages<ControlRequest>>() {
+        messages.clear();
+    }
+    if let Some(mut messages) = world.get_resource_mut::<Messages<ResetCourseRequest>>() {
+        messages.clear();
+    }
+    if let Some(mut messages) =
+        world.get_resource_mut::<Messages<crate::calibration::CourseResetDone>>()
+    {
+        messages.clear();
+    }
+    if let Some(mut messages) = world.get_resource_mut::<Messages<CollisionEvent>>() {
+        messages.clear();
+    }
+    clear_pressed_buttons(world);
+    let started_s = world
+        .get_resource::<Time<Fixed>>()
+        .map_or(0.0, |time| time.elapsed_secs());
+    world.insert_resource(SessionClock { started_s });
+}
+
+/// 키·마우스 눌림 상태를 비운다. 화면을 바꿀 때 눌린 키가 다음 화면의 입력으로 넘어가지 않게 한다.
+pub fn clear_pressed_buttons(world: &mut World) {
+    if let Some(mut keys) = world.get_resource_mut::<ButtonInput<KeyCode>>() {
+        keys.reset_all();
+    }
+    if let Some(mut buttons) = world.get_resource_mut::<ButtonInput<MouseButton>>() {
+        buttons.reset_all();
+    }
+}
+
+/// [`SimSet`] 실행 위치와 순서를 앱에 설정한다. 세 묶음 모두 [`driving_active`]일 때만 돈다.
+/// 주행 상태에 들어갈 때 [`SessionSet`] 순서로 초기화한 뒤 화면을 만든다.
 pub fn configure_sim_sets(app: &mut App) {
+    app.configure_sets(
+        OnEnter(AppMode::Driving),
+        (SessionSet::Reset, SessionSet::Spawn).chain(),
+    )
+    .add_systems(
+        OnEnter(AppMode::Driving),
+        reset_driving_session.in_set(SessionSet::Reset),
+    );
     app.configure_sets(
         RunFixedMainLoop,
         (SimSet::Input, SimSet::Control)
             .chain()
             .in_set(RunFixedMainLoopSystems::BeforeFixedMainLoop),
-    );
+    )
+    .configure_sets(RunFixedMainLoop, SimSet::Input.run_if(driving_active))
+    .configure_sets(RunFixedMainLoop, SimSet::Control.run_if(driving_active))
+    .configure_sets(Update, SimSet::Display.run_if(driving_active));
 }
 
 #[cfg(test)]
@@ -541,6 +667,103 @@ mod tests {
             app.world().resource::<Vehicle>().0.engine(),
             EngineState::Ready
         );
+    }
+
+    /// 경로 선택 상태에서는 주행 입력·운동 계산이 돌지 않고, 주행 상태로 넘어가면 같은 키가 적용되는지 확인한다
+    /// (Phase 4-5 앱 상태).
+    #[test]
+    fn route_picking_pauses_driving_systems() {
+        let mut app = headless_app();
+        app.add_plugins(bevy::state::app::StatesPlugin)
+            .insert_state(AppMode::RoutePicking);
+        app.update();
+        update_with_keys(&mut app, &[KeyCode::Enter]);
+        update_with_keys(&mut app, &[]);
+        assert_eq!(
+            app.world().resource::<Vehicle>().0.engine(),
+            EngineState::Off
+        );
+        app.world_mut()
+            .resource_mut::<NextState<AppMode>>()
+            .set(AppMode::Driving);
+        app.update();
+        update_with_keys(&mut app, &[KeyCode::Enter]);
+        assert_eq!(
+            app.world().resource::<Vehicle>().0.engine(),
+            EngineState::Ready
+        );
+    }
+
+    /// 주행 → 메인 화면 → 주행을 3번 반복해도 이전 주행의 차량 상태·위치·기록·시점·메시지·눌린 키·주행 화면
+    /// 엔티티가 남지 않는지 확인한다(4-5a 회귀). 키를 누른 채 메뉴로 나가는 경우와 충돌 뒤 나가는 경우를 포함한다.
+    #[test]
+    fn returning_to_menu_resets_driving_session() {
+        let mut app = headless_app_with_camera();
+        app.add_plugins(bevy::state::app::StatesPlugin)
+            .insert_resource(VehicleTemplate(Vehicle::default()))
+            .insert_state(AppMode::Driving);
+        app.update();
+        let wall = GroundRect::axis_aligned(Vec2::new(0.0, -8.0), Vec2::new(6.0, 1.0));
+        app.world_mut().spawn(Obstacle(wall));
+        for round in 0..3 {
+            let scoped = app.world_mut().spawn(driving_scope()).id();
+            engine_on_in_drive(&mut app);
+            update_with_keys(&mut app, &[KeyCode::Digit2]);
+            for _ in 0..64 * 4 {
+                update_with_keys(&mut app, &[KeyCode::KeyW]);
+            }
+            let world = app.world();
+            assert!(
+                world.resource::<VehicleContact>().0.touching,
+                "round {round}"
+            );
+            assert_eq!(world.resource::<TrainingLog>().collision_count(), 1);
+            assert_eq!(
+                world.resource::<ActiveView>().direction,
+                ViewDirection::Rear
+            );
+            // 가속 키를 누른 채 메인 화면으로 나간다.
+            app.world_mut()
+                .resource_mut::<NextState<AppMode>>()
+                .set(AppMode::MainMenu);
+            update_with_keys(&mut app, &[KeyCode::KeyW]);
+            assert!(
+                app.world().get_entity(scoped).is_err(),
+                "driving entity removed"
+            );
+            app.world_mut()
+                .resource_mut::<NextState<AppMode>>()
+                .set(AppMode::Driving);
+            app.update();
+            let world = app.world();
+            assert_eq!(world.resource::<Vehicle>().0.engine(), EngineState::Off);
+            assert_eq!(world.resource::<Vehicle>().0.speed_mps(), 0.0);
+            assert_eq!(world.resource::<VehicleMotion>().0, Default::default());
+            assert_eq!(world.resource::<DriverInput>().0, VehicleInput::default());
+            assert_eq!(world.resource::<TrainingLog>().collision_count(), 0);
+            assert!(!world.resource::<VehicleContact>().0.touching);
+            assert_eq!(*world.resource::<ActiveView>(), ActiveView::default());
+            assert!(
+                world
+                    .resource::<ButtonInput<KeyCode>>()
+                    .get_pressed()
+                    .next()
+                    .is_none(),
+                "held keys are cleared"
+            );
+            let clock = world.resource::<SessionClock>().started_s;
+            let fixed = world.resource::<Time<Fixed>>().elapsed_secs();
+            assert!((fixed - clock).abs() < 0.05, "session clock restarts");
+            // 시동을 다시 켜지 않으면 주행 키를 눌러도 움직이지 않는다(이전 기어·시동이 넘어오지 않음).
+            for _ in 0..16 {
+                update_with_keys(&mut app, &[KeyCode::KeyW]);
+            }
+            assert_eq!(
+                app.world().resource::<VehicleMotion>().0,
+                Default::default()
+            );
+            update_with_keys(&mut app, &[]);
+        }
     }
 
     /// 키보드 경로로 가속→최대 제동→시작 위치 복귀를 두 번 반복하면, 매번 같은 출발점에서

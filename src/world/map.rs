@@ -14,8 +14,9 @@ use std::path::Path;
 use bevy::prelude::*;
 use serde::Deserialize;
 
-use super::course::{Collider, ColliderKind, CourseDef};
-use crate::vehicle::{GroundRect, Motion, VEHICLE_FOOTPRINT};
+use super::course::{Area, Collider, ColliderKind, CourseDef, Strip, StripKind};
+use super::road_geom::{self, RoadSpec};
+use crate::vehicle::{DynamicsParams, GroundRect, Motion, VEHICLE_FOOTPRINT};
 
 /// 지구 평균 반지름(m).
 const EARTH_RADIUS_M: f64 = 6_371_008.8;
@@ -23,24 +24,19 @@ const EARTH_RADIUS_M: f64 = 6_371_008.8;
 const MIN_POINT_SPACING_M: f32 = 0.05;
 /// way 끝점끼리 이 거리(m) 안이면 이어진 것으로 본다.
 const JOIN_TOLERANCE_M: f32 = 0.5;
-/// 한 점에서 허용하는 최대 방향 변화(deg). 이보다 급하게 꺾이면 변환을 거부한다.
-///
-/// 구간마다 연석 직사각형을 두므로 바깥쪽 모서리에 쐐기 모양 틈이 생긴다. 틈 폭은 대략
-/// `2 × (폭/2 + 연석 두께) × tan(꺾임/2)`이며, 20°·최대 폭 12 m에서 약 2.2 m로 차체 폭보다 넓을 수 있다.
-/// 그래서 폭 상한과 함께 [`max_outer_gap_m`]로 차체 폭보다 좁은지 따로 검사한다.
-pub const MAX_TURN_DEG: f32 = 20.0;
 /// 임시 폭 허용 범위(m).
 pub const WIDTH_RANGE_M: std::ops::RangeInclusive<f32> = 2.5..=12.0;
 /// 연석 두께(m)와 표시 높이(m).
-const CURB_THICKNESS_M: f32 = 0.3;
+pub(crate) const CURB_THICKNESS_M: f32 = 0.3;
 const CURB_HEIGHT_M: f32 = 0.25;
 /// 끝 벽 두께(m)와 표시 높이(m).
 const END_WALL_THICKNESS_M: f32 = 0.5;
 const END_WALL_HEIGHT_M: f32 = 1.2;
 /// 시작 자세에서 차체 뒤끝과 시작 쪽 끝 벽 사이 거리(m).
 const START_REAR_CLEARANCE_M: f32 = 5.0;
-/// 노면 직사각형을 구간 양 끝에서 더 늘리는 길이(m). 꺾이는 곳의 노면 틈을 덮는다.
-const SURFACE_OVERLAP_M: f32 = 0.5;
+/// 차로 가장자리 표시선 폭(m)과 연석 안쪽으로 들인 거리(m). 개발 코스와 같은 값.
+const EDGE_LINE_WIDTH_M: f32 = 0.12;
+const EDGE_LINE_INSET_M: f32 = 0.2;
 /// 투영한 점이 원점에서 떨어질 수 있는 최대 거리(m). 이 안에서 등장방형 근사의 거리 오차는 무시할 수 있다.
 pub const MAX_ORIGIN_DISTANCE_M: f32 = 1000.0;
 /// 생성한 코스(연석·끝 벽 포함)의 x·z 축 정렬 범위 상한(긴 변, 짧은 변; m). PLAN 3-3의 개발상 임시 상한.
@@ -167,7 +163,7 @@ fn valid_lat_lon(point: LatLon) -> bool {
         && point.lon.abs() <= 180.0
 }
 
-/// 연속 중복점을 지우고, 점 개수·길이·꺾임 각도를 검사한다.
+/// 연속 중복점을 지우고, 점 개수·길이를 검사한다. 꺾임은 [`road_geom::build_geometry`]가 필렛으로 처리한다.
 pub fn clean_polyline(points: &[Vec2]) -> Result<Vec<Vec2>, String> {
     let mut cleaned: Vec<Vec2> = Vec::with_capacity(points.len());
     for point in points {
@@ -184,55 +180,19 @@ pub fn clean_polyline(points: &[Vec2]) -> Result<Vec<Vec2>, String> {
     if cleaned.len() < 2 {
         return Err("centerline has fewer than 2 distinct points (zero length)".to_owned());
     }
-    for window in cleaned.windows(3) {
-        let turn = turn_deg(window[1] - window[0], window[2] - window[1]);
-        if turn > MAX_TURN_DEG {
-            return Err(format!(
-                "centerline turns {turn:.1} deg at {:?} (limit {MAX_TURN_DEG} deg)",
-                window[1]
-            ));
-        }
-    }
     Ok(cleaned)
 }
 
-/// 두 진행 방향 사이의 각도(deg, 0..=180)를 구한다.
-fn turn_deg(a: Vec2, b: Vec2) -> f32 {
-    a.angle_to(b).abs().to_degrees()
-}
-
-/// 꺾임이 가장 큰 점에서 바깥쪽 연석 사이에 생기는 쐐기 틈의 최대 폭(m)을 근사한다.
-pub fn max_outer_gap_m(points: &[Vec2], width_m: f32) -> f32 {
-    points
-        .windows(3)
-        .map(|window| {
-            let half_turn =
-                turn_deg(window[1] - window[0], window[2] - window[1]).to_radians() / 2.0;
-            2.0 * (width_m / 2.0 + CURB_THICKNESS_M) * half_turn.tan()
-        })
-        .fold(0.0, f32::max)
-}
-
-/// 방향 벡터 `direction`(x, z)을 바라보는 heading(rad)을 구한다. [`Motion`]과 같은 규칙이다.
-fn heading_of(direction: Vec2) -> f32 {
-    (-direction.x).atan2(-direction.y)
-}
-
-/// 중심선 구간 `a→b`를 따라 놓인 직사각형을 만든다. `lateral`은 오른쪽으로의 중심 이동(m)이다.
-fn segment_rect(a: Vec2, b: Vec2, width: f32, lateral: f32, extend: f32) -> GroundRect {
-    let direction = (b - a).normalize();
-    let heading = heading_of(direction);
-    let right = Vec2::new(heading.cos(), -heading.sin());
-    GroundRect {
-        center: (a + b) / 2.0 + right * lateral,
-        half_size: Vec2::new(width / 2.0, a.distance(b) / 2.0 + extend),
-        heading_rad: heading,
-    }
-}
-
-/// 직사각형들의 모든 모서리를 덮는 x·z 축 정렬 범위의 크기(m)를 구한다.
-fn extent_of<'a>(rects: impl Iterator<Item = &'a GroundRect>) -> Vec2 {
+/// 직사각형들의 모든 모서리와 점들을 덮는 x·z 축 정렬 범위의 크기(m)를 구한다.
+fn extent_of<'a>(
+    rects: impl Iterator<Item = &'a GroundRect>,
+    points: impl Iterator<Item = &'a Vec2>,
+) -> Vec2 {
     let (mut low, mut high) = (Vec2::splat(f32::INFINITY), Vec2::splat(f32::NEG_INFINITY));
+    for point in points {
+        low = low.min(*point);
+        high = high.max(*point);
+    }
     for rect in rects {
         let (sin, cos) = rect.heading_rad.sin_cos();
         let (right, forward) = (Vec2::new(cos, -sin), Vec2::new(-sin, -cos));
@@ -246,15 +206,54 @@ fn extent_of<'a>(rects: impl Iterator<Item = &'a GroundRect>) -> Vec2 {
     (high - low).max(Vec2::ZERO)
 }
 
-/// 깨끗한 중심선과 임시 폭으로 노면·연석·끝 벽과 시작 자세를 만든다.
-///
-/// 시작 자세는 첫 구간 위에서 시작 쪽 끝 벽과 차체 뒤끝 사이를 [`START_REAR_CLEARANCE_M`]만큼 둔다.
+/// 지도 코스에 쓰는 차량 최소 회전 반경(m). 기본 운동 모델 값(후륜축 기준)이다.
+pub fn vehicle_min_radius_m() -> f32 {
+    crate::calibration::min_turn_radius_m(&DynamicsParams::default())
+}
+
+/// 중심선과 임시 폭으로 굽은 도로 코스를 만든다(기본 원호 분할 각도). [`build_road_course_with`] 참고.
 pub fn build_road_course(
     name: &str,
     centerline: &[Vec2],
     width_m: f32,
     notices: Vec<String>,
 ) -> Result<CourseDef, String> {
+    let spec = RoadSpec {
+        width_m,
+        curb_thickness_m: CURB_THICKNESS_M,
+        vehicle_min_radius_m: vehicle_min_radius_m(),
+        arc_step_deg: road_geom::ARC_STEP_DEG,
+    };
+    build_road_course_with(name, centerline, &spec, notices)
+}
+
+/// 중심선과 형상 조건으로 노면·표시선 띠, 연석, 끝 벽, 시작 자세를 만든다(Phase 4-1).
+///
+/// 꺾이는 점마다 필렛을 넣고([`road_geom::build_geometry`]), 연석 바깥선 다각형이 단순 다각형인지 검사한다.
+/// 시작 자세는 중심선을 따라 시작 쪽 끝 벽에서 차체 뒤끝까지 [`START_REAR_CLEARANCE_M`]인 곳에 두고,
+/// 방향은 그곳 중심선 방향이다. 실패하면 일부만 만든 코스 없이 오류만 반환한다.
+pub fn build_road_course_with(
+    name: &str,
+    centerline: &[Vec2],
+    spec: &RoadSpec,
+    notices: Vec<String>,
+) -> Result<CourseDef, String> {
+    check_width(spec.width_m)?;
+    let piece = road_piece(centerline, spec, [true, true])?;
+    let start = start_pose(&piece.centerline)?;
+    finish_course(
+        name,
+        notices,
+        start,
+        piece.strips,
+        Vec::new(),
+        piece.colliders,
+        MAX_EXTENT_M,
+    )
+}
+
+/// 임시 폭이 허용 범위([`WIDTH_RANGE_M`]) 안인지 검사한다.
+pub(crate) fn check_width(width_m: f32) -> Result<(), String> {
     if !WIDTH_RANGE_M.contains(&width_m) {
         return Err(format!(
             "temporary width {width_m} m must be within {}..={} m",
@@ -262,81 +261,145 @@ pub fn build_road_course(
             WIDTH_RANGE_M.end()
         ));
     }
-    let points = clean_polyline(centerline)?;
-    let gap = max_outer_gap_m(&points, width_m);
-    if gap >= VEHICLE_FOOTPRINT.width_m {
-        return Err(format!(
-            "outer curb gap {gap:.2} m at a bend is not narrower than the vehicle ({} m)",
-            VEHICLE_FOOTPRINT.width_m
-        ));
-    }
-    let rear_overhang = VEHICLE_FOOTPRINT.length_m / 2.0 - VEHICLE_FOOTPRINT.rear_axle_to_center_m;
-    let front_reach = VEHICLE_FOOTPRINT.rear_axle_to_center_m + VEHICLE_FOOTPRINT.length_m / 2.0;
-    let start_offset = START_REAR_CLEARANCE_M + rear_overhang;
-    let first_length = points[0].distance(points[1]);
-    if first_length < start_offset + front_reach {
-        return Err(format!(
-            "first segment is {first_length:.1} m; at least {:.1} m is needed for the start pose",
-            start_offset + front_reach
-        ));
-    }
+    Ok(())
+}
 
-    let curb_offset = width_m / 2.0 + CURB_THICKNESS_M / 2.0;
-    let mut surfaces = Vec::new();
-    let mut colliders = Vec::new();
-    for pair in points.windows(2) {
-        let (a, b) = (pair[0], pair[1]);
-        surfaces.push(segment_rect(a, b, width_m, 0.0, SURFACE_OVERLAP_M));
-        for side in [-1.0, 1.0] {
-            colliders.push(Collider {
-                rect: segment_rect(a, b, CURB_THICKNESS_M, side * curb_offset, 0.0),
-                height_m: CURB_HEIGHT_M,
-                kind: ColliderKind::Curb,
-            });
+/// 도로 조각 하나(경로 조각·교차로 곁가지 공통)의 생성 결과.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct RoadPiece {
+    /// 필렛을 넣은 매끄러운 중심선.
+    pub centerline: Vec<Vec2>,
+    /// 노면 띠와 양쪽 가장자리 표시선 띠.
+    pub strips: Vec<Strip>,
+    /// 양옆 연석과 요청한 끝 벽.
+    pub colliders: Vec<Collider>,
+    /// 연석 바깥선으로 닫은 다각형(왼쪽 앞으로, 오른쪽 거꾸로). 조각끼리 겹침 검사에 쓴다.
+    pub outline: Vec<Vec2>,
+}
+
+/// 중심선 점들로 도로 조각을 만든다. `walls`는 [시작 쪽, 끝 쪽]에 끝 벽을 세울지다.
+///
+/// 중복점 정리, 필렛, 연석 바깥선 단순 다각형 검사를 거친다. 교차로에 붙는 쪽은 벽 없이 열어 둔다.
+pub(crate) fn road_piece(
+    points: &[Vec2],
+    spec: &RoadSpec,
+    walls: [bool; 2],
+) -> Result<RoadPiece, String> {
+    let points = clean_polyline(points)?;
+    let geometry = road_geom::build_geometry(&points, spec)?;
+    let center = geometry.centerline;
+    let (width_m, curb) = (spec.width_m, spec.curb_thickness_m);
+    road_geom::check_simple_boundary(&center, width_m / 2.0 + curb)?;
+    let half = width_m / 2.0;
+    let line_outer = half - EDGE_LINE_INSET_M;
+    let line_inner = line_outer - EDGE_LINE_WIDTH_M;
+    let strip = |kind, left: f32, right: f32| Strip {
+        kind,
+        left: road_geom::offset_line(&center, left),
+        right: road_geom::offset_line(&center, right),
+    };
+    let strips = vec![
+        strip(StripKind::Road, -half, half),
+        strip(StripKind::EdgeLine, -line_outer, -line_inner),
+        strip(StripKind::EdgeLine, line_inner, line_outer),
+    ];
+    let mut colliders: Vec<Collider> = road_geom::curb_rects(&center, width_m, curb)
+        .into_iter()
+        .map(|rect| Collider {
+            rect,
+            height_m: CURB_HEIGHT_M,
+            kind: ColliderKind::Curb,
+        })
+        .collect();
+    // 끝 벽: 끝점 바깥쪽으로 벽 두께 절반만큼 물려 둔다.
+    let wall_width = width_m + 2.0 * curb;
+    let last = center.len() - 1;
+    let ends = [(center[0], center[1]), (center[last], center[last - 1])];
+    for (wanted, (end, inner)) in walls.into_iter().zip(ends) {
+        if !wanted {
+            continue;
         }
-    }
-    // 양 끝 벽: 끝점 바깥쪽으로 벽 두께 절반만큼 물려 둔다.
-    let wall_width = width_m + 2.0 * CURB_THICKNESS_M;
-    let last = points.len() - 1;
-    for (end, inner) in [(points[0], points[1]), (points[last], points[last - 1])] {
         let outward = (end - inner).normalize();
-        let center = end + outward * (END_WALL_THICKNESS_M / 2.0);
         colliders.push(Collider {
             rect: GroundRect {
-                center,
+                center: end + outward * (END_WALL_THICKNESS_M / 2.0),
                 half_size: Vec2::new(wall_width / 2.0, END_WALL_THICKNESS_M / 2.0),
-                heading_rad: heading_of(outward),
+                heading_rad: road_geom::heading_of(outward),
             },
             height_m: END_WALL_HEIGHT_M,
             kind: ColliderKind::Wall,
         });
     }
+    let reach = half + curb;
+    let mut outline = road_geom::offset_line(&center, -reach);
+    outline.extend(road_geom::offset_line(&center, reach).into_iter().rev());
+    Ok(RoadPiece {
+        centerline: center,
+        strips,
+        colliders,
+        outline,
+    })
+}
 
-    let direction = (points[1] - points[0]).normalize();
-    let axle = points[0] + direction * start_offset;
-    let start = Motion {
+/// 중심선 시작 쪽 끝 벽에서 차체 뒤끝까지 [`START_REAR_CLEARANCE_M`]인 곳의 시작 자세를 만든다. 짧으면 오류.
+pub(crate) fn start_pose(center: &[Vec2]) -> Result<Motion, String> {
+    let rear_overhang = VEHICLE_FOOTPRINT.length_m / 2.0 - VEHICLE_FOOTPRINT.rear_axle_to_center_m;
+    let front_reach = VEHICLE_FOOTPRINT.rear_axle_to_center_m + VEHICLE_FOOTPRINT.length_m / 2.0;
+    let start_offset = START_REAR_CLEARANCE_M + rear_overhang;
+    let length = road_geom::polyline_length(center);
+    if length < start_offset + front_reach {
+        return Err(format!(
+            "course is {length:.1} m long; at least {:.1} m is needed for the start pose",
+            start_offset + front_reach
+        ));
+    }
+    let (axle, direction) = road_geom::point_at_distance(center, start_offset)
+        .ok_or_else(|| "course is too short for the start pose".to_owned())?;
+    Ok(Motion {
         x_m: axle.x,
         z_m: axle.y,
-        heading_rad: heading_of(direction),
+        heading_rad: road_geom::heading_of(direction),
         ..Motion::default()
-    };
+    })
+}
+
+/// 시작 자세 비접촉과 코스 크기 상한 `max_extent_m`(긴 변, 짧은 변; m)을 검사하고 코스 정의를 완성한다.
+///
+/// 단일 통로 코스는 [`MAX_EXTENT_M`], 경로 코스는 [`super::route::ROUTE_MAX_EXTENT_M`]을 쓴다.
+pub(crate) fn finish_course(
+    name: &str,
+    notices: Vec<String>,
+    start: Motion,
+    strips: Vec<Strip>,
+    areas: Vec<Area>,
+    colliders: Vec<Collider>,
+    max_extent_m: (f32, f32),
+) -> Result<CourseDef, String> {
     let rects: Vec<GroundRect> = colliders.iter().map(|collider| collider.rect).collect();
     if crate::vehicle::collision::in_contact(&VEHICLE_FOOTPRINT, &start, &rects) {
         return Err("start pose touches a curb or wall".to_owned());
     }
-    let size = extent_of(surfaces.iter().chain(rects.iter()));
+    let size = extent_of(
+        rects.iter(),
+        strips
+            .iter()
+            .flat_map(|s| s.left.iter().chain(&s.right))
+            .chain(areas.iter().flat_map(|a| a.boundary.iter())),
+    );
     let (long, short) = (size.max_element(), size.min_element());
-    if long > MAX_EXTENT_M.0 || short > MAX_EXTENT_M.1 {
+    if long > max_extent_m.0 || short > max_extent_m.1 {
         return Err(format!(
             "course spans {:.0} x {:.0} m (x by z); limit is {} x {} m",
-            size.x, size.y, MAX_EXTENT_M.0, MAX_EXTENT_M.1
+            size.x, size.y, max_extent_m.0, max_extent_m.1
         ));
     }
     Ok(CourseDef {
         name: name.to_owned(),
         notices,
         start,
-        surfaces,
+        surfaces: Vec::new(),
+        strips,
+        areas,
         markings: Vec::new(),
         colliders,
     })
@@ -380,12 +443,21 @@ pub fn build_map_course(file: &MapCourseFile, base_dir: &Path) -> Result<CourseD
 }
 
 /// 선택 파일 경로에서 지도 코스를 읽는다. 파일 없음·TOML 오류·변환 오류는 모두 `Err`다.
+///
+/// 최상위에 `format` 키가 있으면 경로 파일([`super::route_plan::RouteFile`], Phase 4-3)로,
+/// 없으면 단일 통로 선택 파일([`MapCourseFile`])로 읽는다.
 pub fn load_map_course(path: &Path) -> Result<CourseDef, String> {
     let text = std::fs::read_to_string(path)
         .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
-    let file: MapCourseFile =
-        toml::from_str(&text).map_err(|error| format!("invalid {}: {error}", path.display()))?;
-    build_map_course(&file, path.parent().unwrap_or(Path::new(".")))
+    let invalid = |error: toml::de::Error| format!("invalid {}: {error}", path.display());
+    let table: toml::Table = toml::from_str(&text).map_err(invalid)?;
+    let base_dir = path.parent().unwrap_or(Path::new("."));
+    if table.contains_key("format") {
+        let file: super::route_plan::RouteFile = toml::from_str(&text).map_err(invalid)?;
+        return super::route_plan::load_route_course(&file, base_dir);
+    }
+    let file: MapCourseFile = toml::from_str(&text).map_err(invalid)?;
+    build_map_course(&file, base_dir)
 }
 
 #[cfg(test)]
@@ -393,6 +465,7 @@ mod tests {
     use super::*;
     use crate::vehicle::collision::{ContactState, in_contact, step_with_obstacles};
     use crate::vehicle::{DynamicsParams, Gear, VehicleCommand, VehicleInput, VehicleState};
+    use crate::world::test_drive::{FollowResult, follow_path};
 
     /// 테스트 기준점(여수 부근 임의 좌표; 실제 대상 통로 아님).
     const ORIGIN: LatLon = LatLon {
@@ -569,7 +642,7 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    /// 연속 중복점은 하나로 줄이고, 길이 0·NaN·급한 꺾임은 거부하는지 확인한다.
+    /// 연속 중복점은 하나로 줄이고 길이 0·NaN은 거부하며, 꺾임은 정리 단계에서 거부하지 않는지 확인한다.
     #[test]
     fn polyline_cleanup_handles_degenerate_input() {
         let line = [Vec2::ZERO, Vec2::new(0.0, -0.01), Vec2::new(0.0, -30.0)];
@@ -578,7 +651,7 @@ mod tests {
         assert!(clean_polyline(&[Vec2::ZERO]).is_err());
         assert!(clean_polyline(&[Vec2::ZERO, Vec2::new(f32::NAN, 0.0)]).is_err());
         let sharp = [Vec2::ZERO, Vec2::new(0.0, -30.0), Vec2::new(30.0, -30.0)];
-        assert!(clean_polyline(&sharp).is_err());
+        assert_eq!(clean_polyline(&sharp).unwrap().len(), 3);
         let gentle = [Vec2::ZERO, Vec2::new(0.0, -30.0), Vec2::new(3.0, -60.0)];
         assert_eq!(clean_polyline(&gentle).unwrap().len(), 3);
     }
@@ -599,9 +672,13 @@ mod tests {
         let line = [Vec2::new(5.0, 3.0), Vec2::new(5.0, 3.0) + direction * 80.0];
         let course = build_road_course("test", &line, 4.0, Vec::new()).unwrap();
         let obstacles = course.collision_rects();
-        for rect in course.surfaces.iter().chain(obstacles.iter()) {
+        for rect in &obstacles {
             assert!(rect.center.is_finite() && rect.heading_rad.is_finite());
             assert!(rect.half_size.min_element() > 0.0, "{rect:?}");
+        }
+        for strip in &course.strips {
+            assert_eq!(strip.left.len(), strip.right.len());
+            assert!(strip.left.iter().chain(&strip.right).all(|p| p.is_finite()));
         }
         assert!(!in_contact(&VEHICLE_FOOTPRINT, &course.start, &obstacles));
         let (x, z) = course.start.forward();
@@ -636,7 +713,7 @@ mod tests {
         );
     }
 
-    /// 완만하게 꺾인 도로는 만들어지고 시작 자세가 비접촉인지, 폭·첫 구간 길이 오류는 거부하는지 확인한다.
+    /// 꺾인 도로는 만들어지고 시작 자세가 비접촉인지, 폭 오류와 시작 자세가 들어가지 않는 짧은 코스는 거부하는지 확인한다.
     #[test]
     fn bent_road_and_invalid_parameters() {
         let line = [Vec2::ZERO, Vec2::new(0.0, -40.0), Vec2::new(5.0, -80.0)];
@@ -646,11 +723,14 @@ mod tests {
             &course.start,
             &course.collision_rects()
         ));
-        assert_eq!(course.surfaces.len(), 2);
+        // 노면 띠 하나와 양쪽 가장자리 표시선 띠 둘.
+        assert_eq!(course.strips.len(), 3);
+        assert!(course.surfaces.is_empty());
         assert!(build_road_course("narrow", &line, 1.0, Vec::new()).is_err());
         assert!(build_road_course("nan", &line, f32::NAN, Vec::new()).is_err());
-        let short = [Vec2::ZERO, Vec2::new(0.0, -8.0), Vec2::new(0.0, -80.0)];
-        assert!(build_road_course("short", &short, 4.0, Vec::new()).is_err());
+        let short = [Vec2::ZERO, Vec2::new(0.0, -8.0)];
+        let error = build_road_course("short", &short, 4.0, Vec::new()).unwrap_err();
+        assert!(error.contains("start pose"), "{error}");
     }
 
     /// 저장소에 고정한 여수 가상 교육 코스(OSM way 532526349)가 읽히고, 출처 안내가 붙고,
@@ -711,19 +791,171 @@ mod tests {
         assert!(front.distance(end) < 2.0, "front {front:?}, end {end:?}");
     }
 
-    /// 꺾이는 점의 바깥 연석 틈이 차체 폭 이상이면 거부하는지 확인한다.
+    /// 예전(3-4) 20° 상한을 넘는 꺾임도 넓은 도로에서 필렛으로 만들어지는지 확인한다(연석 틈은 road_geom 시험).
     #[test]
-    fn wide_road_with_bend_is_rejected_when_gap_fits_vehicle() {
-        // 19° 꺾임, 폭 12 m: 틈 ≈ 2 × 6.3 × tan(9.5°) ≈ 2.1 m > 차체 폭 1.8 m.
-        let bend = 19f32.to_radians();
+    fn sharp_bend_on_wide_road_is_built_with_fillet() {
+        let bend = 60f32.to_radians();
         let line = [
             Vec2::ZERO,
             Vec2::new(0.0, -40.0),
             Vec2::new(0.0, -40.0) + Vec2::new(bend.sin(), -bend.cos()) * 40.0,
         ];
-        assert!(max_outer_gap_m(&line, 12.0) > VEHICLE_FOOTPRINT.width_m);
-        assert!(build_road_course("wide", &line, 12.0, Vec::new()).is_err());
-        assert!(build_road_course("normal", &line, 4.0, Vec::new()).is_ok());
+        for width in [4.0, 12.0] {
+            let course = build_road_course("wide", &line, width, Vec::new()).unwrap();
+            assert!(!in_contact(
+                &VEHICLE_FOOTPRINT,
+                &course.start,
+                &course.collision_rects()
+            ));
+        }
+    }
+
+    /// 코스 노면 띠(첫 띠)의 가운데 선을 경로 추종 조향기로 따라간다.
+    fn follow_course(course: &CourseDef, target_speed_mps: f32) -> FollowResult {
+        let road = &course.strips[0];
+        let path: Vec<Vec2> = road
+            .left
+            .iter()
+            .zip(&road.right)
+            .map(|(l, r)| (*l + *r) / 2.0)
+            .collect();
+        follow_path(course, &path, target_speed_mps)
+    }
+
+    /// 띠 메시가 유한한 점만 쓰고, 이웃한 두 쌍의 점이 만드는 사각형이 모두 같은 방향으로 감겨
+    /// 뒤집히거나 넓이가 0인 삼각형이 없는지 확인한다.
+    fn assert_strips_valid(course: &CourseDef) {
+        for strip in &course.strips {
+            assert_eq!(strip.left.len(), strip.right.len());
+            assert!(strip.left.iter().chain(&strip.right).all(|p| p.is_finite()));
+            for i in 0..strip.left.len() - 1 {
+                let (l0, r0, l1, r1) = (
+                    strip.left[i],
+                    strip.right[i],
+                    strip.left[i + 1],
+                    strip.right[i + 1],
+                );
+                for (a, b, c) in [(l0, r0, l1), (r0, r1, l1)] {
+                    // 왼쪽→오른쪽→앞 순서는 지면 (x, z)에서 늘 음의 방향으로 감긴다. 부호가 바뀌면 뒤집힌 삼각형이다.
+                    let area = (b - a).perp_dot(c - a);
+                    assert!(
+                        area < -1.0e-6,
+                        "inverted or empty triangle at {a} (area {area})"
+                    );
+                }
+            }
+        }
+    }
+
+    /// 합성 자료를 그래프로 읽어 첫 way의 노드 순서대로 지역 좌표 중심선을 만든다.
+    fn fixture_line(ways: Vec<crate::world::osm_graph::fixtures::FixtureWay>) -> Vec<Vec2> {
+        use crate::world::osm_graph::{fixtures, parse_overpass_graph};
+        let parsed = parse_overpass_graph(&fixtures::overpass_json(&ways)).unwrap();
+        parsed[0]
+            .nodes
+            .iter()
+            .map(|node| project(fixtures::ORIGIN, node.pos))
+            .collect()
+    }
+
+    /// 폴리라인 각 구간을 `spacing` m 이하 조각으로 나눈다(정점 간격 바꾸기 시험용).
+    fn densify(points: &[Vec2], spacing: f32) -> Vec<Vec2> {
+        let mut out = vec![points[0]];
+        for pair in points.windows(2) {
+            let pieces = (pair[0].distance(pair[1]) / spacing).ceil().max(1.0) as usize;
+            for k in 1..=pieces {
+                out.push(pair[0].lerp(pair[1], k as f32 / pieces as f32));
+            }
+        }
+        out
+    }
+
+    /// 합성 자료: 굽은 길·S자는 만들어져 경로 추종 조향기로 충돌 없이 끝까지 가고,
+    /// 넓은 도로+짧은 구간과 처음 길 위로 되돌아오는 길은 거부되는지 확인한다(PLAN 4-1 합성 완료 기준).
+    #[test]
+    fn synthetic_fixtures_are_built_or_rejected() {
+        use crate::world::osm_graph::fixtures;
+        for (name, ways) in [
+            ("curved", fixtures::curved_road()),
+            ("s-curve", fixtures::s_curve()),
+        ] {
+            let course = build_road_course(name, &fixture_line(ways), 4.0, Vec::new()).unwrap();
+            assert_strips_valid(&course);
+            let result = follow_course(&course, 4.0);
+            assert_eq!(result.impacts, 0, "{name}: {result:?}");
+            assert!(result.remaining_m < 12.5, "{name}: {result:?}");
+            assert!(result.max_offset_m < 1.0, "{name}: {result:?}");
+        }
+        let zigzag = fixture_line(fixtures::wide_short_zigzag());
+        let error = build_road_course("zigzag", &zigzag, 12.0, Vec::new()).unwrap_err();
+        assert!(error.contains("too sharp"), "{error}");
+        let looped = fixture_line(fixtures::loop_overlap());
+        let error = build_road_course("loop", &looped, 4.0, Vec::new()).unwrap_err();
+        assert!(error.contains("overlaps"), "{error}");
+    }
+
+    /// 정점 간격(0.25·1·5 m)과 원호 분할 각도(1°·3°·10°)를 바꿔도 정상 코스는 모두 만들어지고,
+    /// 실제로 겹치는 길은 어느 설정에서도 거부되는지 확인한다(PLAN 4-1 회귀 기준).
+    #[test]
+    fn results_do_not_depend_on_sampling() {
+        use crate::world::osm_graph::fixtures;
+        let normal = [
+            fixture_line(fixtures::curved_road()),
+            fixture_line(fixtures::s_curve()),
+        ];
+        let looped = fixture_line(fixtures::loop_overlap());
+        for spacing in [0.25, 1.0, 5.0] {
+            for step in [1.0, 3.0, 10.0] {
+                let spec = RoadSpec {
+                    width_m: 4.0,
+                    curb_thickness_m: CURB_THICKNESS_M,
+                    vehicle_min_radius_m: vehicle_min_radius_m(),
+                    arc_step_deg: step,
+                };
+                for line in &normal {
+                    let dense = densify(line, spacing);
+                    assert!(
+                        build_road_course_with("ok", &dense, &spec, Vec::new()).is_ok(),
+                        "spacing {spacing}, step {step}"
+                    );
+                }
+                let dense = densify(&looped, spacing);
+                assert!(
+                    build_road_course_with("loop", &dense, &spec, Vec::new()).is_err(),
+                    "loop accepted at spacing {spacing}, step {step}"
+                );
+            }
+        }
+    }
+
+    /// 실제 스냅샷: 문서에 기록한 굽은 경로(way 529495041, 약 321 m)로 폭 4 m 코스를 만들고,
+    /// 경로 추종 조향기가 충돌 없이 끝 부근까지 가는지 확인한다(PLAN 4-1 실제 스냅샷 완료 기준).
+    #[test]
+    fn real_curved_way_is_drivable() {
+        use crate::world::osm_graph::parse_overpass_graph;
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("assets/maps/yeosu-expo/graph-2026-11-06.osm.json");
+        let ways = parse_overpass_graph(&std::fs::read_to_string(path).unwrap()).unwrap();
+        let way = ways.iter().find(|way| way.id == 529_495_041).unwrap();
+        let origin = way.nodes[0].pos;
+        let line: Vec<Vec2> = way.nodes.iter().map(|n| project(origin, n.pos)).collect();
+        let course = build_road_course("way-529495041", &line, 4.0, Vec::new()).unwrap();
+        assert_strips_valid(&course);
+        // 저장소의 굽은 길 확인 코스 파일도 같은 way로 읽히고 출처 안내가 붙는다.
+        let file =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/maps/yeosu-expo/curved-course.toml");
+        let from_file = load_map_course(&file).unwrap();
+        assert!(from_file.notices.iter().any(|n| n == OSM_ATTRIBUTION));
+        assert_eq!(from_file.start, course.start);
+        assert!(!in_contact(
+            &VEHICLE_FOOTPRINT,
+            &course.start,
+            &course.collision_rects()
+        ));
+        let result = follow_course(&course, 5.0);
+        assert_eq!(result.impacts, 0, "{result:?}");
+        assert!(result.remaining_m < 12.5, "{result:?}");
+        assert!(result.max_offset_m < 1.0, "{result:?}");
     }
 
     /// 테스트마다 따로 쓰는 임시 폴더를 만든다.

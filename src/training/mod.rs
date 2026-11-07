@@ -15,8 +15,12 @@ pub struct TrainingPlugin;
 impl Plugin for TrainingPlugin {
     /// 교육 기록 리소스를 만들고, 화면 표시 전에 이번 프레임의 충돌 메시지를 기록하게 한다.
     fn build(&self, app: &mut App) {
-        app.init_resource::<TrainingLog>()
-            .add_systems(Update, record_collisions.before(SimSet::Display));
+        app.init_resource::<TrainingLog>().add_systems(
+            Update,
+            record_collisions
+                .before(SimSet::Display)
+                .run_if(crate::driving_active),
+        );
     }
 }
 

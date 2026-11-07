@@ -3,16 +3,32 @@
 //! 지도 코스([`map`])가 없거나 읽지 못해도 [`course`]의 개발 코스만으로 조작·카메라를 검증할 수 있다.
 
 pub mod course;
+pub mod junction;
 pub mod map;
+pub mod map_fetch;
+pub mod osm_graph;
+pub mod pbf_audit;
+pub mod pbf_compare;
+pub mod pbf_extract;
+#[cfg(test)]
+pub(crate) mod pbf_fixture;
+pub mod road_geom;
+pub mod road_snapshot;
+pub mod route;
+pub mod route_plan;
+#[cfg(test)]
+pub(crate) mod test_drive;
 
 use std::path::PathBuf;
 
+use bevy::asset::RenderAssetUsages;
+use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
 
 pub use course::{CourseDef, CourseId};
 
 use crate::vehicle::{GroundRect, Obstacle};
-use course::{ColliderKind, MarkingKind};
+use course::{Area, ColliderKind, MarkingKind, Strip, StripKind};
 
 /// 노면 표시 높이(m). 바닥 격자선(높이 0.01 m)을 덮는다.
 const SURFACE_Y_M: f32 = 0.012;
@@ -80,6 +96,7 @@ pub fn spawn_course_notice(commands: &mut Commands, course: &CourseDef) {
         return;
     }
     commands.spawn((
+        crate::driving_scope(),
         Node {
             position_type: PositionType::Absolute,
             bottom: Val::Px(12.0),
@@ -105,6 +122,63 @@ pub fn box_on_rect(rect: &GroundRect, bottom_y: f32, height: f32) -> (Transform,
     (transform, size)
 }
 
+/// 띠의 두 경계선 사이를 높이 `y`의 위를 향한 삼각형 목록 메시로 만든다.
+///
+/// 이웃한 두 쌍의 점마다 사각형 하나(삼각형 둘)를 만들고, 삼각형이 아래를 보면 감는 순서를 뒤집어 늘 위(+Y)를 보게 한다.
+pub fn strip_mesh(strip: &Strip, y: f32) -> Mesh {
+    let mut positions = Vec::with_capacity(strip.left.len() * 2);
+    for (left, right) in strip.left.iter().zip(&strip.right) {
+        positions.push([left.x, y, left.y]);
+        positions.push([right.x, y, right.y]);
+    }
+    let mut indices = Vec::new();
+    for i in 0..strip.left.len().saturating_sub(1) as u32 {
+        let (l0, r0, l1, r1) = (2 * i, 2 * i + 1, 2 * i + 2, 2 * i + 3);
+        for triangle in [[l0, r0, l1], [r0, r1, l1]] {
+            indices.extend(upward(&positions, triangle));
+        }
+    }
+    let normals = vec![[0.0, 1.0, 0.0]; positions.len()];
+    Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::default(),
+    )
+    .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
+    .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
+    .with_inserted_indices(Indices::U32(indices))
+}
+
+/// 별 모양 다각형 노면을 중심에서 부채꼴 삼각형으로 나눈 높이 `y`의 위를 향한 메시로 만든다.
+pub fn area_mesh(area: &Area, y: f32) -> Mesh {
+    let mut positions = vec![[area.center.x, y, area.center.y]];
+    positions.extend(area.boundary.iter().map(|p| [p.x, y, p.y]));
+    let count = area.boundary.len() as u32;
+    let mut indices = Vec::new();
+    for k in 0..count {
+        let triangle = [0, 1 + k, 1 + (k + 1) % count];
+        indices.extend(upward(&positions, triangle));
+    }
+    let normals = vec![[0.0, 1.0, 0.0]; positions.len()];
+    Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::default(),
+    )
+    .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
+    .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
+    .with_inserted_indices(Indices::U32(indices))
+}
+
+/// 삼각형의 법선이 +Y를 보도록 감는 순서를 정한다(반시계 = 앞면).
+fn upward(positions: &[[f32; 3]], [a, b, c]: [u32; 3]) -> [u32; 3] {
+    let p = |i: u32| Vec3::from(positions[i as usize]);
+    let normal = (p(b) - p(a)).cross(p(c) - p(a));
+    if normal.y >= 0.0 {
+        [a, b, c]
+    } else {
+        [a, c, b]
+    }
+}
+
 /// 코스의 노면·표시선(시각 전용)과 충돌 경계(메시 + [`Obstacle`]), 안내 패널을 만든다.
 pub fn spawn_course(
     commands: &mut Commands,
@@ -117,6 +191,7 @@ pub fn spawn_course(
         let (transform, size) =
             box_on_rect(rect, SURFACE_Y_M - PAINT_THICKNESS_M, PAINT_THICKNESS_M);
         commands.spawn((
+            crate::driving_scope(),
             Mesh3d(meshes.add(Cuboid::from_size(size))),
             MeshMaterial3d(road.clone()),
             transform,
@@ -124,6 +199,26 @@ pub fn spawn_course(
     }
     let edge = materials.add(Color::srgb(0.92, 0.92, 0.88));
     let stop = materials.add(Color::srgb(0.98, 0.98, 0.98));
+    for area in &course.areas {
+        commands.spawn((
+            crate::driving_scope(),
+            Mesh3d(meshes.add(area_mesh(area, SURFACE_Y_M))),
+            MeshMaterial3d(road.clone()),
+            Transform::default(),
+        ));
+    }
+    for strip in &course.strips {
+        let (material, y) = match strip.kind {
+            StripKind::Road => (road.clone(), SURFACE_Y_M),
+            StripKind::EdgeLine => (edge.clone(), MARKING_Y_M),
+        };
+        commands.spawn((
+            crate::driving_scope(),
+            Mesh3d(meshes.add(strip_mesh(strip, y))),
+            MeshMaterial3d(material),
+            Transform::default(),
+        ));
+    }
     for marking in &course.markings {
         let material = match marking.kind {
             MarkingKind::EdgeLine => edge.clone(),
@@ -135,6 +230,7 @@ pub fn spawn_course(
             PAINT_THICKNESS_M,
         );
         commands.spawn((
+            crate::driving_scope(),
             Mesh3d(meshes.add(Cuboid::from_size(size))),
             MeshMaterial3d(material),
             transform,
@@ -153,6 +249,7 @@ pub fn spawn_course(
         };
         let (transform, size) = box_on_rect(&collider.rect, 0.0, collider.height_m);
         commands.spawn((
+            crate::driving_scope(),
             Mesh3d(meshes.add(Cuboid::from_size(size))),
             MeshMaterial3d(material),
             transform,

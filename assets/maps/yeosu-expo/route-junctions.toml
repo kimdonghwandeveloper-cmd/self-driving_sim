@@ -1,0 +1,11 @@
+format = "route-v1"
+snapshot = "graph-2026-11-06.osm.json"
+allowed_highways = ["service", "pedestrian", "residential", "unclassified", "tertiary"]
+points = [[34.75264, 127.74712], [34.74972, 127.74816]]
+nodes = [4611686018427387904, 5143358074, 5143358073, 12669790902, 12669790897, 12669790901, 12669790899, 12669790900, 5143358072, 5143358071, 12671172259, 5143358021, 9448832830, 9448832833, 5143358070, 5239572002, 5143354386, 4611686018427387905]
+width_m = 4.0
+width_source = "default"
+corner_radius_m = 3.0
+stub_length_m = 10.0
+snap_distance_m = 30.0
+max_route_length_m = 2000.0

@@ -69,7 +69,7 @@ impl Plugin for VehiclePlugin {
             .init_resource::<VehicleContact>()
             .add_message::<CollisionEvent>()
             .add_systems(RunFixedMainLoop, apply_controls.in_set(SimSet::Control))
-            .add_systems(FixedUpdate, step_motion);
+            .add_systems(FixedUpdate, step_motion.run_if(crate::driving_active));
     }
 }
 
@@ -114,6 +114,7 @@ impl ObstacleSet<'_, '_> {
 }
 
 /// 고정 시간 간격마다 운동 모델을 한 단계 적분하고, 장애물 관통을 막으며 새 충돌을 알린다.
+#[allow(clippy::too_many_arguments)]
 pub fn step_motion(
     time: Res<Time>,
     params: Res<VehicleDynamics>,
@@ -122,6 +123,7 @@ pub fn step_motion(
     mut motion: ResMut<VehicleMotion>,
     mut contact: ResMut<VehicleContact>,
     mut collisions: MessageWriter<CollisionEvent>,
+    session: Option<Res<crate::SessionClock>>,
 ) {
     let impact = collision::step_with_obstacles(
         &mut vehicle.0,
@@ -134,7 +136,7 @@ pub fn step_motion(
     );
     if let Some(impact) = impact {
         collisions.write(CollisionEvent {
-            sim_time_s: time.elapsed_secs(),
+            sim_time_s: time.elapsed_secs() - session.map_or(0.0, |clock| clock.started_s),
             speed_mps: impact.speed_mps,
             x_m: impact.x_m,
             z_m: impact.z_m,

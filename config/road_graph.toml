@@ -1,0 +1,22 @@
+# 도로 그래프·경로 계획 설정(Phase 4-3, 개발용 임시값). 실측값이 아닙니다.
+# 경로를 계획할 때만 읽으며, 코스를 다시 만드는 데 필요한 값(허용 종류, 폭, 교차로 형상)은 경로 파일에 함께 저장합니다.
+
+# 도로 그래프에 넣을 OSM highway 종류. 일방통행(oneway) way는 1차 판에서 경로 탐색에 쓰지 않습니다.
+allowed_highways = ["service", "pedestrian", "residential", "unclassified", "tertiary"]
+# lanes 태그로 폭을 정할 때 쓰는 차로 폭(m). 폭은 width 태그 → lanes × 차로 폭 → 아래 기본값 순서로 정합니다.
+lane_width_m = 3.0
+# 찍은 점을 도로에 붙일 수 있는 최대 거리(m).
+snap_distance_m = 30.0
+# 경로 길이 상한(m).
+max_route_length_m = 2000.0
+# 교차로 모서리 원호 반경(m)과 경로에 포함되지 않은 교차로 팔(곁가지)의 길이(m).
+corner_radius_m = 3.0
+stub_length_m = 10.0
+
+# 도로 종류별 기본 폭(m, 2.5..=12). allowed_highways의 종류마다 있어야 합니다.
+[default_width_m]
+service = 4.0
+pedestrian = 4.0
+residential = 5.0
+unclassified = 5.0
+tertiary = 6.0
