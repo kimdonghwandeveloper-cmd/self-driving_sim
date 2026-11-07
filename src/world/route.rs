@@ -32,6 +32,8 @@ const ARM_STRAIGHT_TOLERANCE_M: f32 = 0.05;
 const MIN_PIECE_LENGTH_M: f32 = 1.0;
 /// 같은 노드 ID의 좌표가 이보다 다르면(deg) 자료 모순으로 거부한다.
 const SAME_NODE_TOLERANCE_DEG: f64 = 1.0e-7;
+/// 교차로 접합 허용 원 반경에 더하는 여유(m).
+const CONTACT_MARGIN_M: f32 = 0.05;
 /// 교차로를 건너는 안내선의 표본 수.
 const GUIDE_SAMPLES: usize = 16;
 
@@ -220,6 +222,16 @@ struct JunctionBuild {
     curbs: Vec<Collider>,
     /// 곁가지 도로 조각.
     stubs: Vec<map::RoadPiece>,
+    /// 이 교차로에 붙은 조각끼리 정당하게 맞닿을 수 있는 범위(교차로 중심에서의 반경, m).
+    contact_radius_m: f32,
+}
+
+/// 겹침 검사용 외곽 다각형.
+struct Outline {
+    /// 외곽 다각형(연석 바깥선 또는 교차로 면 경계).
+    polygon: Vec<Vec2>,
+    /// 이 다각형이 붙어 있는 교차로의 경로 위치.
+    attached: BTreeSet<usize>,
 }
 
 /// 경로 노드 ID 순서와 저장한 그래프 자료로 교차로를 포함한 코스를 만든다.
@@ -297,8 +309,12 @@ pub fn build_route_course(
     let mut strips: Vec<Strip> = Vec::new();
     let mut colliders: Vec<Collider> = Vec::new();
     let mut areas: Vec<Area> = Vec::new();
-    // 겹침 검사용 (외곽 다각형, 붙어 있는 교차로 경로 위치).
-    let mut outlines: Vec<(Vec<Vec2>, BTreeSet<usize>)> = Vec::new();
+    let mut outlines: Vec<Outline> = Vec::new();
+    // 교차로 경로 위치별 접합 허용 원(중심, 반경).
+    let zones: BTreeMap<usize, (Vec2, f32)> = builds
+        .iter()
+        .map(|(&i, build)| (i, (build.area.center, build.contact_radius_m)))
+        .collect();
     let mut guide: Vec<Vec2> = Vec::new();
     let mut first_piece: Option<Vec<Vec2>> = None;
     for pair in breaks.windows(2) {
@@ -326,7 +342,10 @@ pub fn build_route_course(
             .into_iter()
             .filter(|k| builds.contains_key(k))
             .collect();
-        outlines.push((piece.outline, attached));
+        outlines.push(Outline {
+            polygon: piece.outline,
+            attached,
+        });
         strips.extend(piece.strips);
         colliders.extend(piece.colliders);
     }
@@ -334,16 +353,22 @@ pub fn build_route_course(
     for (i, build) in builds {
         junction_ids.push(route[i]);
         let attached: BTreeSet<usize> = [i].into_iter().collect();
-        outlines.push((build.area.boundary.clone(), attached.clone()));
+        outlines.push(Outline {
+            polygon: build.area.boundary.clone(),
+            attached: attached.clone(),
+        });
         for stub in build.stubs {
-            outlines.push((stub.outline, attached.clone()));
+            outlines.push(Outline {
+                polygon: stub.outline,
+                attached: attached.clone(),
+            });
             strips.extend(stub.strips);
             colliders.extend(stub.colliders);
         }
         areas.push(build.area);
         colliders.extend(build.curbs);
     }
-    check_outline_overlaps(&outlines)?;
+    check_outline_overlaps(&outlines, &zones)?;
     let start = map::start_pose(&first_piece.unwrap())?;
     let course = map::finish_course(name, notices, start, strips, areas, colliders)?;
     Ok(RouteCourse {
@@ -431,6 +456,23 @@ fn build_junction(
             kind: ColliderKind::Curb,
         })
         .collect();
+    // 정당한 접합 범위: 입구(잘라 낸 곳의 연석 바깥 모서리)까지와, 이웃한 팔의 연석 바깥선이 서로 갈라지는 곳까지.
+    let outer = half + spec.curb_thickness_m;
+    let mut angles: Vec<f32> = arms
+        .iter()
+        .map(|arm| arm.direction.y.atan2(arm.direction.x))
+        .collect();
+    angles.sort_by(f32::total_cmp);
+    let entry = shape
+        .cut_m
+        .iter()
+        .map(|&c| c.hypot(outer))
+        .fold(0.0f32, f32::max);
+    let split = (0..angles.len())
+        .map(|k| (angles[(k + 1) % angles.len()] - angles[k]).rem_euclid(std::f32::consts::TAU))
+        .filter(|&gap| gap < std::f32::consts::PI)
+        .map(|gap| outer / (gap / 2.0).sin())
+        .fold(0.0f32, f32::max);
     Ok(JunctionBuild {
         cut,
         area: Area {
@@ -439,45 +481,113 @@ fn build_junction(
         },
         curbs,
         stubs,
+        contact_radius_m: entry.max(split) + CONTACT_MARGIN_M,
     })
 }
 
-/// 서로 다른 교차로에 붙은 조각·교차로 면의 외곽 다각형끼리 닿거나 교차하면 거부한다.
+/// 조각·교차로 면의 외곽 다각형끼리 닿거나, 교차하거나, 한쪽이 다른 쪽 안에 들어 있으면 거부한다.
 ///
-/// 같은 교차로에 붙은 것끼리는 그 교차로 입구에서 맞닿도록 만들었으므로 검사하지 않는다.
-fn check_outline_overlaps(outlines: &[(Vec<Vec2>, BTreeSet<usize>)]) -> Result<(), String> {
+/// 같은 교차로에 붙은 두 다각형은 그 교차로의 접합 허용 원(`zones`) **안에서만** 맞닿을 수 있다.
+/// 원 밖에서 변이 닿거나 꼭짓점이 상대 다각형 안에 있으면(멀리 돌아와 곁가지와 겹치는 경우 등) 거부한다.
+fn check_outline_overlaps(
+    outlines: &[Outline],
+    zones: &BTreeMap<usize, (Vec2, f32)>,
+) -> Result<(), String> {
     let bounds = |polygon: &[Vec2]| {
         polygon.iter().fold(
             (Vec2::splat(f32::INFINITY), Vec2::splat(f32::NEG_INFINITY)),
             |(low, high), p| (low.min(*p), high.max(*p)),
         )
     };
-    for (index, (a, attached_a)) in outlines.iter().enumerate() {
-        let (low_a, high_a) = bounds(a);
-        for (b, attached_b) in &outlines[index + 1..] {
-            if !attached_a.is_disjoint(attached_b) {
-                continue;
-            }
-            let (low_b, high_b) = bounds(b);
+    let overlap = |at: Vec2| {
+        Err(format!(
+            "roads overlap near ({:.1}, {:.1}) outside a shared intersection",
+            at.x, at.y
+        ))
+    };
+    for (index, a) in outlines.iter().enumerate() {
+        let (low_a, high_a) = bounds(&a.polygon);
+        for b in &outlines[index + 1..] {
+            let (low_b, high_b) = bounds(&b.polygon);
             if low_a.cmpgt(high_b).any() || low_b.cmpgt(high_a).any() {
                 continue;
             }
-            for k in 0..a.len() {
-                let edge_a = (a[k], a[(k + 1) % a.len()]);
-                for m in 0..b.len() {
-                    let edge_b = (b[m], b[(m + 1) % b.len()]);
+            let disks: Vec<(Vec2, f32)> = a
+                .attached
+                .intersection(&b.attached)
+                .map(|i| zones[i])
+                .collect();
+            let edges = |polygon: &[Vec2]| -> Vec<(Vec2, Vec2)> {
+                (0..polygon.len())
+                    .flat_map(|k| {
+                        outside_disks((polygon[k], polygon[(k + 1) % polygon.len()]), &disks)
+                    })
+                    .collect()
+            };
+            let (edges_a, edges_b) = (edges(&a.polygon), edges(&b.polygon));
+            for &edge_a in &edges_a {
+                for &edge_b in &edges_b {
                     if road_geom::segments_touch(edge_a, edge_b) {
-                        let at = (edge_a.0 + edge_a.1) / 2.0;
-                        return Err(format!(
-                            "roads overlap near ({:.1}, {:.1}) without a shared intersection node",
-                            at.x, at.y
-                        ));
+                        return overlap((edge_a.0 + edge_a.1) / 2.0);
                     }
+                }
+            }
+            // 원 밖에서 경계끼리 닿지 않았으므로, 원 밖 꼭짓점이 상대 안에 있으면 포함 관계로 겹친 것이다.
+            let outside = |p: &Vec2| disks.iter().all(|(c, r)| p.distance(*c) > *r);
+            for (inner, outer) in [(&a.polygon, &b.polygon), (&b.polygon, &a.polygon)] {
+                if let Some(p) = inner
+                    .iter()
+                    .find(|p| outside(p) && point_in_polygon(**p, outer))
+                {
+                    return overlap(*p);
                 }
             }
         }
     }
     Ok(())
+}
+
+/// 선분에서 모든 원(중심, 반경) 밖에 있는 부분 선분들을 반환한다.
+fn outside_disks(segment: (Vec2, Vec2), disks: &[(Vec2, f32)]) -> Vec<(Vec2, Vec2)> {
+    let mut parts = vec![segment];
+    for &(center, radius) in disks {
+        parts = parts
+            .into_iter()
+            .flat_map(|(a, b)| {
+                // |a + t(b-a) - c|² = r² 의 근 t1 ≤ t2 사이가 원 안이다.
+                let d = b - a;
+                let f = a - center;
+                let (qa, qb, qc) = (d.dot(d), 2.0 * f.dot(d), f.dot(f) - radius * radius);
+                let disc = qb * qb - 4.0 * qa * qc;
+                if qa <= f32::EPSILON || disc <= 0.0 {
+                    return if qc > 0.0 { vec![(a, b)] } else { Vec::new() };
+                }
+                let root = disc.sqrt();
+                let (t1, t2) = ((-qb - root) / (2.0 * qa), (-qb + root) / (2.0 * qa));
+                let mut out = Vec::new();
+                if t1 > 0.0 {
+                    out.push((a, a + d * t1.min(1.0)));
+                }
+                if t2 < 1.0 {
+                    out.push((a + d * t2.max(0.0), b));
+                }
+                out
+            })
+            .collect();
+    }
+    parts
+}
+
+/// 점이 다각형 안에 있는지 반직선 교차 횟수로 판정한다(경계 위 점은 어느 쪽이든 될 수 있다).
+fn point_in_polygon(p: Vec2, polygon: &[Vec2]) -> bool {
+    let mut inside = false;
+    for k in 0..polygon.len() {
+        let (a, b) = (polygon[k], polygon[(k + 1) % polygon.len()]);
+        if (a.y > p.y) != (b.y > p.y) && p.x < a.x + (p.y - a.y) / (b.y - a.y) * (b.x - a.x) {
+            inside = !inside;
+        }
+    }
+    inside
 }
 
 #[cfg(test)]
@@ -552,6 +662,70 @@ mod tests {
             &[Vec2::new(55.0, 0.0), Vec2::new(60.0, 0.0)],
         );
         assert!(straight.iter().all(|p| p.y.abs() < 1e-5));
+    }
+
+    /// 같은 교차로에 붙은 조각이라도 멀리 돌아와 곁가지와 겹치면 거부한다(Codex 4-2 검토 P2 재현 사례).
+    #[test]
+    fn return_into_own_stub_is_rejected() {
+        let ways = parse(fixtures::return_into_stub());
+        let error = build_route_course(
+            "return",
+            &ways,
+            &allowed(),
+            &[1, 10, 2, 3, 4, 5],
+            4.0,
+            Vec::new(),
+        )
+        .unwrap_err();
+        assert!(error.contains("overlap"), "{error}");
+    }
+
+    /// 겹침 검사: 접합 허용 원 안의 접촉만 허용하고, 원 밖 접촉·포함 관계·다른 교차로끼리의 접촉은 거부한다.
+    #[test]
+    fn outline_check_limits_contact_to_zone() {
+        let square = |c: Vec2, h: f32| {
+            vec![
+                c + Vec2::new(-h, -h),
+                c + Vec2::new(h, -h),
+                c + Vec2::new(h, h),
+                c + Vec2::new(-h, h),
+            ]
+        };
+        let outline = |polygon: Vec<Vec2>, attached: &[usize]| Outline {
+            polygon,
+            attached: attached.iter().copied().collect(),
+        };
+        let zones: BTreeMap<usize, (Vec2, f32)> = [(1, (Vec2::ZERO, 3.0))].into_iter().collect();
+        // 원 안에서 맞닿음: 같은 교차로면 허용, 붙은 교차로가 다르면 거부.
+        let touching = |a: &[usize], b: &[usize]| {
+            check_outline_overlaps(
+                &[
+                    outline(square(Vec2::new(-1.0, 0.0), 1.0), a),
+                    outline(square(Vec2::new(1.0, 0.0), 1.0), b),
+                ],
+                &zones,
+            )
+        };
+        assert!(touching(&[1], &[1]).is_ok());
+        assert!(touching(&[1], &[]).is_err());
+        // 원 밖에서 겹침은 같은 교차로여도 거부.
+        let far = check_outline_overlaps(
+            &[
+                outline(square(Vec2::new(5.0, 0.0), 1.0), &[1]),
+                outline(square(Vec2::new(6.0, 0.0), 1.0), &[1]),
+            ],
+            &zones,
+        );
+        assert!(far.is_err());
+        // 변이 닿지 않는 포함 관계도 거부.
+        let inside = check_outline_overlaps(
+            &[
+                outline(square(Vec2::new(10.0, 0.0), 4.0), &[1]),
+                outline(square(Vec2::new(10.0, 0.0), 1.0), &[1]),
+            ],
+            &zones,
+        );
+        assert!(inside.is_err());
     }
 
     /// 좌표만 겹치는 십자는 교차로가 아니므로 교차로 없는 직선 코스가 되는지 확인한다.
