@@ -320,8 +320,8 @@ pub struct TileLayer {
     settings: TileSettings,
     /// 백그라운드 받기(처음 들어올 때 시작).
     fetcher: Option<TileFetcher>,
-    /// 받은 타일 재질과 마지막으로 보인 프레임.
-    materials: HashMap<TileId, (Handle<StandardMaterial>, u64)>,
+    /// 받은 타일 재질, 마지막으로 보인 프레임, 만료 시각(유닉스 초).
+    materials: HashMap<TileId, (Handle<StandardMaterial>, u64, u64)>,
     /// 지금 그리는 타일 엔티티.
     entities: HashMap<TileId, Entity>,
     /// 타일 사각형 메시(가로세로 1, 위에서 본 이미지 방향).
@@ -364,9 +364,13 @@ fn enter_picker(world: &mut World) {
     picker.cached = cached_regions(Path::new(map_fetch::CACHE_DIR));
 }
 
-/// 화면을 나갈 때: 타일 엔티티 기록을 지운다(엔티티는 상태 수명으로 지워진다). 받던 지도는 결과를 버린다.
+/// 화면을 나갈 때: 타일 엔티티 기록을 지우고(엔티티는 상태 수명으로 지워진다), 아직 시작하지 않은 타일 요청을
+/// 버린다(이미 전송 중인 것은 끝나도록 둔다). 받던 지도는 결과를 버린다.
 fn leave_picker(mut layer: ResMut<TileLayer>, mut picker: ResMut<Picker>) {
     layer.entities.clear();
+    if let Some(fetcher) = layer.fetcher.as_mut() {
+        fetcher.cancel_pending();
+    }
     picker.loading = None;
 }
 
@@ -820,14 +824,21 @@ fn update_tiles(
     let zoom = tiles::zoom_for_scale(ortho.scale);
     let wanted = tiles::visible_tiles(center - half, center + half, zoom, MAX_VISIBLE_TILES);
     let fetcher = layer.fetcher.as_mut().expect("fetcher started");
+    // 없는 타일과 만료된 타일을 요청한다(만료된 타일은 새 결과가 올 때까지 그대로 보인다).
+    let now = tiles::now_s();
     let missing: Vec<TileId> = wanted
         .iter()
-        .filter(|tile| !layer.materials.contains_key(tile))
+        .filter(|tile| {
+            layer
+                .materials
+                .get(tile)
+                .is_none_or(|(_, _, expires)| *expires <= now)
+        })
         .copied()
         .collect();
     fetcher.request(&missing);
     for (tile, outcome) in fetcher.poll() {
-        let TileOutcome::Image(bytes) = outcome else {
+        let TileOutcome::Image { bytes, expires_at } = outcome else {
             continue;
         };
         let Ok(image) = Image::from_buffer(
@@ -838,6 +849,8 @@ fn update_tiles(
             ImageSampler::linear(),
             RenderAssetUsages::RENDER_WORLD,
         ) else {
+            // 디코딩하지 못하면 캐시를 지우고 실패로 셈한다(매 프레임 다시 처리하지 않게).
+            fetcher.report_bad(tile);
             continue;
         };
         let material = materials.add(StandardMaterial {
@@ -846,10 +859,14 @@ fn update_tiles(
             cull_mode: None,
             ..default()
         });
-        layer.materials.insert(tile, (material, frame));
+        layer.materials.insert(tile, (material, frame, expires_at));
+        // 새로 받은(갱신된) 타일은 다시 그리도록 기존 엔티티를 지운다.
+        if let Some(entity) = layer.entities.remove(&tile) {
+            commands.entity(entity).despawn();
+        }
     }
     for tile in &wanted {
-        if let Some((material, seen)) = layer.materials.get_mut(tile) {
+        if let Some((material, seen, _)) = layer.materials.get_mut(tile) {
             *seen = frame;
             if !layer.entities.contains_key(tile) {
                 let (min, max) = tile.view_rect();
@@ -885,7 +902,7 @@ fn update_tiles(
             .materials
             .iter()
             .filter(|(tile, _)| !layer.entities.contains_key(tile))
-            .map(|(tile, (_, seen))| (*seen, *tile))
+            .map(|(tile, (_, seen, _))| (*seen, *tile))
             .collect();
         by_age.sort();
         let extra = layer.materials.len() - MEMORY_BUDGET_TILES;

@@ -190,11 +190,42 @@ pub struct TileRecord {
     pub last_modified: Option<String>,
 }
 
-/// 응답 머리글로 만료 시각을 정한다. `Cache-Control: max-age`를 먼저 보고, `no-store`·`no-cache`는 0초,
-/// 읽을 수 없으면 [`DEFAULT_TTL_S`]다. (`Expires` 날짜 해석은 하지 않고 기본값을 쓴다.)
-pub fn expires_at(now: u64, cache_control: Option<&str>) -> u64 {
+/// HTTP 날짜(`Sun, 06 Nov 1994 08:49:37 GMT`, RFC 7231 IMF-fixdate)를 유닉스 초로 바꾼다. 형식이 다르면 `None`.
+pub fn parse_http_date(text: &str) -> Option<u64> {
+    let parts: Vec<&str> = text.split_whitespace().collect();
+    let [_, day, month, year, time, "GMT"] = parts[..] else {
+        return None;
+    };
+    let month = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ]
+    .iter()
+    .position(|name| *name == month)? as i64
+        + 1;
+    let (day, year) = (day.parse::<i64>().ok()?, year.parse::<i64>().ok()?);
+    let clock: Vec<i64> = time
+        .split(':')
+        .map(|part| part.parse().ok())
+        .collect::<Option<_>>()?;
+    let [hour, minute, second] = clock[..] else {
+        return None;
+    };
+    // H. Hinnant의 days_from_civil.
+    let y = if month <= 2 { year - 1 } else { year };
+    let era = y.div_euclid(400);
+    let year_of_era = y - era * 400;
+    let day_of_year = (153 * (if month > 2 { month - 3 } else { month + 9 }) + 2) / 5 + day - 1;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    let days = era * 146_097 + day_of_era - 719_468;
+    u64::try_from(days * 86_400 + hour * 3600 + minute * 60 + second).ok()
+}
+
+/// 응답 머리글로 만료 시각을 정한다. `Cache-Control`의 `max-age`(`no-store`·`no-cache`는 0초)를 먼저 보고,
+/// 없으면 `Expires` 날짜, 둘 다 읽을 수 없으면 [`DEFAULT_TTL_S`]다.
+pub fn expires_at(now: u64, cache_control: Option<&str>, expires: Option<&str>) -> u64 {
+    let from_expires = || expires.and_then(parse_http_date).map(|time| time.max(now));
     let Some(value) = cache_control else {
-        return now + DEFAULT_TTL_S;
+        return from_expires().unwrap_or(now + DEFAULT_TTL_S);
     };
     let mut ttl = None;
     for part in value.split(',').map(str::trim) {
@@ -207,10 +238,14 @@ pub fn expires_at(now: u64, cache_control: Option<&str>) -> u64 {
             ttl = Some(ttl.unwrap_or(seconds).min(seconds));
         }
     }
-    now + ttl.unwrap_or(DEFAULT_TTL_S)
+    match ttl {
+        Some(ttl) => now + ttl,
+        None => from_expires().unwrap_or(now + DEFAULT_TTL_S),
+    }
 }
 
-/// PNG 서명과 IHDR의 너비·높이가 [`TILE_PX`]인지, 크기가 상한 이하인지 검사한다.
+/// PNG 서명과 IHDR의 너비·높이가 [`TILE_PX`]인지, 크기가 상한 이하인지 검사하고, 실제로 끝까지 디코딩해 본다
+/// (잘리거나 CRC가 깨진 PNG를 정상 캐시로 저장하지 않게).
 pub fn check_png(bytes: &[u8]) -> Result<(), String> {
     if bytes.len() > MAX_TILE_BYTES {
         return Err(format!(
@@ -228,7 +263,16 @@ pub fn check_png(bytes: &[u8]) -> Result<(), String> {
             "tile is {width}x{height}, expected {TILE_PX}x{TILE_PX}"
         ));
     }
-    Ok(())
+    bevy::image::Image::from_buffer(
+        bytes,
+        bevy::image::ImageType::Extension("png"),
+        bevy::image::CompressedImageFormats::NONE,
+        true,
+        bevy::image::ImageSampler::Default,
+        bevy::asset::RenderAssetUsages::RENDER_WORLD,
+    )
+    .map(|_| ())
+    .map_err(|error| format!("tile PNG cannot be decoded: {error}"))
 }
 
 /// 지금 시각(유닉스 초).
@@ -238,16 +282,26 @@ pub fn now_s() -> u64 {
         .map_or(0, |elapsed| elapsed.as_secs())
 }
 
-/// 캐시에서 타일을 읽는다. (이미지, 기록). 이미지가 PNG 검사를 통과하지 못하면(손상) `None`.
+/// 캐시에서 타일을 읽는다. (이미지, 기록). 이미지가 PNG 검사를 통과하지 못하면(손상) 캐시 파일을 지우고 `None`.
 pub fn read_cached(root: &Path, tile: TileId) -> Option<(Vec<u8>, TileRecord)> {
     let (image, record) = tile.cache_paths(root);
     let bytes = std::fs::read(&image).ok()?;
-    check_png(&bytes).ok()?;
+    if check_png(&bytes).is_err() {
+        remove_cached(root, tile);
+        return None;
+    }
     let record = std::fs::read_to_string(&record)
         .ok()
         .and_then(|text| toml::from_str(&text).ok())
         .unwrap_or_default();
     Some((bytes, record))
+}
+
+/// 타일 캐시 파일(이미지·기록)을 지운다.
+pub fn remove_cached(root: &Path, tile: TileId) {
+    let (image, record) = tile.cache_paths(root);
+    let _ = std::fs::remove_file(image);
+    let _ = std::fs::remove_file(record);
 }
 
 /// 타일과 기록을 캐시에 쓴다(임시 이름으로 쓴 뒤 바꿔 단다).
@@ -313,6 +367,8 @@ pub struct TileReply {
     pub etag: Option<String>,
     /// `Last-Modified`.
     pub last_modified: Option<String>,
+    /// `Expires`.
+    pub expires: Option<String>,
 }
 
 /// 타일 전송 수단. 시험은 가짜 전송 수단만 쓴다(외부 요청 없음).
@@ -361,10 +417,11 @@ impl TileTransport for UreqTileTransport {
                 .and_then(|value| value.to_str().ok())
                 .map(str::to_owned)
         };
-        let (cache_control, etag, last_modified) = (
+        let (cache_control, etag, last_modified, expires) = (
             header("cache-control"),
             header("etag"),
             header("last-modified"),
+            header("expires"),
         );
         let status = response.status().as_u16();
         let mut body = Vec::new();
@@ -380,6 +437,7 @@ impl TileTransport for UreqTileTransport {
             cache_control,
             etag,
             last_modified,
+            expires,
         })
     }
 }
@@ -412,8 +470,13 @@ impl Default for TileSettings {
 /// 받기 결과.
 #[derive(Debug, Clone, PartialEq)]
 pub enum TileOutcome {
-    /// PNG 바이트(캐시 또는 새로 받음).
-    Image(Vec<u8>),
+    /// PNG 바이트(캐시 또는 새로 받음)와 만료 시각(유닉스 초). 만료되면 화면은 그대로 두고 다시 확인한다.
+    Image {
+        /// PNG 바이트.
+        bytes: Vec<u8>,
+        /// 만료 시각.
+        expires_at: u64,
+    },
     /// 받지 못함(회색 칸으로 둔다).
     Failed(String),
 }
@@ -440,6 +503,8 @@ pub struct TileFetcher {
     paused_until: Arc<Mutex<u64>>,
     /// 이미 꺼냈지만 아직 [`TileFetcher::poll`]로 넘기지 않은 결과.
     ready: Vec<(TileId, TileOutcome)>,
+    /// 디스크 캐시 폴더.
+    cache_root: PathBuf,
 }
 
 impl TileFetcher {
@@ -477,7 +542,22 @@ impl TileFetcher {
             backoff: HashMap::new(),
             paused_until,
             ready: Vec::new(),
+            cache_root: settings.cache_root,
         }
+    }
+
+    /// 아직 시작하지 않은 대기 요청을 모두 버린다(화면을 나갈 때). 이미 전송 중인 요청은 끝나도록 둔다.
+    pub fn cancel_pending(&mut self) {
+        let (lock, _) = &*self.shared;
+        lock.lock().expect("tile queue lock").queue.clear();
+    }
+
+    /// 받은 이미지를 화면에서 디코딩하지 못했을 때: 캐시를 지우고 실패로 셈해 다시 시도 간격을 늘린다.
+    pub fn report_bad(&mut self, tile: TileId) {
+        remove_cached(&self.cache_root, tile);
+        let entry = self.backoff.entry(tile).or_insert((0, 0));
+        entry.0 += 1;
+        entry.1 = now_s() + (5_u64 << entry.0.min(6)).min(300);
     }
 
     /// 지금 화면에 필요한 타일 중 아직 없는 것을 요청한다. 대기열은 이 목록으로 바꾼다(오래된 요청 폐기).
@@ -516,7 +596,7 @@ impl TileFetcher {
         let now = now_s();
         for (tile, outcome) in &results {
             match outcome {
-                TileOutcome::Image(_) => {
+                TileOutcome::Image { .. } => {
                     self.backoff.remove(tile);
                 }
                 TileOutcome::Failed(_) => {
@@ -566,10 +646,15 @@ fn worker(
             }
         };
         let outcome = fetch_tile(settings, transport, tile, paused_until);
-        lock.lock()
-            .expect("tile queue lock")
-            .in_flight
-            .remove(&tile);
+        let paused = *paused_until.lock().expect("pause lock") > now_s();
+        {
+            let mut state = lock.lock().expect("tile queue lock");
+            state.in_flight.remove(&tile);
+            // 403·429로 멈췄으면 남은 대기 요청을 버린다(다른 작업자도 꺼내지 않게).
+            if paused {
+                state.queue.clear();
+            }
+        }
         if sender.send((tile, outcome)).is_err() {
             return;
         }
@@ -577,7 +662,8 @@ fn worker(
 }
 
 /// 타일 하나를 처리한다: 유효한 캐시면 그대로, 만료됐으면 조건부 요청(304면 캐시 유지·만료 갱신),
-/// 없으면 새로 받는다. 네트워크가 꺼져 있으면 캐시만 쓴다(만료돼도 보여 준다). 403·429면 1분간 전체 중지.
+/// 없으면 새로 받는다. 네트워크가 꺼져 있거나 403·429 뒤 일시 중지 중이면 전송하지 않고 캐시만 쓴다
+/// (만료돼도 보여 준다). 403·429를 받으면 1분간 전체 중지한다.
 pub fn fetch_tile(
     settings: &TileSettings,
     transport: &dyn TileTransport,
@@ -586,46 +672,67 @@ pub fn fetch_tile(
 ) -> TileOutcome {
     let now = now_s();
     let cached = read_cached(&settings.cache_root, tile);
+    let paused = *paused_until.lock().expect("pause lock") > now;
     if let Some((bytes, record)) = &cached
-        && (record.expires_at > now || !settings.network)
+        && (record.expires_at > now || !settings.network || paused)
     {
-        return TileOutcome::Image(bytes.clone());
+        return TileOutcome::Image {
+            bytes: bytes.clone(),
+            expires_at: record.expires_at.max(now + 60),
+        };
     }
     if !settings.network {
         return TileOutcome::Failed("offline and not cached".to_owned());
     }
+    if paused {
+        return TileOutcome::Failed("tile server asked us to pause".to_owned());
+    }
+    // 실패해도 만료된 캐시를 계속 보여 주되, 1분 뒤 다시 확인한다.
+    let stale = |cached: Option<(Vec<u8>, TileRecord)>, error: String| match cached {
+        Some((bytes, _)) => TileOutcome::Image {
+            bytes,
+            expires_at: now + 60,
+        },
+        None => TileOutcome::Failed(error),
+    };
     let url = tile.url(&settings.url_template);
     let reply = match transport.get(&url, &settings.user_agent, cached.as_ref().map(|(_, r)| r)) {
         Ok(reply) => reply,
-        Err(error) => {
-            return match cached {
-                Some((bytes, _)) => TileOutcome::Image(bytes),
-                None => TileOutcome::Failed(error),
-            };
-        }
+        Err(error) => return stale(cached, error),
     };
+    let expiry = expires_at(
+        now,
+        reply.cache_control.as_deref(),
+        reply.expires.as_deref(),
+    );
     match reply.status {
         200 => {
             if let Err(error) = check_png(&reply.body) {
-                return TileOutcome::Failed(error);
+                return stale(cached, error);
             }
             let record = TileRecord {
-                expires_at: expires_at(now, reply.cache_control.as_deref()),
+                expires_at: expiry,
                 etag: reply.etag,
                 last_modified: reply.last_modified,
             };
             let _ = write_cached(&settings.cache_root, tile, &reply.body, &record);
-            TileOutcome::Image(reply.body)
+            TileOutcome::Image {
+                bytes: reply.body,
+                expires_at: expiry,
+            }
         }
         304 => match cached {
             Some((bytes, old)) => {
                 let record = TileRecord {
-                    expires_at: expires_at(now, reply.cache_control.as_deref()),
+                    expires_at: expiry,
                     etag: reply.etag.or(old.etag),
                     last_modified: reply.last_modified.or(old.last_modified),
                 };
                 let _ = write_cached(&settings.cache_root, tile, &bytes, &record);
-                TileOutcome::Image(bytes)
+                TileOutcome::Image {
+                    bytes,
+                    expires_at: expiry,
+                }
             }
             None => TileOutcome::Failed("304 without a cached tile".to_owned()),
         },
@@ -633,10 +740,7 @@ pub fn fetch_tile(
             if status == 403 || status == 429 {
                 *paused_until.lock().expect("pause lock") = now + 60;
             }
-            match cached {
-                Some((bytes, _)) => TileOutcome::Image(bytes),
-                None => TileOutcome::Failed(format!("tile server answered HTTP {status}")),
-            }
+            stale(cached, format!("tile server answered HTTP {status}"))
         }
     }
 }
@@ -645,13 +749,65 @@ pub fn fetch_tile(
 mod tests {
     use super::*;
 
-    /// 256×256 PNG 머리부만 있는 시험용 바이트(검사용, 실제로 그릴 수는 없음).
+    /// CRC-32(PNG 청크용, 표 없이 비트 단위).
+    fn crc32(bytes: &[u8]) -> u32 {
+        let mut crc = 0xFFFF_FFFF_u32;
+        for &byte in bytes {
+            crc ^= u32::from(byte);
+            for _ in 0..8 {
+                crc = if crc & 1 != 0 {
+                    (crc >> 1) ^ 0xEDB8_8320
+                } else {
+                    crc >> 1
+                };
+            }
+        }
+        !crc
+    }
+
+    /// 실제로 디코딩되는 256×256 회색 RGB PNG(압축하지 않은 deflate 블록). 시험에서 직접 만든다.
     fn fake_png() -> Vec<u8> {
-        let mut bytes = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR".to_vec();
-        bytes.extend_from_slice(&256_u32.to_be_bytes());
-        bytes.extend_from_slice(&256_u32.to_be_bytes());
-        bytes.extend_from_slice(&[8, 6, 0, 0, 0]);
-        bytes
+        let chunk = |out: &mut Vec<u8>, kind: &[u8], data: &[u8]| {
+            out.extend_from_slice(&(data.len() as u32).to_be_bytes());
+            let mut body = kind.to_vec();
+            body.extend_from_slice(data);
+            out.extend_from_slice(&body);
+            out.extend_from_slice(&crc32(&body).to_be_bytes());
+        };
+        let mut raw = Vec::new();
+        for _ in 0..256 {
+            raw.push(0);
+            raw.extend(std::iter::repeat_n(200_u8, 256 * 3));
+        }
+        let mut zlib = vec![0x78, 0x01];
+        let blocks: Vec<&[u8]> = raw.chunks(65_535).collect();
+        for (index, block) in blocks.iter().enumerate() {
+            zlib.push(u8::from(index + 1 == blocks.len()));
+            let len = block.len() as u16;
+            zlib.extend_from_slice(&len.to_le_bytes());
+            zlib.extend_from_slice(&(!len).to_le_bytes());
+            zlib.extend_from_slice(block);
+        }
+        let (mut a, mut b) = (1_u32, 0_u32);
+        for &byte in &raw {
+            a = (a + u32::from(byte)) % 65_521;
+            b = (b + a) % 65_521;
+        }
+        zlib.extend_from_slice(&((b << 16) | a).to_be_bytes());
+        let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
+        let mut header = Vec::new();
+        header.extend_from_slice(&256_u32.to_be_bytes());
+        header.extend_from_slice(&256_u32.to_be_bytes());
+        header.extend_from_slice(&[8, 2, 0, 0, 0]);
+        chunk(&mut png, b"IHDR", &header);
+        chunk(&mut png, b"IDAT", &zlib);
+        chunk(&mut png, b"IEND", &[]);
+        png
+    }
+
+    /// 결과가 이미지이고 바이트가 `bytes`인지.
+    fn is_image(outcome: &TileOutcome, bytes: &[u8]) -> bool {
+        matches!(outcome, TileOutcome::Image { bytes: got, .. } if got == bytes)
     }
 
     /// 정해진 응답을 돌려주고 요청 기록을 남기는 가짜 전송 수단(외부 요청 없음).
@@ -767,13 +923,36 @@ mod tests {
         assert!(visible_tiles(far, far + Vec2::splat(1000.0), 12, 30).is_empty());
     }
 
-    /// 캐시 머리글: max-age, no-cache, 읽을 수 없음(7일).
+    /// 캐시 머리글: max-age, no-cache, Expires 날짜, 읽을 수 없음(7일).
     #[test]
     fn cache_header_rules() {
-        assert_eq!(expires_at(100, Some("public, max-age=3600")), 3700);
-        assert_eq!(expires_at(100, Some("no-cache")), 100);
-        assert_eq!(expires_at(100, Some("private")), 100 + DEFAULT_TTL_S);
-        assert_eq!(expires_at(100, None), 100 + DEFAULT_TTL_S);
+        assert_eq!(expires_at(100, Some("public, max-age=3600"), None), 3700);
+        assert_eq!(expires_at(100, Some("no-cache"), None), 100);
+        assert_eq!(expires_at(100, Some("private"), None), 100 + DEFAULT_TTL_S);
+        assert_eq!(expires_at(100, None, None), 100 + DEFAULT_TTL_S);
+        assert_eq!(
+            parse_http_date("Sun, 06 Nov 1994 08:49:37 GMT"),
+            Some(784_111_777)
+        );
+        assert_eq!(parse_http_date("06 Nov 1994"), None);
+        let now = 1_793_000_000;
+        assert_eq!(
+            expires_at(now, None, Some("Mon, 26 Oct 2026 08:33:20 GMT")),
+            now + 3600
+        );
+        // max-age가 Expires보다 앞서고, 지난 Expires는 바로 만료다.
+        assert_eq!(
+            expires_at(
+                now,
+                Some("max-age=10"),
+                Some("Mon, 26 Oct 2026 08:33:20 GMT")
+            ),
+            now + 10
+        );
+        assert_eq!(
+            expires_at(now, None, Some("Sun, 06 Nov 1994 08:49:37 GMT")),
+            now
+        );
     }
 
     /// PNG 검사: 정상, 다른 치수, PNG 아님, 너무 큼.
@@ -787,6 +966,73 @@ mod tests {
         let mut big = fake_png();
         big.resize(MAX_TILE_BYTES + 1, 0);
         assert!(check_png(&big).is_err());
+        // 머리부는 맞지만 잘린 PNG와, 데이터 1바이트를 바꿔 CRC가 맞지 않는 PNG는 디코딩 검사에서 거부한다.
+        let png = fake_png();
+        assert!(check_png(&png[..png.len() / 2]).is_err(), "truncated");
+        let mut corrupt = png.clone();
+        corrupt[1000] ^= 0x55;
+        assert!(check_png(&corrupt).is_err(), "bad CRC");
+    }
+
+    /// 손상된 캐시(잘림·CRC)는 지우고 다시 받으며, 200으로 받은 손상 PNG는 캐시에 저장하지 않는다.
+    #[test]
+    fn corrupt_tiles_are_not_cached() {
+        let root = temp_root("corrupt");
+        let png = fake_png();
+        let tile = TileId {
+            z: 11,
+            x: 1750,
+            y: 806,
+        };
+        write_cached(
+            &root,
+            tile,
+            &png[..png.len() / 2],
+            &TileRecord {
+                expires_at: u64::MAX,
+                ..TileRecord::default()
+            },
+        )
+        .unwrap();
+        assert!(read_cached(&root, tile).is_none());
+        assert!(
+            !tile.cache_paths(&root).0.exists(),
+            "corrupt cache file removed"
+        );
+        let transport = FakeTransport {
+            replies: Mutex::new(VecDeque::from(vec![
+                TileReply {
+                    status: 200,
+                    body: png[..png.len() - 20].to_vec(),
+                    ..TileReply::default()
+                },
+                TileReply {
+                    status: 200,
+                    body: png.clone(),
+                    ..TileReply::default()
+                },
+            ])),
+            seen: Mutex::new(Vec::new()),
+        };
+        let settings = TileSettings {
+            cache_root: root.clone(),
+            ..TileSettings::default()
+        };
+        let paused = Mutex::new(0);
+        assert!(matches!(
+            fetch_tile(&settings, &transport, tile, &paused),
+            TileOutcome::Failed(_)
+        ));
+        assert!(
+            !tile.cache_paths(&root).0.exists(),
+            "bad download not cached"
+        );
+        assert!(is_image(
+            &fetch_tile(&settings, &transport, tile, &paused),
+            &png
+        ));
+        assert!(read_cached(&root, tile).is_some());
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// 새로 받기 → 캐시 재사용(요청 없음) → 만료 후 조건부 요청 304(기존 이미지 유지·만료 갱신) →
@@ -802,7 +1048,7 @@ mod tests {
                     body: png.clone(),
                     cache_control: Some("max-age=0".to_owned()),
                     etag: Some("\"v1\"".to_owned()),
-                    last_modified: None,
+                    ..TileReply::default()
                 },
                 TileReply {
                     status: 304,
@@ -831,15 +1077,15 @@ mod tests {
             x: 875,
             y: 403,
         };
-        assert_eq!(
-            fetch_tile(&settings, &transport, tile, &paused),
-            TileOutcome::Image(png.clone())
-        );
+        assert!(is_image(
+            &fetch_tile(&settings, &transport, tile, &paused),
+            &png
+        ));
         // max-age=0이라 바로 만료: 다음 요청은 ETag를 붙인 조건부 요청이고 304면 기존 이미지를 쓴다.
-        assert_eq!(
-            fetch_tile(&settings, &transport, tile, &paused),
-            TileOutcome::Image(png.clone())
-        );
+        assert!(is_image(
+            &fetch_tile(&settings, &transport, tile, &paused),
+            &png
+        ));
         let seen = transport.seen.lock().unwrap().clone();
         assert_eq!(seen.len(), 2);
         assert_eq!(
@@ -849,17 +1095,17 @@ mod tests {
         let record = read_cached(&root, tile).unwrap().1;
         assert!(record.expires_at > now_s() + 500);
         // 유효한 캐시는 요청 없이 쓴다.
-        assert_eq!(
-            fetch_tile(&settings, &transport, tile, &paused),
-            TileOutcome::Image(png.clone())
-        );
+        assert!(is_image(
+            &fetch_tile(&settings, &transport, tile, &paused),
+            &png
+        ));
         assert_eq!(transport.seen.lock().unwrap().len(), 2);
         // 손상된 캐시는 버리고 새로 받는다.
         std::fs::write(tile.cache_paths(&root).0, b"broken").unwrap();
-        assert_eq!(
-            fetch_tile(&settings, &transport, tile, &paused),
-            TileOutcome::Image(png.clone())
-        );
+        assert!(is_image(
+            &fetch_tile(&settings, &transport, tile, &paused),
+            &png
+        ));
         // 캐시 없는 타일에 403: 실패(회색)이고 1분 일시 중지.
         let other = TileId {
             z: 10,
@@ -974,7 +1220,7 @@ mod tests {
             }
             std::thread::sleep(Duration::from_millis(10));
         }
-        assert!(matches!(done.get(&good), Some(TileOutcome::Image(_))));
+        assert!(matches!(done.get(&good), Some(TileOutcome::Image { .. })));
         assert!(matches!(done.get(&bad), Some(TileOutcome::Failed(_))));
         // 실패 전에 겹쳐 들어간 요청의 늦은 결과를 비운다.
         std::thread::sleep(Duration::from_millis(100));
@@ -987,6 +1233,99 @@ mod tests {
             "failed tile is not retried right away"
         );
         assert_eq!(transport.seen.lock().unwrap().len(), requests);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// 매번 정해진 상태로 답하고 호출 수를 세는 가짜 전송 수단. `delay`만큼 기다린 뒤 답한다.
+    struct Counting {
+        status: u16,
+        delay: Duration,
+        calls: Mutex<usize>,
+    }
+
+    impl TileTransport for Counting {
+        /// 호출 수를 세고 `delay` 뒤 정해진 상태(200이면 정상 PNG)로 답한다.
+        fn get(&self, _: &str, _: &str, _: Option<&TileRecord>) -> Result<TileReply, String> {
+            *self.calls.lock().unwrap() += 1;
+            std::thread::sleep(self.delay);
+            Ok(TileReply {
+                status: self.status,
+                body: if self.status == 200 {
+                    fake_png()
+                } else {
+                    Vec::new()
+                },
+                ..TileReply::default()
+            })
+        }
+    }
+
+    /// 화면 하나 분량(24장)을 요청했는데 429가 오면, 이미 전송 중이던 요청 말고는 더 보내지 않는다(작업자 수준).
+    #[test]
+    fn rate_limit_stops_queued_requests() {
+        let root = temp_root("pause");
+        let transport = Arc::new(Counting {
+            status: 429,
+            delay: Duration::from_millis(20),
+            calls: Mutex::new(0),
+        });
+        let mut fetcher = TileFetcher::start(
+            TileSettings {
+                cache_root: root.clone(),
+                ..TileSettings::default()
+            },
+            transport.clone(),
+        );
+        let tiles: Vec<TileId> = (0..24)
+            .map(|x| TileId {
+                z: 12,
+                x: 3500 + x,
+                y: 1600,
+            })
+            .collect();
+        fetcher.request(&tiles);
+        std::thread::sleep(Duration::from_millis(400));
+        let calls = *transport.calls.lock().unwrap();
+        assert!(calls <= MAX_CONCURRENT, "{calls} requests after 429");
+        fetcher.request(&tiles);
+        std::thread::sleep(Duration::from_millis(100));
+        assert_eq!(
+            *transport.calls.lock().unwrap(),
+            calls,
+            "paused for a minute"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// 화면을 나가며 대기 요청을 버리면, 이미 전송 중이던 요청 말고는 더 받지 않는다.
+    #[test]
+    fn cancel_pending_drops_queued_tiles() {
+        let root = temp_root("cancel");
+        let transport = Arc::new(Counting {
+            status: 200,
+            delay: Duration::from_millis(40),
+            calls: Mutex::new(0),
+        });
+        let mut fetcher = TileFetcher::start(
+            TileSettings {
+                cache_root: root.clone(),
+                ..TileSettings::default()
+            },
+            transport.clone(),
+        );
+        let tiles: Vec<TileId> = (0..20)
+            .map(|x| TileId {
+                z: 12,
+                x: 3600 + x,
+                y: 1600,
+            })
+            .collect();
+        fetcher.request(&tiles);
+        std::thread::sleep(Duration::from_millis(5));
+        fetcher.cancel_pending();
+        std::thread::sleep(Duration::from_millis(300));
+        let calls = *transport.calls.lock().unwrap();
+        assert!(calls <= MAX_CONCURRENT, "{calls} requests after cancel");
         let _ = std::fs::remove_dir_all(&root);
     }
 }
