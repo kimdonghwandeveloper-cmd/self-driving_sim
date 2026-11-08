@@ -43,7 +43,14 @@ func _run() -> void:
 	map.free()
 	var main = load("res://main.tscn").instantiate()
 	root.add_child(main)
+	_check(not main.back_button.visible, "initial menu")
+	await _capture("menu")
+	main.call("_show_drive", "training")
+	var previous = main.screen
+	main.call("_show_menu")
+	_check(previous.get_parent() == null, "old session detached")
 	main.call("_show_map")
+	main.call("_show_menu")
 	main.call("_show_drive", "calibration")
 	await process_frame
 	_check(main.screen.failure.is_empty(), "screen re-entry")

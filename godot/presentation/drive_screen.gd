@@ -12,6 +12,8 @@ var warnings_label := Label.new()
 var notice := Label.new()
 var is_preview := false
 var failure := ""
+var dismiss := Button.new()
+var scene_content: Node3D
 
 ## 전달받은 코스로 화면을 만들고 실패 시 메시를 생성하지 않는다.
 func start(course_name: String, force_preview: bool = false) -> void:
@@ -28,8 +30,10 @@ func start(course_name: String, force_preview: bool = false) -> void:
 	if not data.get("ok", false):
 		_fail(str(data.get("error", "코스 데이터 오류")))
 		return
+	scene_content = Node3D.new()
+	add_child(scene_content)
 	var course_mesh := CourseMesh.new()
-	add_child(course_mesh)
+	scene_content.add_child(course_mesh)
 	course_mesh.build(data)
 	vehicle.add_child(Visual.new())
 	rig = Rig.new()
@@ -42,6 +46,7 @@ func start(course_name: String, force_preview: bool = false) -> void:
 		rig.apply_view(str(vehicle.call("view")))
 		rig.set_external(bool(vehicle.call("debug_camera")))
 	warnings_label.text = "\n".join(vehicle.call("config_warnings"))
+	dismiss.visible = not warnings_label.text.is_empty()
 	notice.text = "\n".join(vehicle.call("course_notices"))
 	if is_preview:
 		notice.text += "\n정지 미리보기 · 1 전방 / 2 후방 / 3 좌측 / 4 우측 / C 외부"
@@ -78,18 +83,27 @@ func _ui() -> void:
 	var canvas := CanvasLayer.new()
 	add_child(canvas)
 	var panel := VBoxContainer.new()
-	panel.position = Vector2(24, 80)
-	canvas.add_child(panel)
+	var overlay := Control.new()
+	overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	canvas.add_child(overlay)
+	panel.set_anchors_and_offsets_preset(Control.PRESET_TOP_WIDE)
+	panel.offset_left = 24
+	panel.offset_right = -24
+	panel.offset_top = 80
+	overlay.add_child(panel)
 	for label in [hud, notice, warnings_label]:
+		label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		label.add_theme_color_override("font_color", Color.WHITE)
 		label.add_theme_color_override("font_shadow_color", Color.BLACK)
 		label.add_theme_constant_override("shadow_offset_x", 1)
 		label.add_theme_constant_override("shadow_offset_y", 1)
 		panel.add_child(label)
 	hud.add_theme_font_size_override("font_size", 24)
-	var dismiss := Button.new()
 	dismiss.text = "설정 경고 닫기"
-	dismiss.pressed.connect(warnings_label.hide)
+	dismiss.pressed.connect(_dismiss_warnings)
+	dismiss.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 	panel.add_child(dismiss)
 
 ## 읽기 함수만 호출해 주행 상태를 표시한다.
@@ -116,6 +130,14 @@ func _fail(message: String) -> void:
 	failure = message
 	if is_instance_valid(vehicle):
 		vehicle.set_physics_process(false)
+		vehicle.hide()
+	if is_instance_valid(scene_content):
+		scene_content.hide()
 	hud.text = "코스를 열 수 없습니다\n" + message
 	notice.text = "상단 메뉴로 돌아가세요."
 	warnings_label.hide()
+	dismiss.hide()
+## 경고 문구와 닫기 버튼을 함께 숨긴다.
+func _dismiss_warnings() -> void:
+	warnings_label.hide()
+	dismiss.hide()
