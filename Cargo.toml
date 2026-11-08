@@ -5,6 +5,10 @@ edition = "2024"
 rust-version = "1.99.1"
 publish = false
 
+[workspace]
+# Phase 5-0: Godot 확장 crate. 기본 멤버는 루트 패키지뿐이라 기존 cargo 명령 동작은 같다.
+members = ["crates/sim-godot"]
+
 [features]
 default = []
 # Compatibility check only. Collisions currently use the built-in ground check in src/vehicle/collision.rs.
