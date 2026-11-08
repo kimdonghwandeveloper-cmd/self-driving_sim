@@ -5037,6 +5037,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "sim-core",
  "toml",
  "ureq",
 ]
@@ -5130,6 +5131,15 @@ name = "shlex"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
+
+[[package]]
+name = "sim-core"
+version = "0.1.0"
+dependencies = [
+ "bevy_ecs",
+ "glam 0.32.1",
+ "serde",
+]
 
 [[package]]
 name = "sim-godot"

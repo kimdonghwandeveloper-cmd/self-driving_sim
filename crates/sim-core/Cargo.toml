@@ -1,0 +1,18 @@
+[package]
+name = "sim-core"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.99.1"
+publish = false
+
+# Phase GD-1: 엔진과 무관한 시뮬레이터 로직. Bevy 앱(루트)과 Godot 확장(crates/sim-godot)이 함께 쓴다.
+[features]
+default = []
+# Bevy 앱에서 쓸 때만 ECS 컴포넌트 derive를 붙인다. Godot 쪽은 이 기능 없이 빌드한다.
+bevy = ["dep:bevy_ecs"]
+
+[dependencies]
+# bevy_math 0.19.1과 같은 glam이라 Bevy의 Vec2와 같은 타입이다.
+glam = "=0.32.1"
+serde = { version = "=1.0.229", features = ["derive"] }
+bevy_ecs = { version = "=0.19.1", optional = true }
