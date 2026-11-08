@@ -3,3 +3,5 @@
 /logs/
 *.log
 /cache/
+# Godot 에디터 캐시 (가져오기·실행 시 자동 생성)
+/godot/.godot/
