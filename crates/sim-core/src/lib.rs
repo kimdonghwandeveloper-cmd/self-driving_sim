@@ -4,3 +4,4 @@
 //! `bevy` 기능을 켜면 Bevy 앱에서 쓰는 컴포넌트 derive가 붙는다.
 
 pub mod vehicle;
+pub mod world;

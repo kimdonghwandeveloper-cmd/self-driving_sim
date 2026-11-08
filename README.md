@@ -64,7 +64,7 @@ HUD 아래쪽에는 차량 파라미터 보정용 회전반경·예상 정지거
 | `calibration` | Phase 2-5에서 쓰던 넓은 평지와 장애물 4개(회전반경·제동 시험용) |
 | `map:<선택 파일>` | OSM 중심선에서 만든 지도 코스. 여수 가상 교육 코스는 `map:assets/maps/yeosu-expo/course.toml`(way 532526349, 약 292 m, 임시 폭 4 m; 실제 운행 경로 아님). 굽은 길 확인용은 `map:assets/maps/yeosu-expo/curved-course.toml`(way 529495041, 약 321 m). 교차로를 지나는 경로 파일 예제는 `map:assets/maps/yeosu-expo/route-junctions.toml`(Phase 4-3, 교차로 4곳, 임시 폭 4 m). 형식과 제약은 `docs/map-data.md` 참고. 읽지 못하면 경고 후 `training`으로 실행 |
 
-- 화면 상자와 충돌 판정은 `src/world/course.rs`의 같은 정의에서 만들어서 어긋나지 않습니다. 흰 선은 시각 표시일 뿐이고 실제 경계는 연석입니다.
+- 화면 상자와 충돌 판정은 `crates/sim-core/src/world/course.rs`의 같은 정의에서 만들어서 어긋나지 않습니다. 흰 선은 시각 표시일 뿐이고 실제 경계는 연석입니다.
 - 시작 위치 복귀(`R`)는 선택한 코스의 시작 자세로 되돌립니다.
 
 ```powershell

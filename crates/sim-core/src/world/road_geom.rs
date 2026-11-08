@@ -13,7 +13,7 @@
 //! 좌표는 지면 (x, z) m이며, 진행 방향 `f`의 오른쪽은 `(-f.z, f.x)`다([`crate::vehicle::Motion`]과 같은 규칙).
 //! 반경 여유·최대 반경·원호 분할 각도는 모두 **임시값**이다.
 
-use bevy::prelude::*;
+use glam::Vec2;
 
 use crate::vehicle::GroundRect;
 
@@ -337,7 +337,8 @@ pub fn check_simple_boundary(center: &[Vec2], half_width_m: f32) -> Result<(), S
 }
 
 /// 두 선분이 닿거나 교차하는지 판정한다(끝점 접촉·같은 직선 위 겹침 포함). 계산은 f64로 한다.
-pub(crate) fn segments_touch((p1, p2): (Vec2, Vec2), (q1, q2): (Vec2, Vec2)) -> bool {
+#[doc(hidden)]
+pub fn segments_touch((p1, p2): (Vec2, Vec2), (q1, q2): (Vec2, Vec2)) -> bool {
     let to64 = |v: Vec2| (f64::from(v.x), f64::from(v.y));
     let (p1, p2, q1, q2) = (to64(p1), to64(p2), to64(q1), to64(q2));
     let orient = |a: (f64, f64), b: (f64, f64), c: (f64, f64)| {

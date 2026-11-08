@@ -5,7 +5,7 @@
 //! 좌표는 지면 (x, z) m이며 시작 자세의 전방은 -Z다. 모든 치수는 **훈련용 임시값**이며
 //! 실제 도로·공원 통로의 실측값이 아니다.
 
-use bevy::prelude::*;
+use glam::Vec2;
 
 use crate::vehicle::{GroundRect, Motion, VEHICLE_FOOTPRINT};
 
