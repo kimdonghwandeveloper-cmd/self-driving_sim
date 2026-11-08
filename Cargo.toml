@@ -29,6 +29,10 @@ ureq = "=3.5.1"
 
 [profile.dev]
 opt-level = 1
+# 빌드 메모리 절감: 우리 crate는 줄 번호(백트레이스용)만 남기고 변수 디버그 정보는 뺀다.
+debug = "line-tables-only"
 
 [profile.dev.package."*"]
 opt-level = 3
+# 외부 의존성(Bevy 등)은 디버그 정보를 만들지 않는다. rustc·링커 최대 메모리가 가장 크게 줄어든다.
+debug = false
