@@ -4,37 +4,44 @@
 이 문서는 `AGENTS.md`를 대체하지 않는다. 충돌하면 `AGENTS.md`와 사용자 지시가 우선한다.
 **작업 전 반드시 확인:** `git status --short`, `git worktree list`, `git log --all --oneline -15`.
 
-## 1. 목표 (2일)
+## 1. 목표 (2일, 2026-11-08 사용자 지시로 수정)
 
-| 날짜 | 공동 결과물 |
+사용자 지시: **시나리오 A와 여수 경로 주행은 제외**하고, 시스템 구현과 **경로 선택·지도 화면 개선**을 우선한다.
+구현 전에 재생 시험의 틱 안 적용 순서와 코스 생성 실패 처리를 계약에 명확히 정한다(→ `docs/design/godot-interface.md` v0.1 5·6절).
+
+| 순서 | 공동 결과물 |
 | --- | --- |
-| 1일차 | Godot에서 개발 코스(training·calibration)를 키보드·게임패드로 주행, 입석 시점 전·후·좌·우 전환 |
-| 2일차 | 최소 HUD(속도·기어·시동·비상 정지·입력 장치), 간단한 메뉴(코스 선택·종료), 시나리오 A(기본 조작) 1개 |
+| 0 | 인터페이스 계약 v0.1 검토 → v1 고정(구현 시작 조건) |
+| 1 | 시스템: Godot에서 개발 코스(training·calibration) 키보드·게임패드 주행, 입석 시점 4방향, 최소 HUD, 실패 처리, 재생 시험 |
+| 2 | 경로 선택·지도 화면: 전국 배경 지도 → 지역 도로 받기 → 점 찍기 → 경로·경고 확인 → 저장(계약 7절). 개선 항목은 사용자 확인 후 |
+| 3 | 메뉴: 개발 코스 주행·지도 화면·종료 |
 
-미루는 것: GD-1 나머지(지도·경로·PBF 이동), GD-3 그래픽 고도화·여수 경로, 경사, 시나리오 B·C, 기록 저장, 패키징, Bevy 정리.
-2일차 범위(시나리오 A와 여수 경로 중 무엇을 넣을지)는 사용자 확정 전이다.
+제외: 시나리오 A·B·C, 여수(저장 경로) 주행, GD-3 그래픽 고도화, 경사, 기록 저장, 패키징, Bevy 정리.
 
 ## 2. 역할과 파일 소유권
 
 | | Claude | Codex |
 | --- | --- | --- |
 | 수정 영역 | `crates/sim-core/`, `crates/sim-godot/`, 루트 `Cargo.toml`·`Cargo.lock`, `README.md`, `PLAN.md` | `godot/` 전체(장면 `.tscn`, `.gd`, 재질, `project.godot`) |
-| 1일차 | GD-1b 형상 이동 마무리, `SimVehicle`·`SimCourse` 구현 | 주행 장면, 코스 메시 조립, 차체·최소 실내 형상, 입석 카메라 리그(4방향), 조명 |
-| 2일차 | 시나리오 A 판정 로직(sim-core, Rust 테스트), 헤드리스 재생 기대값 | HUD, 메뉴, 시나리오 결과 화면, `godot/tests/drive_replay_test.gd` |
+| 시스템 | GD-1b 형상 이동 마무리, `SimVehicle`·`SimCourse`·`SimReplay` 구현, 실패 처리 | 주행 장면, 코스 메시 조립, 차체·최소 실내, 입석 카메라 리그(4방향), 조명, HUD, `godot/tests/drive_replay_test.gd` |
+| 경로·지도 | GD-1c(지도·경로·스냅샷·타일 모듈 sim-core 이동), `SimRoutePicker`·`SimTiles` 구현 | 지도 화면(Camera2D 이동·확대, 타일·도로·점·경로 그리기, 상태·경고 표시, 출처 표기), 메뉴 |
 | 검토 | Codex 브랜치 교차 검토 | Claude 브랜치 교차 검토 |
 
 - 상대 영역 파일은 수정하지 않는다. 필요하면 요청 문서(아래 5절)로 요청한다.
-- `docs/design/godot-interface.md`(인터페이스 계약)는 둘 다 고칠 수 있지만, 이름·인자 변경은 상대 확인 후에만 한다.
+- `docs/design/godot-interface.md`(인터페이스 계약)는 둘 다 고칠 수 있지만, 이름·인자·순서 규칙 변경은 상대 확인 후에만 한다.
 - `config/*.toml`은 둘 다 읽기만 한다. 값 변경은 사용자 확인 후.
 
 ## 3. 인터페이스
 
-`docs/design/godot-interface.md` 참고. 요약:
+`docs/design/godot-interface.md`(v0.1) 참고. 요약:
 
 - `SimVehicle`(Node3D): 입력·상태 머신·운동 모델·충돌을 Rust가 처리하고 매 물리 틱 자기 transform을 갱신한다.
-  Godot 쪽은 이 노드 **자식**으로 차체·실내·카메라를 붙인다. HUD는 `speed_kmh()`, `gear()` 등 읽기 함수와 시그널을 쓴다.
-- `SimCourse.build(name) -> Dictionary`: 노면·띠·교차로 면·표시선·충돌 경계 데이터. 메시 조립과 재질은 Godot 쪽.
-  Godot 물리 충돌체는 만들지 않는다(충돌은 Rust가 판정).
+  Godot 쪽은 이 노드 **자식**으로 차체·실내·카메라를 붙인다. HUD는 읽기 함수와 시그널을 쓴다.
+  코스 메시는 반드시 `SimVehicle.course_data()`(충돌 판정과 같은 데이터)로 만든다.
+- 틱 안 순서(5-1절): 간격 고정(1/64 s) → 장치 입력 → 명령(대기열 → 장치) → 연속 입력 → 운동·충돌 → 자세 반영 → 시그널.
+  `send_command`는 다음 틱에 처리된다.
+- 실패 처리(6절): 코스 실패는 `is_ready()=false` + `course_failed` + 정지, 설정 오류는 기본값으로 계속 + `config_warnings()`.
+- 경로 선택·지도(7절): 계산·받기·캐시는 Rust(`SimRoutePicker`, `SimTiles`), 그리기·조작은 Godot. 타일은 Godot `HTTPRequest`로 받지 않는다.
 - `project.godot`에 `physics/common/physics_ticks_per_second = 64`를 넣는다(Bevy 판과 같은 고정 간격).
 
 Claude 구현이 오기 전에는 `ClassDB.class_exists("SimVehicle")`로 확인하고, 없으면 GDScript 임시 노드로 장면을 먼저 만든다.
@@ -57,7 +64,7 @@ Claude 구현이 오기 전에는 `ClassDB.class_exists("SimVehicle")`로 확인
 
 ## 5. 서로 요청·보고하는 방법
 
-- 요청·질문: `docs/design/godot-interface.md` 6절 "아직 정하지 않은 것"에 항목을 추가하고 커밋하거나,
+- 요청·질문: `docs/design/godot-interface.md` 8절 "아직 정하지 않은 것"에 항목을 추가하고 커밋하거나,
   사용자를 통해 전달한다. 상대 영역 파일을 직접 고치지 않는다.
 - 문제가 생기면 멋대로 판단해 우회하지 말고 보고한다(사용자 규칙).
 - 완료 처리는 사용자가 한다. "완료"로 단정하지 말고 통과한 검사와 남은 확인 항목을 나눠 적는다.
@@ -78,10 +85,11 @@ Claude 구현이 오기 전에는 `ClassDB.class_exists("SimVehicle")`로 확인
 | `feature/gd-1a-sim-core-vehicle` | b89a207 | 차량 로직 sim-core 분리. Codex 검토 요청 `gd-1a-1794139428685352200` 대기 |
 | `feature/gd-1b-sim-core-geometry` | (미커밋) | 코스·교차로·도로 형상 이동, develop 워크트리 stash@{0}에 보관 |
 | `feature/dev-profile-debuginfo` | e0a10d1 | 빌드 메모리 절감 설정, 측정 미완 |
-| `docs/gd2-parallel-plan` | 이 문서 | 인터페이스 계약 초안과 이 인계 문서 |
+| `docs/gd2-parallel-plan` | 이 문서 | 인터페이스 계약 초안(v0.1)과 이 인계 문서. Codex는 문서·Git 상태만 확인했고 작업 중단 상태 유지(2026-11-08) |
 
 ## 8. Codex가 처음 할 일
 
-1. 이 문서와 `docs/design/godot-interface.md`를 읽고, 인터페이스 초안에서 Godot 쪽으로 쓰기 어려운 부분을 6절에 적는다.
+1. 이 문서와 `docs/design/godot-interface.md`(v0.1)를 읽고, Godot 쪽으로 쓰기 어렵거나 순서·실패 규칙이 모호한 부분을 계약 8절에 적는다.
+   v1 고정 전에는 구현을 시작하지 않는다.
 2. 대기 중인 GD-1a 검토(`gd-1a-1794139428685352200`)를 마친다.
 3. 사용자 확인 후 Codex 워크트리·브랜치를 만들고 1일차 Godot 장면 작업을 시작한다.
