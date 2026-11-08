@@ -315,3 +315,27 @@ Release도 `cargo run --locked --release`에 같은 환경변수를 적용합니
 나머지 설정 파일과 도메인 모듈은 해당 기능을 구현할 때 추가합니다.
 엔진 설정은 [Bevy 공식 가이드](https://bevy.org/learn/quick-start/getting-started/setup/)와
 [0.19.1 기능 목록](https://docs.rs/crate/bevy/0.19.1/features)을 참고했습니다.
+
+## Godot 연결과 첫 import 검사
+
+Windows에서 확장을 빌드한 뒤 다음 명령으로 초기화합니다.
+
+```powershell
+cargo.exe build --locked -p sim-godot
+& '<Godot 콘솔 실행 파일>' --headless --path godot --import --frame-delay 1000
+& '<Godot 콘솔 실행 파일>' --headless --path godot --script res://tests/smoke_test.gd
+```
+
+Godot 4.7.2와 godot-rust 0.5.5 조합에서는 캐시 없는 기본 `--import`가 종료 시 접근 위반으로 실패했습니다.
+`--frame-delay 1000`으로 첫 import의 정상 종료를 확인했으며, 엔진 자체를 수정한 것은 아닙니다.
+Godot [이슈 #111048](https://github.com/godotengine/godot/issues/111048)에 문서 생성과 종료 정리의 경합 및 프레임 지연 우회가 보고되어 있습니다. 로컬 크래시의 심볼 스택은 아직 확보하지 않아 같은 원인으로 확정하지 않습니다.
+
+회귀 검사는 매번 캐시가 없는 별도 복사본으로 첫 import와 Rust 함수 호출을 검사합니다.
+기본 3회이며 첫 실패에서 중단합니다. 충돌 후 재실행으로 성공 처리하지 않습니다.
+
+```powershell
+powershell.exe -NoProfile -File tools/test-godot-cold-import.ps1 -Godot '<Godot 콘솔 실행 파일>' -ScratchRoot 'D:\CodexBuilds\self-driving-sim\scratchpad'
+```
+
+`-FrameDelay 0 -Runs 1`은 우회 없는 재현 비교용입니다. 이 조합에서 실패하는 것은 알려진 제약입니다.
+검사 복사본과 로그는 출력된 경로에 남습니다. 실제 에디터 조작 및 일반 GUI 첫 실행은 별도 확인이 필요합니다.

@@ -1,0 +1,15 @@
+; Rust 확장(crates/sim-godot) 연결 설정. dll은 워크트리 최상위 target/에서 불러온다.
+; 빌드: 워크트리 최상위에서 cargo.exe build -p sim-godot
+
+[configuration]
+
+entry_symbol = "gdext_rust_init"
+compatibility_minimum = 4.7
+reloadable = true
+
+[libraries]
+
+windows.debug.x86_64 = "res://../target/debug/sim_godot.dll"
+windows.release.x86_64 = "res://../target/release/sim_godot.dll"
+linux.debug.x86_64 = "res://../target/debug/libsim_godot.so"
+linux.release.x86_64 = "res://../target/release/libsim_godot.so"

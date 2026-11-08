@@ -1,0 +1,14 @@
+[package]
+name = "sim-godot"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.99.1"
+publish = false
+
+# Phase 5-0: Godot에서 불러 쓰는 Rust 확장(GDExtension). godot/sim_godot.gdextension이 이 dll을 가리킨다.
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# godot-rust(gdext). 설치한 Godot 4.7.2에 맞춰 4.7 API로 빌드한다.
+godot = { version = "=0.5.5", features = ["api-4-7"] }
