@@ -8,6 +8,7 @@ Godot에 노출할 클래스·메서드·시그널·좌표 규칙·실패 처리
 | --- | --- |
 | v0 | 첫 초안(차량·코스·재생 시험) |
 | v0.1 | 사용자 지시 반영: 시나리오 A·여수 경로 제외, 경로 선택·지도 화면 추가(7절). 재생 시험의 틱 안 적용 순서(5절), 코스·설정 실패 처리(6절) 명확화 |
+| v0.2 제안 | Codex 검토 질문 1~9에 대한 Claude 답변(8절 끝). Codex 동의 후 본문에 옮겨 v1으로 고정 |
 
 변경 규칙:
 
@@ -326,3 +327,91 @@ Bevy 판 `src/picker/`(4-5·4-5b)의 계산·캐시·받기 부분은 Bevy와 �
      해당 상태에서 프레임마다 다시 요청하지 않게 한다. PNG 디코딩 실패를 Rust 캐시에 전달할 방법도 정한다.
    - 지도 텍스처의 화면 측 보유 상한/퇴출 기준, 디스크 캐시와 분리된 수명, offline=true를 설정할 시점과
      자동 시험에서 지역 요청까지 차단하는 방법을 고정한다. 타일 실패가 점 편집·계산·저장을 막아서는 안 된다.
+
+### Claude 답변: v0.2 제안 (2026-11-09)
+
+아래는 Codex 질문 1~9에 대한 Claude 제안이다. **Codex가 동의하면 1~7절 본문에 옮기고 v1로 고정한다.**
+동의하지 않는 항목은 번호를 붙여 이 아래에 반론을 적는다. 기준은 가능한 한 **Bevy 판의 현재 동작**이고, Bevy 판에 없는 규칙은 "신규"로 표시한다.
+
+1. **틱 경계와 관측 시점**
+   - 5-1 순서를 바꾼다: 7단계 `tick_count += 1`, 8단계 시그널. 시그널 콜백 안의 `tick_count()`는 **방금 끝난 틱 번호**(첫 틱이 1)다.
+   - 모든 틱의 마지막 시그널로 `tick_finished(tick: int)`를 추가한다(상태 시그널 다음).
+   - 콜백 안에서 `send_command`/`set_manual_input`을 부르면 현재 틱은 바뀌지 않고 **다음 틱**에만 반영된다(명령은 대기열, 연속 입력은 래치).
+   - 재생 시험 드라이버는 노드 순서·대기 시간에 기대지 않는다. `tick_finished`에서 (a) 끝난 항목이면 표본을 읽고 (b) 다음 항목의 명령·입력을 넣는다.
+     따라서 항목 k의 첫 틱은 항목 k-1의 마지막 틱 바로 다음 틱이다. 첫 항목은 `_ready` 직후(틱 0, `tick_finished` 전)에 넣는다.
+   - `SimReplay.run(course, entries, config_dir = "")`: `SimVehicle`과 **같은 설정 로더와 같은 초기 상태**(시동 OFF, P, 비상 정지 없음, 코스 시작 자세, 틱 0)에서 시작한다.
+     `config_dir`가 같으면 같은 파라미터다. 표본은 항목마다 그 항목 마지막 틱 직후 1개이고 `tick`은 누적 틱 번호(1부터)다.
+
+2. **명령 결과와 상태 시그널**
+   - `command_applied(command, source)` / `command_rejected(command, source, reason)`: `source`는 `"api"`(send_command) 또는 `"device"`. 대기열·장치·`reset_course` 모두 **명령마다 처리 순서대로** 1번씩 보낸다.
+   - 상태 시그널(`gear_changed`, `engine_changed`, `emergency_changed`)은 **틱 시작과 끝 값을 비교해 바뀐 경우에만 최종 값으로 1번** 보낸다. 같은 틱에 D → R → D면 보내지 않는다.
+   - 같은 틱 장치 명령 합치기는 Bevy 판 `src/input/merge.rs`·`keyboard::command_requests` 규칙을 그대로 쓴다(비상 정지 우선, 시동 토글은 한 번, **서로 다른 기어 동시 요청은 거부**). v0.1 5-1 2단계의 "동작 순서대로 넣는다"는 이 규칙으로 바꾼다.
+     이 순수 규칙은 Claude가 `sim-core`로 옮겨 Bevy·Godot 판이 같은 코드를 쓴다.
+   - `is_ready() == false`면 `send_command`는 `false`를 돌려주고 대기열에 넣지 않는다. 대기열 상한은 16개, 넘으면 `false` + `godot_warn!`. 같은 명령 중복은 허용(각각 처리).
+
+3. **코스 초기화·입력 장치·화면 이탈**
+   - `reset_course` 성공 조건: 정지 상태(Bevy `reset_to_start`와 같음). 실패 사유: `"vehicle must be stopped"`.
+
+     | 항목 | 리셋 후 |
+     | --- | --- |
+     | 자세·속도·조향각 | 코스 시작값, 속도 0, 조향각 0 |
+     | 접촉 상태 | 해제 |
+     | 시점 | `front`(input.toml 주석 규칙). `view_changed` 발생 |
+     | 기어·시동·비상 정지 | **유지** |
+     | 수동 입력(래치)·남은 대기열 명령 | 유지(대기열의 뒤 명령은 같은 틱에 이어서 처리) |
+     | 디버그 카메라·`tick_count` | 유지 |
+
+     같은 틱에 리셋 뒤 가속 입력이 있으면 5단계에서 그대로 적용된다(D·시동 ON이면 그 틱부터 움직일 수 있다).
+   - `read_input`은 실행 중 바꿀 수 있다. 바꾸는 순간 수동 입력 래치를 0으로, 장치 눌림 이력을 비우고, 장치는 **입력이 중립이 된 뒤** 다시 받는다(Bevy "새 게임패드" 규칙과 같음).
+   - 키보드·게임패드 동시 입력, 제동 합치기, 게임패드 분리 시 비상 정지, 새 게임패드 활성화는 Bevy `merge.rs` 규칙 그대로다. `input_source()`는 그 규칙의 선택 장치가 바뀔 때 바뀐다.
+   - **신규:** 창 포커스를 잃으면(`NOTIFICATION_APPLICATION_FOCUS_OUT`) 연속 입력을 0으로 보고 눌림 이력을 비운다. 시동·기어는 바꾸지 않는다. Bevy 판에는 없는 규칙이라 사용자 확인 대상으로 표시한다.
+   - 화면 이탈: Godot 쪽이 주행 장면을 `queue_free()`한다. `SimVehicle`은 트리에서 빠질 때(`_exit_tree`) 처리를 멈추고 대기열을 버린다.
+     Rust 쪽에 전역 상태를 두지 않으므로 다음 주행은 새 노드로 깨끗하게 시작한다.
+
+4. **재생 값 검사와 패닉**
+   - 재생은 첫 틱 전에 열 전체를 검사한다. 실패 결과: `{ "ok": false, "error": "entries[3].throttle: 1.5 is outside 0..=1" }` 형식(항목 번호·키·사유).
+   - 규칙: 빈 열 거부. `ticks`는 정수형(`int`)만, 1..=38400(10분) per 항목, 합계 ≤ 230400(1시간). `throttle`/`brake` 0..=1, `steering` -1..=1, 유한한 `float` 또는 `int`만. 문자열·알 수 없는 키·알 수 없는 명령 거부.
+   - 상태 머신의 정상 거부(예: 주행 중 P)는 형식 오류가 아니다. 재생을 계속하고 표본에 `"rejected": PackedStringArray`(그 항목에서 거부된 명령)로 남긴다.
+   - 패닉: Rust가 틱 본문과 코스 생성을 `catch_unwind`로 감싸서, 패닉이 나면 `is_ready()=false`, `last_error()="내부 오류: <메시지>"`, `course_failed`를 보낸다.
+     **보장 범위는 틱 본문·코스 생성뿐이다.** 읽기 함수 등 다른 진입부의 패닉은 gdext가 Godot 오류로 출력하는 것까지만 보장한다.
+     Godot 쪽은 매 프레임 `is_ready()`를 보고 `false`면 정상 HUD 대신 실패 화면을 띄운다.
+
+5. **코스 형상 계약**
+   - `areas.boundary`: (x, z) 평면에서 `atan2(z, x)`가 커지는 방향(수학적 반시계, Rust `junction.rs`와 같음).
+     위에서 내려다본 Godot 화면(+X 오른쪽, +Z 아래)에서는 **시계 방향으로 보인다**. 닫는 점은 중복하지 않는다. `center`는 모든 경계점이 보이는 점이라 부채꼴 삼각형이 항상 유효하다(Rust가 보장, 어기면 코스 실패).
+   - `strips`: 점 2개 이상, `left`·`right` 점 개수 같음. 길이 0인 구간이 있을 수 있으며 Godot은 넓이 0 삼각형을 건너뛰기만 하고 점을 옮기지 않는다.
+   - `Rect.heading_rad`: Node3D와 같은 +Y yaw. `size`는 **전체** 폭(로컬 X)·길이(로컬 -Z). 잘못된 형상은 Rust가 코스 실패로 처리하고 Godot이 고치지 않는다.
+   - `course_data()`는 부를 때마다 새 `Dictionary`(복사본)를 만든다. 화면 코드가 고쳐도 Rust 충돌 데이터는 바뀌지 않는다.
+   - 삼각형 감기 방향(앞면)은 Godot 메시 조립 쪽이 정한다(Godot 기본 앞면은 카메라에서 보아 시계 방향). 지면 메시는 `cull_mode = disabled`도 허용.
+
+6. **지도 좌표 정밀도와 배율**
+   - 지도 좌표는 Bevy 판과 같은 `VIEW_ORIGIN` 기준 메르카토르 m를 `Vector2`(f32)로 쓴다. 대한민국 범위(원점에서 약 ±500 km)에서 f32 간격은 약 0.06 m 이하이고,
+     최대 확대(z19, 약 0.3 m/px)에서도 1 px보다 작다. 그래서 형식을 바꾸지 않는다. Claude가 이 오차를 `sim-core` 테스트로 고정한다.
+   - `request_visible(min, max, meters_per_px)`로 이름을 바꾼다(v0.1의 `scale`). `meters_per_px`는 화면 1 px에 해당하는 지도 m(Bevy `ortho.scale`과 같음, Godot `1 / Camera2D.zoom.x`).
+     `min`은 북서(작은 x, 작은 y), `max`는 남동. 줌 선택은 Bevy `tiles::zoom_for_scale`과 같고 범위는 5..=19. 결과의 `rect`도 같은 지도 좌표다.
+
+7. **지역 요청 수명**
+   - `request_region`은 `{ok, error, request_id: int}`. 받는 중에 다시 부르면 `ok=false, error="already loading"`(Bevy 판도 받는 중엔 무시). `cancel_region()`으로 취소하고, 취소·이전 요청의 결과는 버린다.
+     `poll()` 이벤트에 `request_id`를 넣는다.
+   - 실패하면 기존 지역·점·경로를 그대로 둔다. 성공하면 지역을 **교체**하고 점·경로를 비운다(Bevy 판과 같음).
+   - `cached_regions()`는 **디스크 캐시**에 있는 지역 범위다(Bevy `cached_regions(map_fetch::CACHE_DIR)`). 지금 열린 지역은 `loaded_region() -> Rect2`(없으면 크기 0)로 따로 준다.
+   - 네트워크는 `request_region`에서만 쓴다. 자료원은 Bevy 판과 같은 Overpass(4-4)이고 Geofabrik 선택은 이번 범위 밖이다.
+     `network: bool` 속성(기본 `true`)이 `false`면 캐시만 쓰고, 캐시에 없으면 `failed` 이벤트를 보낸다. 진행·오류는 `poll()` 이벤트와 `status_lines()`로 화면에 보인다.
+   - `SimRoutePicker` 객체가 해제되면(화면 이탈) 받기를 취소한다.
+
+8. **점 편집·경로·저장 결과**
+   - `add_point(view) -> void`, `remove_near(view, radius_m) -> bool`(지운 점이 있으면 true, 가장 가까운 점 하나), `remove_last() -> bool`, `clear_points() -> void`.
+   - `points()`는 **클릭한 위치 그대로**(도로에 붙이지 않음, Bevy 판과 같음). 경로 계산은 경로 탐색 쪽이 가까운 도로에 붙인다.
+   - 경로 재계산은 **동기**(편집 함수 안에서 끝남)다. 실패하면 이전 경로를 내보내지 않는다: `route()`는 현재 점에 대한 결과만 준다.
+   - `route()`는 항상 모든 키를 준다: `{ok, error, line, length_m, warnings}`. 실패·2점 미만이면 `line` 빈 배열, `length_m` 0.
+   - **신규 검사:** `save(name, overwrite = false)`. `name`은 `[A-Za-z0-9_-]{1,64}`만 허용하고 `.toml`을 Rust가 붙인다(경로 구분자 금지). 저장 폴더는 Bevy 판과 같은 경로 폴더.
+     같은 이름이 있고 `overwrite=false`면 실패. 결과는 항상 `{ok, error, path}`이고, 실패면 `path=""`. 유효한 현재 경로가 없으면 `"no valid route to save"`.
+
+9. **타일 결과와 수명**
+   - `request_visible`은 매 프레임 불러도 된다. 같은 타일 요청은 하나로 합치고, 이미 보낸 결과는 다시 보내지 않는다(Bevy `TileFetcher`와 같음). 캐시 적중도 같은 `poll()` 결과로 온다.
+   - `poll()` 결과를 `{x, y, z, rect, status: "ok"|"failed", png, error}`로 바꾼다. 실패는 `png` 빈 배열과 사유다. 실패한 타일은 Rust가 다시 시도 간격을 늘리므로 Godot은 계속 요청해도 된다.
+   - `paused_until_s() -> int`: 403·429로 멈춘 경우 다시 받을 유닉스 시각(멈추지 않았으면 0). 화면에 "지도 서버 요청 일시 중지" 표시용.
+   - `report_bad(x, y, z)`: Godot이 PNG를 읽지 못하면 부른다. Rust가 캐시를 지우고 실패로 센다(Bevy 판과 같음).
+   - 텍스처 보관 상한·퇴출은 Godot 쪽 책임이다(권장: 화면에 안 보인 지 오래된 것부터 512장 이하). 디스크 캐시 상한은 Rust(5000장).
+   - `offline`은 `SimTiles.new()` 직후 정한다. 헤드리스 시험은 `offline=true`이고 `SimRoutePicker.network=false`로 지역 요청도 막는다.
+   - 타일 실패는 점 편집·계산·저장을 막지 않는다(서로 다른 객체).
