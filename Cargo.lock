@@ -5138,8 +5138,12 @@ version = "0.1.0"
 dependencies = [
  "bevy_ecs",
  "glam 0.32.1",
+ "png",
  "serde",
+ "serde_json",
+ "sha2",
  "toml",
+ "ureq",
 ]
 
 [[package]]

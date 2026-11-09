@@ -15,8 +15,8 @@
 //! 자동 맞춤은 지역을 받았을 때 그 지역에, 경로를 처음 계산했을 때 경로에 **한 번씩만** 한다. 그 뒤에는 사용자가
 //! 화면을 움직여도 다시 맞추지 않는다.
 
-pub mod model;
-pub mod tiles;
+// 점·경로 모델과 타일 받기·캐시는 엔진과 무관해 `sim-core`로 옮겼다(Phase GD-1c).
+pub use sim_core::picker::{model, tiles};
 
 use std::collections::HashMap;
 use std::f32::consts::FRAC_PI_2;

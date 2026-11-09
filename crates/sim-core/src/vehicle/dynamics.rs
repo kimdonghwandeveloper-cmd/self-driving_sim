@@ -348,6 +348,11 @@ pub(crate) fn wrap_angle(angle: f32) -> f32 {
     if wrapped == -PI { PI } else { wrapped }
 }
 
+/// 최대 조향각에서의 최소 회전 반경(m, 후륜축 중심 기준)을 자전거 모델로 계산한다.
+pub fn min_turn_radius_m(params: &DynamicsParams) -> f32 {
+    params.wheelbase_m / params.max_steer_angle_deg.to_radians().tan()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

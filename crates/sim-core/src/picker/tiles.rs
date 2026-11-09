@@ -14,7 +14,7 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use bevy::math::Vec2;
+use glam::Vec2;
 use serde::{Deserialize, Serialize};
 
 use crate::world::map::LatLon;
@@ -263,16 +263,18 @@ pub fn check_png(bytes: &[u8]) -> Result<(), String> {
             "tile is {width}x{height}, expected {TILE_PX}x{TILE_PX}"
         ));
     }
-    bevy::image::Image::from_buffer(
-        bytes,
-        bevy::image::ImageType::Extension("png"),
-        bevy::image::CompressedImageFormats::NONE,
-        true,
-        bevy::image::ImageSampler::Default,
-        bevy::asset::RenderAssetUsages::RENDER_WORLD,
-    )
-    .map(|_| ())
-    .map_err(|error| format!("tile PNG cannot be decoded: {error}"))
+    decode_png(bytes).map_err(|error| format!("tile PNG cannot be decoded: {error}"))
+}
+
+/// PNG를 끝까지 디코딩해 본다(잘림·CRC 오류 검출). 픽셀은 버린다.
+fn decode_png(bytes: &[u8]) -> Result<(), png::DecodingError> {
+    let mut reader = png::Decoder::new(std::io::Cursor::new(bytes)).read_info()?;
+    let size = reader
+        .output_buffer_size()
+        .ok_or(png::DecodingError::LimitsExceeded)?;
+    let mut pixels = vec![0; size];
+    reader.next_frame(&mut pixels)?;
+    Ok(())
 }
 
 /// 지금 시각(유닉스 초).

@@ -325,10 +325,8 @@ pub fn turn_radius_m(wheelbase_m: f32, steer_angle_rad: f32) -> Option<f32> {
     Some(wheelbase_m / steer_angle_rad.abs().tan())
 }
 
-/// 최대 조향각에서의 후륜축 중심 최소 회전반경(m)을 계산한다.
-pub fn min_turn_radius_m(params: &DynamicsParams) -> f32 {
-    params.wheelbase_m / params.max_steer_angle_deg.to_radians().tan()
-}
+/// 최소 회전 반경 계산은 지도 코스 생성과 함께 쓰도록 `sim_core::vehicle::dynamics`에 있다.
+pub use sim_core::vehicle::dynamics::min_turn_radius_m;
 
 /// 지금 속도에서 가속 없이 최대 제동했을 때의 예상 정지거리(m)를 v²/(2a)로 계산한다.
 ///

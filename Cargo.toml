@@ -31,6 +31,10 @@ toml = "=1.1.8"
 # Phase 4-4 지도 받기(Overpass). 기본 기능: rustls + ring 암호 + webpki 루트 인증서 + gzip. aws-lc-rs(cmake/NASM 필요)는 쓰지 않는다.
 ureq = "=3.5.1"
 
+[dev-dependencies]
+# 루트 시험이 sim-core 합성 OSM 자료를 쓴다.
+sim-core = { path = "crates/sim-core", features = ["bevy", "test-fixtures"] }
+
 [profile.dev]
 opt-level = 1
 
