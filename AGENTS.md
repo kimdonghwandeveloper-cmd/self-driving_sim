@@ -31,3 +31,4 @@
    - 병합 후 develop 워크트리에서 `git switch develop && git merge --ff-only main`으로 동기화하고,
      병합된 작업 브랜치는 사용자 확인 후 삭제한다.
 4. 각 워크트리는 별도의 `target/` 빌드 폴더를 사용하므로 첫 빌드가 오래 걸릴 수 있다.
+5. 커밋 메세지는 항상 한글로. (merge, feat, docs 같은 건 영어로 써도 된다)
