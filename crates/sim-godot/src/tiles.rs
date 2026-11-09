@@ -7,11 +7,13 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use godot::prelude::*;
+use sim_core::picker::region::KOREA_OUTLINE;
 use sim_core::picker::tiles::{
     self, TileFetcher, TileId, TileOutcome, TileSettings, UreqTileTransport,
 };
 
 use crate::paths::repo_path;
+use sim_core::world::map::LatLon;
 
 /// 한 번에 요청할 화면 타일 수 상한(Bevy 판과 같음).
 const MAX_VISIBLE_TILES: usize = 48;
@@ -95,6 +97,29 @@ impl SimTiles {
             results.push(&dict.to_variant());
         }
         results
+    }
+
+    /// 지도에 보일 대한민국 영역의 임시 근사 경계(지도 좌표, 닫는 점 중복 없음). 표시용이며 실제 국경이 아니다.
+    #[func]
+    fn country_outline(&self) -> PackedVector2Array {
+        KOREA_OUTLINE
+            .iter()
+            .map(|&[lat, lon]| {
+                let view = tiles::to_view(LatLon { lat, lon });
+                Vector2::new(view.x, view.y)
+            })
+            .collect()
+    }
+
+    /// [`Self::country_outline`]을 감싸는 지도 좌표 범위. 지도 카메라 이동·축소 한계로 쓴다.
+    #[func]
+    fn country_bounds(&self) -> Rect2 {
+        let outline = self.country_outline();
+        let mut bounds = Rect2::new(outline[0], Vector2::ZERO);
+        for point in outline.as_slice() {
+            bounds = bounds.expand(*point);
+        }
+        bounds
     }
 
     /// 403·429로 멈춘 경우 다시 받을 유닉스 시각. 멈추지 않았으면 0.

@@ -105,6 +105,36 @@ pub fn region_to_load(center: LatLon, cached: &[Bbox]) -> Result<(Bbox, FetchPol
     Ok((bbox_around(center.lat, center.lon)?, FetchPolicy::Refresh))
 }
 
+/// 지도 화면에 보일 대한민국 영역의 **임시 근사 경계** [위도, 경도](시계 방향, 닫는 점 중복 없음).
+///
+/// 경로 선택 지도에서 주변 나라를 가리려는 표시용이며 실제 국경·영해선이 아니다(사용자 결정 2026-11-09).
+/// 휴전선은 몇 개 점으로 꺾어 근사했고, 바다 쪽은 제주·서남해 섬·울릉도·독도를 넣고 쓰시마(일본)는 뺀다.
+/// 해안·휴전선 근처는 수 km 어긋날 수 있다.
+pub const KOREA_OUTLINE: [[f64; 2]; 22] = [
+    [38.05, 124.55],
+    [37.68, 125.55],
+    [37.70, 126.10],
+    [37.76, 126.66],
+    [37.95, 126.95],
+    [38.10, 127.10],
+    [38.30, 127.55],
+    [38.32, 128.05],
+    [38.62, 128.33],
+    [38.62, 128.60],
+    [37.95, 130.40],
+    [37.70, 132.00],
+    [37.00, 132.00],
+    [35.70, 129.80],
+    [35.05, 129.32],
+    [34.70, 128.85],
+    [34.15, 128.30],
+    [33.80, 127.50],
+    [32.95, 126.90],
+    [32.95, 125.90],
+    [34.00, 124.90],
+    [36.20, 124.55],
+];
+
 /// 경로 저장 이름이 `[A-Za-z0-9_-]{1,64}`인지 확인한다(Godot 계약 7-2, 경로 구분자 금지).
 pub fn valid_route_name(name: &str) -> bool {
     (1..=64).contains(&name.len())
@@ -186,6 +216,53 @@ mod tests {
             .is_err()
         );
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// 점이 다각형 안에 있는지 짝홀 규칙으로 판정한다(시험용).
+    fn inside(point: [f64; 2], polygon: &[[f64; 2]]) -> bool {
+        let mut inside = false;
+        for (index, a) in polygon.iter().enumerate() {
+            let b = polygon[(index + 1) % polygon.len()];
+            if (a[0] > point[0]) != (b[0] > point[0]) {
+                let lon = a[1] + (point[0] - a[0]) / (b[0] - a[0]) * (b[1] - a[1]);
+                if point[1] < lon {
+                    inside = !inside;
+                }
+            }
+        }
+        inside
+    }
+
+    /// 근사 경계가 남한 주요 지점·섬은 넣고 북한·중국·일본 지점은 빼는지 확인한다.
+    #[test]
+    fn korea_outline_includes_south_korea_only() {
+        let included = [
+            ("Seoul", [37.5665, 126.978]),
+            ("Busan", [35.1796, 129.0756]),
+            ("Yeosu Expo", [34.751, 127.75]),
+            ("Jeju", [33.4996, 126.5312]),
+            ("Marado", [33.115, 126.267]),
+            ("Baengnyeongdo", [37.96, 124.68]),
+            ("Ulleungdo", [37.484, 130.905]),
+            ("Dokdo", [37.241, 131.865]),
+            ("Goseong", [38.38, 128.47]),
+            ("Gageodo", [34.07, 125.12]),
+        ];
+        for (name, point) in included {
+            assert!(inside(point, &KOREA_OUTLINE), "{name} must be inside");
+        }
+        let excluded = [
+            ("Kaesong", [37.97, 126.55]),
+            ("Pyongyang", [39.03, 125.75]),
+            ("Wonsan", [39.15, 127.44]),
+            ("Tsushima Izuhara", [34.20, 129.29]),
+            ("Tsushima north", [34.65, 129.45]),
+            ("Shanghai", [31.23, 121.47]),
+            ("Fukuoka", [33.59, 130.40]),
+        ];
+        for (name, point) in excluded {
+            assert!(!inside(point, &KOREA_OUTLINE), "{name} must be outside");
+        }
     }
 
     /// 저장 이름 규칙: 영문·숫자·`_`·`-` 1~64자만 허용한다.

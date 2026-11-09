@@ -318,7 +318,12 @@ impl SimRoutePicker {
     #[func]
     fn status_lines(&self) -> PackedStringArray {
         let mut lines = match &self.model {
-            Some(model) => model.status_lines(),
+            // Bevy 판의 "Enter로 주행 시작" 안내는 Godot 판(경로 주행 제외)에 맞지 않아 뺀다.
+            Some(model) => model
+                .status_lines()
+                .into_iter()
+                .filter(|line| !line.starts_with("Press Enter"))
+                .collect(),
             None => vec!["지역 없음: 지도를 확대하고 \"이 지역 도로 받기\"를 누르세요".to_owned()],
         };
         if !self.message.is_empty() {
