@@ -121,6 +121,9 @@ func _process(_delta: float) -> void:
 		"ON" if vehicle.call("emergency_active") else "OFF", vehicle.call("input_source"),
 		"ON" if vehicle.call("in_contact") else "OFF", "외부" if rig.external else rig.current_view]
 
+	if Time.get_ticks_msec() < command_notice_until:
+		hud.text += "\n" + command_notice
+
 ## 임시 노드에서만 시야 미리보기 키를 받으며 주행 입력은 만들지 않는다.
 func _unhandled_key_input(event: InputEvent) -> void:
 	if not is_preview or not failure.is_empty() or not event is InputEventKey or not event.pressed or event.echo:
@@ -147,3 +150,7 @@ func _fail(message: String) -> void:
 func _dismiss_warnings() -> void:
 	warnings_label.hide()
 	dismiss.hide()
+## 명령 거부 사유를 잠시 표시하며 상태 처리는 Rust에 맡긴다.
+func _command_rejected(command: String, _source: String, reason: String) -> void:
+	command_notice = "%s: %s" % [command, reason]
+	command_notice_until = Time.get_ticks_msec() + 4000

@@ -112,7 +112,7 @@ func _draw() -> void:
 		draw_polyline(route_line, Color("58c4ef"), 4.0 / scale_m, true)
 	for i in range(points.size()):
 		draw_circle(points[i], 6.0 / scale_m, Color("f3bf63") if i == 0 else Color("9ee5c2"))
-## v1 ???? ??? ???? ??? ??????? ?? ??? ???.
+## v1 서비스 호출과 화면 상태를 처리한다.
 func _services(canvas: CanvasLayer) -> void:
 	var offline := DisplayServer.get_name() == "headless" or "--offline" in OS.get_cmdline_user_args()
 	if ClassDB.class_exists("SimRoutePicker"):
@@ -124,46 +124,46 @@ func _services(canvas: CanvasLayer) -> void:
 	var controls := HBoxContainer.new()
 	controls.position = Vector2(24, 220)
 	canvas.add_child(controls)
-	receive.text = "? ?? ?? ??"
+	receive.text = "이 지역 도로 받기"
 	receive.pressed.connect(_request_region)
 	controls.add_child(receive)
 	var cancel := Button.new()
-	cancel.text = "?? ??"
+	cancel.text = "받기 취소"
 	cancel.pressed.connect(_cancel_region)
 	controls.add_child(cancel)
 	var undo := Button.new()
-	undo.text = "??? ? ??"
+	undo.text = "마지막 점 삭제"
 	undo.pressed.connect(_remove_last)
 	controls.add_child(undo)
 	var clear := Button.new()
-	clear.text = "? ?? ??"
+	clear.text = "점 모두 삭제"
 	clear.pressed.connect(_clear_points)
 	controls.add_child(clear)
-	route_name.placeholder_text = "?? ?? (??????_- )"
+	route_name.placeholder_text = "저장 이름 (영문·숫자·_-)"
 	route_name.custom_minimum_size.x = 210
 	controls.add_child(route_name)
-	overwrite.text = "????"
+	overwrite.text = "덮어쓰기"
 	controls.add_child(overwrite)
-	save_button.text = "?? ??"
+	save_button.text = "경로 저장"
 	save_button.pressed.connect(_save_route)
 	controls.add_child(save_button)
 	var navigation := HBoxContainer.new()
 	navigation.position = Vector2(24, 264)
 	canvas.add_child(navigation)
-	for item in [["?? ??", _fit_country], ["?? ??", _fit_region], ["??", _fit_route], ["??? ??", _open_snapshot]]:
+	for item in [["전체 지도", _fit_country], ["선택 지역", _fit_region], ["경로", _fit_route], ["스냅샷 열기", _open_snapshot]]:
 		var button := Button.new()
 		button.text = item[0]
 		button.pressed.connect(item[1])
 		navigation.add_child(button)
 	snapshot_dialog.file_mode = FileDialog.FILE_MODE_OPEN_FILE
 	snapshot_dialog.access = FileDialog.ACCESS_FILESYSTEM
-	snapshot_dialog.filters = PackedStringArray(["*.json ; OSM ???"])
+	snapshot_dialog.filters = PackedStringArray(["*.json ; OSM snapshot"])
 	snapshot_dialog.file_selected.connect(_load_snapshot)
 	add_child(snapshot_dialog)
 	for button in [cancel, undo, clear]:
 		button.disabled = picker == null
 
-## ?? ?? ??? Rust?? ???? ?? ???? ?? ??? ???.
+## v1 서비스 호출과 화면 상태를 처리한다.
 func _request_region() -> void:
 	if picker == null or active_request != 0:
 		return
@@ -175,38 +175,38 @@ func _request_region() -> void:
 	if result.get("ok", false):
 		active_request = int(result.request_id)
 
-## ??? ??? ?? ??? ??? ?? ??? ?? ??? ???.
+## v1 서비스 호출과 화면 상태를 처리한다.
 func _cancel_region() -> void:
 	if picker != null:
 		picker.call("cancel_region")
 	active_request = 0
-	feedback = "?? ??? ??????."
+	feedback = "지역 받기를 취소했습니다."
 
-## ??? ? ??? ?? ??? Rust? ???.
+## v1 서비스 호출과 화면 상태를 처리한다.
 func _remove_last() -> void:
 	if picker != null:
 		picker.call("remove_last")
 		_refresh_route()
 
-## ?? ?? ??? ?? ??? ????.
+## v1 서비스 호출과 화면 상태를 처리한다.
 func _clear_points() -> void:
 	if picker != null:
 		picker.call("clear_points")
 		_refresh_route()
 
-## ?? ??? ???? ??? ???? ???? ????.
+## v1 서비스 호출과 화면 상태를 처리한다.
 func _save_route() -> void:
 	if picker == null:
 		return
 	var result: Dictionary = picker.call("save", route_name.text, overwrite.button_pressed)
-	feedback = "??: " + str(result.path) if result.get("ok", false) else str(result.error)
+	feedback = "저장: " + str(result.path) if result.get("ok", false) else str(result.error)
 
-## ?? ?? ?? ?? ??? ? ?? ???? ?? ??? ???.
+## v1 서비스 호출과 화면 상태를 처리한다.
 func _refresh_route() -> void:
 	var result: Dictionary = picker.call("route")
 	display_geometry(picker.call("road_segments"), picker.call("road_usable"), picker.call("points"), result.line)
 
-## ?? ???? ?? ??? ???? ????? ??? Rust? ??.
+## v1 서비스 호출과 화면 상태를 처리한다.
 func _process(_delta: float) -> void:
 	if picker != null:
 		for event in picker.call("poll"):
@@ -220,7 +220,7 @@ func _process(_delta: float) -> void:
 		receive.disabled = active_request != 0 or latlon.size() != 2
 		var result: Dictionary = picker.call("route")
 		save_button.disabled = not bool(result.ok)
-		status.text = "??? ??: ?? / ?: ?? / ??: ? ?? / Shift+??: ? ??\n" + "\n".join(picker.call("status_lines")) + "\n" + feedback
+		status.text = "우클릭: 이동 / 휠: 확대 / 클릭: 점 추가 / Shift+클릭: 점 삭제\n" + "\n".join(picker.call("status_lines")) + "\n" + feedback
 	else:
 		receive.disabled = true
 		save_button.disabled = true
@@ -228,14 +228,14 @@ func _process(_delta: float) -> void:
 		_update_tiles()
 	queue_redraw()
 
-## ??? ??? ???? PNG? ????? ???? ?? 512? ????.
+## v1 서비스 호출과 화면 상태를 처리한다.
 func _update_tiles() -> void:
 	var span := get_viewport_rect().size / camera.zoom.x
 	var visible := Rect2(camera.position - span * 0.5, span)
 	tiles.call("request_visible", visible.position, visible.end, 1.0 / camera.zoom.x)
 	for tile in tiles.call("poll"):
 		if tile.status != "ok":
-			feedback = "?? ??: " + str(tile.error)
+			feedback = "배경 지도: " + str(tile.error)
 			continue
 		var image := Image.new()
 		if image.load_png_from_buffer(tile.png) != OK:
@@ -259,9 +259,9 @@ func _update_tiles() -> void:
 		if visible.intersects(tile.rect):
 			tile_layers.append(tile)
 	if int(tiles.call("paused_until_s")) > int(Time.get_unix_time_from_system()):
-		status.text += "\n?? ?? ?? ?? ??"
+		status.text += "\n지도 서버 요청 일시 중지"
 
-## ?? ?? ? ??? ???? ???? GPU ??? ??? ????.
+## v1 서비스 호출과 화면 상태를 처리한다.
 func _exit_tree() -> void:
 	if picker != null:
 		picker.call("cancel_region")
@@ -271,17 +271,17 @@ func _exit_tree() -> void:
 	tile_layers.clear()
 	texture_order.clear()
 
-## ?? ??? ?? ??? ???? ????? ????.
+## v1 서비스 호출과 화면 상태를 처리한다.
 func _fit_country() -> void:
 	camera.position = Vector2.ZERO
 	camera.zoom = Vector2.ONE * 0.001
 
-## ?? ?? ??? ??? ???? ??? ?? ????? ???.
+## v1 서비스 호출과 화면 상태를 처리한다.
 func _fit_region() -> void:
 	if picker != null:
 		_fit_rect(picker.call("loaded_region"))
 
-## ?? ??? ?? ??? ??? ??? ???.
+## v1 서비스 호출과 화면 상태를 처리한다.
 func _fit_route() -> void:
 	if route_line.is_empty():
 		return
@@ -290,7 +290,7 @@ func _fit_route() -> void:
 		bounds = bounds.expand(point)
 	_fit_rect(bounds.grow(25.0))
 
-## ?? ?? ??? ?? ?? ??? ?? ???? ???.
+## v1 서비스 호출과 화면 상태를 처리한다.
 func _fit_rect(bounds: Rect2) -> void:
 	if bounds.size.x <= 0.0 or bounds.size.y <= 0.0:
 		return
@@ -301,17 +301,17 @@ func _fit_rect(bounds: Rect2) -> void:
 	camera.zoom = Vector2.ONE * zoom_value
 	camera.position = bounds.get_center() - Vector2(0, 150.0 / zoom_value)
 
-## ???? ??? ?? ???? ?? ?? ????? ???? ???.
+## v1 서비스 호출과 화면 상태를 처리한다.
 func _open_snapshot() -> void:
 	if picker != null and active_request == 0:
 		snapshot_dialog.popup_centered_ratio(0.75)
 
-## Rust ?? ??? ???? ?? ??? ??? ??? ???.
+## v1 서비스 호출과 화면 상태를 처리한다.
 func _load_snapshot(path: String) -> void:
 	if picker == null or active_request != 0:
 		return
 	var result: Dictionary = picker.call("load_snapshot", path)
-	feedback = "???? ?????." if result.get("ok", false) else str(result.error)
+	feedback = "스냅샷을 열었습니다." if result.get("ok", false) else str(result.error)
 	if result.get("ok", false):
 		_refresh_route()
 		_fit_region()
