@@ -72,6 +72,7 @@ func _check_screen() -> void:
 	drive.start(ROUTE)
 	await process_frame
 	_check(drive.failure.is_empty(), "주행 화면 실패: " + drive.failure)
+	_check(drive.fallback_notice.is_empty(), "지도 코스 대신 개발 코스로 대체됨: " + drive.fallback_notice)
 	if drive.failure.is_empty():
 		var bounds: Rect2 = CourseMesh.ground_bounds(drive.vehicle.call("course_data"))
 		var size: Vector2 = (drive.ground.mesh as PlaneMesh).size

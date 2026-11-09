@@ -158,6 +158,8 @@ pub struct CourseDef {
     pub notices: Vec<String>,
     /// 시작·리셋 자세.
     pub start: Motion,
+    /// 경로 끝 목표 자세(표시용, 4-6). 지도 코스만 있고 개발 코스는 `None`이다.
+    pub goal: Option<Motion>,
     /// 포장 노면 영역(시각 표시).
     pub surfaces: Vec<GroundRect>,
     /// 굽은 길 노면·표시선 띠(시각 표시). 지도 코스에서 쓴다.
@@ -231,6 +233,7 @@ pub fn training_course() -> CourseDef {
         name: CourseId::Training.name().to_owned(),
         notices: Vec::new(),
         start: Motion::default(),
+        goal: None,
         surfaces: vec![rect_between((-half, half), (rear, front))],
         strips: Vec::new(),
         areas: Vec::new(),
@@ -280,6 +283,7 @@ pub fn calibration_course() -> CourseDef {
         name: CourseId::Calibration.name().to_owned(),
         notices: Vec::new(),
         start: Motion::default(),
+        goal: None,
         surfaces: Vec::new(),
         strips: Vec::new(),
         areas: Vec::new(),
@@ -485,11 +489,12 @@ mod tests {
         panic!("vehicle was never blocked: {motion:?}");
     }
 
-    /// 모든 코스의 시작 자세 차체가 어떤 충돌 경계와도 닿지 않는지 확인한다.
+    /// 모든 코스의 시작 자세 차체가 어떤 충돌 경계와도 닿지 않고, 개발 코스에는 경로 끝 목표가 없는지 확인한다.
     #[test]
     fn start_pose_is_clear_on_every_course() {
         for id in [CourseId::Training, CourseId::Calibration] {
             let course = id.build();
+            assert!(course.goal.is_none(), "{id:?}");
             assert!(
                 !in_contact(&VEHICLE_FOOTPRINT, &course.start, &course.collision_rects()),
                 "{id:?}"

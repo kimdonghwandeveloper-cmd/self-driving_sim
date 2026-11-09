@@ -124,6 +124,10 @@ pub fn course_dict(course: &CourseDef) -> VarDictionary {
             "position" => Vector3::new(course.start.x_m, 0.0, course.start.z_m),
             "heading_rad" => course.start.heading_rad,
         },
+        "goal" => &course.goal.map_or_else(VarDictionary::new, |goal| vdict! {
+            "position" => Vector3::new(goal.x_m, 0.0, goal.z_m),
+            "heading_rad" => goal.heading_rad,
+        }),
         "surfaces" => &surfaces,
         "strips" => &strips,
         "areas" => &areas,

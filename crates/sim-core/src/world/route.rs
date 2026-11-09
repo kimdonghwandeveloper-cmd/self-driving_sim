@@ -394,6 +394,7 @@ pub fn build_route_course_with(
         .collect();
     let mut guide: Vec<Vec2> = Vec::new();
     let mut first_piece: Option<Vec<Vec2>> = None;
+    let mut last_piece: Vec<Vec2> = Vec::new();
     for pair in breaks.windows(2) {
         let (a, b) = (pair[0], pair[1]);
         let points: Vec<Vec2> = route[a..=b].iter().map(|&id| at(id)).collect();
@@ -415,6 +416,7 @@ pub fn build_route_course_with(
         if first_piece.is_none() {
             first_piece = Some(piece.centerline.clone());
         }
+        last_piece.clone_from(&piece.centerline);
         let attached: BTreeSet<usize> = [a, b]
             .into_iter()
             .filter(|k| builds.contains_key(k))
@@ -447,7 +449,7 @@ pub fn build_route_course_with(
     }
     check_outline_overlaps(&outlines, &zones)?;
     let start = map::start_pose(&first_piece.unwrap())?;
-    let course = map::finish_course(
+    let mut course = map::finish_course(
         name,
         notices,
         start,
@@ -456,6 +458,7 @@ pub fn build_route_course_with(
         colliders,
         ROUTE_MAX_EXTENT_M,
     )?;
+    course.goal = Some(map::goal_pose(&last_piece)?);
     Ok(RouteCourse {
         course,
         guide,
@@ -723,6 +726,33 @@ mod tests {
             assert_eq!(result.impacts, 0, "{name}: {result:?}");
             assert!(result.remaining_m < 12.5, "{name}: {result:?}");
             assert!(result.max_offset_m < 1.2, "{name}: {result:?}");
+        }
+    }
+
+    /// 경로 끝 목표 자세가 마지막 조각 끝 벽에서 차체 앞끝까지 5 m 여유인 곳에서 진행 방향을 향하고,
+    /// 연석·벽에 닿지 않는지 확인한다(4-6 경로 끝 목표 표시).
+    #[test]
+    fn route_goal_sits_before_end_wall() {
+        use crate::vehicle::VEHICLE_FOOTPRINT;
+        use crate::vehicle::collision::in_contact;
+        for (name, route) in [("turn", [1, 10, 4]), ("straight", [1, 10, 2])] {
+            let ways = parse(fixtures::four_way());
+            let built = build_route_course(name, &ways, &allowed(), &route, 4.0, Vec::new())
+                .unwrap_or_else(|e| panic!("{name}: {e}"));
+            let goal = built.course.goal.expect("route course has a goal");
+            let end = built.guide[built.guide.len() - 1];
+            let before = built.guide[built.guide.len() - 2];
+            let front_reach =
+                VEHICLE_FOOTPRINT.rear_axle_to_center_m + VEHICLE_FOOTPRINT.length_m / 2.0;
+            let gap = Vec2::new(goal.x_m, goal.z_m).distance(end);
+            assert!((gap - (5.0 + front_reach)).abs() < 1e-2, "{name}: {gap}");
+            let heading = road_geom::heading_of((end - before).normalize());
+            assert!(
+                (goal.heading_rad - heading).abs() < 1e-3,
+                "{name}: {goal:?}"
+            );
+            let rects = built.course.collision_rects();
+            assert!(!in_contact(&VEHICLE_FOOTPRINT, &goal, &rects), "{name}");
         }
     }
 

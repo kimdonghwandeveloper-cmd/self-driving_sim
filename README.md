@@ -329,11 +329,14 @@ cargo.exe build --locked -p sim-godot
 & '<Godot 콘솔 실행 파일>' --headless --fixed-fps 64 --path godot --script res://tests/map_course_test.gd
 & '<Godot 콘솔 실행 파일>' --headless --fixed-fps 64 --path godot --script res://tests/menu_flow_test.gd
 & '<Godot 콘솔 실행 파일>' --headless --fixed-fps 64 --path godot --script res://tests/route_save_test.gd
+& '<Godot 콘솔 실행 파일>' --headless --fixed-fps 64 --path godot --script res://tests/goal_reset_test.gd
 ```
 
 `map_course_test.gd`는 저장소의 여수 경로 코스(`map:assets/maps/yeosu-expo/route-junctions.toml`)를 Godot에서 만들고 몇 초 주행합니다(GD-3).
 `menu_flow_test.gd`는 메인 메뉴 → 코스 선택 → Rust 차량 주행 → Esc 메뉴 복귀를, `route_save_test.gd`는 오프라인으로 경로를 찍어 저장하고
 그 저장 경로로 차량이 준비되는지 확인합니다(GD-4, 시험 파일은 끝에 지움).
+`goal_reset_test.gd`는 지도 코스의 경로 끝 목표 표시, 주행 후 리셋 시 경로 시작 자세 복원, 없는 지도 파일을 열 때
+개발 코스(training) 대체를 확인합니다(4-6).
 프레임 시간은 실제 창에서 잽니다(헤드리스 아님, 측정만 하고 실패로 끝내지 않음).
 
 ```powershell
