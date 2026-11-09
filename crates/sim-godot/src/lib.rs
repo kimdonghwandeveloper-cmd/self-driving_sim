@@ -5,6 +5,11 @@
 //! (클래스·좌표·실패 규칙은 `docs/design/godot-interface.md` v1).
 
 pub mod course;
+pub mod replay;
+// gdext 0.5.5의 `#[init(val = ...)]`가 만든 생성 코드가 `base: base` 형태라 clippy가 짚는다.
+// 생성 코드는 구조체 밖이라 모듈 단위로 허용한다.
+#[allow(clippy::redundant_field_names)]
+pub mod vehicle;
 
 use godot::prelude::*;
 
