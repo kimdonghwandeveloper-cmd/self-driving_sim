@@ -23,6 +23,16 @@ var overwrite := CheckBox.new()
 var snapshot_dialog := FileDialog.new()
 ## Godot 쪽 지도 텍스처 보관 상한(계약 7-3 권장값).
 const MAX_TEXTURES := 512
+## 맞춤 보기에서 버튼·안내 영역으로 빼는 화면 크기(px). 최소 배율도 같은 영역 기준이다.
+const FIT_MARGIN := Vector2(80, 380)
+## 대한민국 근사 경계 밖을 덮는 색(사용자 결정: 주변 나라는 보이지 않게 한다).
+const MASK_COLOR := Color("262d34")
+## 대한민국 근사 경계(지도 좌표). Rust SimTiles가 없으면 비어 있고 가림·제한을 하지 않는다.
+var country_outline := PackedVector2Array()
+## 경계를 감싸는 범위. 카메라 이동·축소 한계로 쓴다.
+var country_bounds := Rect2()
+## 경계 밖을 덮는 구멍 없는 다각형들(경계를 가운데 세로선으로 나눠 미리 계산).
+var mask_polygons: Array[PackedVector2Array] = []
 
 ## 전국 범위를 담을 배율로 시작하고 출처 및 비활성 기능을 표시한다.
 func _ready() -> void:
@@ -37,6 +47,7 @@ func _ready() -> void:
 	status.text = "지도 미리보기 · Rust 지도 서비스 미연결\n우클릭 끌기: 이동 / 휠: 확대·축소\n지역 받기·점 편집·경로 계산·저장은 연결 대기 중입니다.\n회색 칸은 실제 지도 타일이 아닙니다."
 	canvas.add_child(status)
 	_services(canvas)
+	_fit_country()
 	var attribution := LinkButton.new()
 	attribution.text = "© OpenStreetMap contributors"
 	attribution.uri = "https://www.openstreetmap.org/copyright"
@@ -81,12 +92,14 @@ func _unhandled_input(event: InputEvent) -> void:
 		elif event.pressed and event.button_index in [MOUSE_BUTTON_WHEEL_UP, MOUSE_BUTTON_WHEEL_DOWN]:
 			var before := get_global_mouse_position()
 			var factor := 1.25 if event.button_index == MOUSE_BUTTON_WHEEL_UP else 0.8
-			camera.zoom = Vector2.ONE * clampf(camera.zoom.x * factor, 0.0005, 8.0)
+			camera.zoom = Vector2.ONE * clampf(camera.zoom.x * factor, _min_zoom(), 8.0)
 			camera.force_update_scroll()
 			camera.position += before - get_global_mouse_position()
+			_clamp_camera()
 			queue_redraw()
 	elif event is InputEventMouseMotion and dragging:
 		camera.position -= event.relative / camera.zoom.x
+		_clamp_camera()
 		queue_redraw()
 
 ## 포커스 상실 시 지도 끌기를 끝낸다.
@@ -109,6 +122,12 @@ func _draw() -> void:
 	for tile in tile_layers:
 		if tile.get("texture") is Texture2D:
 			draw_texture_rect(tile.texture, tile.rect, false)
+	for polygon in mask_polygons:
+		draw_colored_polygon(polygon, MASK_COLOR)
+	if country_outline.size() > 2:
+		var closed := country_outline.duplicate()
+		closed.append(country_outline[0])
+		draw_polyline(closed, Color("8a96a3"), 1.5 / scale_m, true)
 	for i in range(roads.size() / 2):
 		var allowed := i < usable.size() and usable[i] == 1
 		draw_line(roads[i * 2], roads[i * 2 + 1], Color("cbd5dd") if allowed else Color("737e88"), 2.0 / scale_m, true)
@@ -126,6 +145,8 @@ func _services(canvas: CanvasLayer) -> void:
 	if ClassDB.class_exists("SimTiles"):
 		tiles = ClassDB.instantiate("SimTiles")
 		tiles.set("offline", offline)
+		if tiles.has_method("country_outline"):
+			_set_country(tiles.call("country_outline"), tiles.call("country_bounds"))
 	var controls := HBoxContainer.new()
 	controls.position = Vector2(24, 64)
 	canvas.add_child(controls)
@@ -239,7 +260,9 @@ func _process(_delta: float) -> void:
 func _update_tiles() -> void:
 	var span := get_viewport_rect().size / camera.zoom.x
 	var visible := Rect2(camera.position - span * 0.5, span)
-	tiles.call("request_visible", visible.position, visible.end, 1.0 / camera.zoom.x)
+	var wanted := visible.intersection(country_bounds) if country_bounds.has_area() else visible
+	if wanted.has_area():
+		tiles.call("request_visible", wanted.position, wanted.end, 1.0 / camera.zoom.x)
 	for tile in tiles.call("poll"):
 		if tile.status != "ok":
 			feedback = "배경 지도: " + str(tile.error)
@@ -274,6 +297,9 @@ func _exit_tree() -> void:
 
 ## 전국이 보이는 처음 위치·배율로 돌아간다.
 func _fit_country() -> void:
+	if country_bounds.has_area():
+		_fit_rect(country_bounds)
+		return
 	camera.position = Vector2.ZERO
 	camera.zoom = Vector2.ONE * 0.001
 
@@ -295,12 +321,13 @@ func _fit_route() -> void:
 func _fit_rect(bounds: Rect2) -> void:
 	if bounds.size.x <= 0.0 or bounds.size.y <= 0.0:
 		return
-	var available := get_viewport_rect().size - Vector2(80, 380)
+	var available := get_viewport_rect().size - FIT_MARGIN
 	if available.x <= 0.0 or available.y <= 0.0:
 		return
 	var zoom_value := clampf(minf(available.x / bounds.size.x, available.y / bounds.size.y), 0.0005, 8.0)
 	camera.zoom = Vector2.ONE * zoom_value
 	camera.position = bounds.get_center() - Vector2(0, 150.0 / zoom_value)
+	_clamp_camera()
 
 ## 로컬 스냅샷(graph*.osm.json) 파일 선택 창을 연다. 받는 중에는 열지 않는다.
 func _open_snapshot() -> void:
@@ -329,3 +356,34 @@ func _evict_textures() -> void:
 		var tile: Dictionary = textures[item[1]]
 		tiles.call("forget_displayed", tile.x, tile.y, tile.z)
 		textures.erase(item[1])
+
+## Rust가 준 대한민국 근사 경계를 기록하고, 그 밖을 덮을 구멍 없는 다각형을 만든다.
+## 큰 사각형을 경계 가운데 세로선으로 둘로 나눠 각각에서 경계를 빼면 결과에 구멍이 생기지 않는다.
+func _set_country(outline: PackedVector2Array, bounds: Rect2) -> void:
+	if outline.size() < 3 or not bounds.has_area():
+		return
+	country_outline = outline
+	country_bounds = bounds
+	mask_polygons.clear()
+	var margin := maxf(bounds.size.x, bounds.size.y) * 20.0
+	var big := bounds.grow(margin)
+	var middle := bounds.get_center().x
+	for half in [Rect2(big.position, Vector2(middle - big.position.x, big.size.y)), Rect2(Vector2(middle, big.position.y), Vector2(big.end.x - middle, big.size.y))]:
+		var corners := PackedVector2Array([half.position, Vector2(half.end.x, half.position.y), half.end, Vector2(half.position.x, half.end.y)])
+		for piece in Geometry2D.clip_polygons(corners, outline):
+			mask_polygons.append(piece)
+
+## 대한민국 전체가 화면에 들어오는 배율보다 더 축소하지 못하게 하는 최소 배율. 경계가 없으면 기존 한계.
+func _min_zoom() -> float:
+	if not country_bounds.has_area():
+		return 0.0005
+	var available := get_viewport_rect().size - FIT_MARGIN
+	return clampf(minf(available.x / country_bounds.size.x, available.y / country_bounds.size.y), 0.0005, 8.0)
+
+## 카메라 가운데를 대한민국 범위 안으로, 배율을 최소 배율 이상으로 묶는다.
+func _clamp_camera() -> void:
+	if not country_bounds.has_area():
+		return
+	if camera.zoom.x < _min_zoom():
+		camera.zoom = Vector2.ONE * _min_zoom()
+	camera.position = camera.position.clamp(country_bounds.position, country_bounds.end)
