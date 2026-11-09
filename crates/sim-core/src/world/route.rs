@@ -5,6 +5,8 @@
 //! - 경로 조각: 교차로 사이(또는 경로 끝과 교차로 사이)의 경로를 각 교차로의 잘라 낼 거리만큼 잘라 도로 조각으로 만든다.
 //! - 곁가지: 경로에 포함되지 않은 팔은 잘라 낸 곳부터 곁가지 길이(기본 [`STUB_LENGTH_M`])만 만들고 끝을 벽으로 막는다.
 //! - 연석: 도로 조각 양옆과 교차로 모서리에만 둔다. 팔이 열린 쪽에는 두지 않는다.
+//! - 회전: 경로가 교차로에서 꺾이면 안내선 원호 반경이 [`TURN_RADIUS_FACTOR`] × 차량 최소 회전 반경 이상이 되게
+//!   두 경로 팔을 더 길게 자르고, 안쪽 모서리를 안내선과 같은 중심의 원호로 만든다.
 //!
 //! 1차 판에서 거부하는 경우: 시작 노드가 교차로, 노드 재방문, 이웃한 팔 사이 각 [`MIN_ARM_GAP_DEG`] 미만,
 //! 교차로 근처에서 팔이 굽음, 교차로끼리 너무 가까움, 일방통행(`oneway`) 팔(왕복 분리 도로 미지원),
@@ -72,6 +74,10 @@ const SAME_NODE_TOLERANCE_DEG: f64 = 1.0e-7;
 const CONTACT_MARGIN_M: f32 = 0.05;
 /// 교차로를 건너는 안내선의 표본 수.
 const GUIDE_SAMPLES: usize = 16;
+/// 교차로에서 꺾는 안내선 원호 반경의 하한을 차량 최소 회전 반경의 몇 배로 둘지. 임시값.
+///
+/// 최소 회전 반경 그대로면 조향을 끝까지 꺾어야 해서 조금만 늦어도 바깥쪽 연석에 닿는다.
+pub const TURN_RADIUS_FACTOR: f32 = 1.3;
 
 /// 경로 코스 생성 결과.
 #[derive(Debug, Clone, PartialEq)]
@@ -495,8 +501,43 @@ fn build_junction(
         arms.push(ArmInput {
             direction: (points[1] - points[0]).normalize(),
             half_width_m: half,
+            min_cut_m: 0.0,
+            ccw_corner_radius_m: 0.0,
         });
         polylines.push(points);
+    }
+    // 경로가 이 교차로에서 꺾이면 안내선 원호 반경을 최소 회전 반경 × 배수 이상으로 둔다.
+    // - 들어오고 나가는 두 팔을 접선 길이(반경 × tan(꺾는 각 / 2))까지 자른다. 안내선은 잘라 낸 곳에서 원호를 시작한다.
+    // - 두 팔이 이웃해 있으면 그 사이 안쪽 모서리를 안내선 원호와 같은 중심의 원호(반경 - 반폭)로 만들어,
+    //   안쪽 연석이 곧은 길처럼 안내선에서 반폭만큼 떨어지게 한다.
+    let route_arms: Vec<usize> = route_neighbors
+        .iter()
+        .filter_map(|n| neighbors.iter().position(|(id, _)| id == n))
+        .collect();
+    if let [inbound, outbound] = route_arms[..] {
+        let between = arms[inbound].direction.angle_to(arms[outbound].direction);
+        let turn = std::f32::consts::PI - between.abs();
+        let radius = spec.vehicle_min_radius_m * TURN_RADIUS_FACTOR;
+        let tangent = radius * (turn / 2.0).tan();
+        for k in [inbound, outbound] {
+            arms[k].min_cut_m = tangent;
+        }
+        // 반시계로 앞선 팔(안쪽 모서리의 시작 팔)과, 두 팔 사이에 다른 팔이 없는지.
+        let (first, second) = if between > 0.0 {
+            (inbound, outbound)
+        } else {
+            (outbound, inbound)
+        };
+        let sweep = between.abs();
+        let adjacent = (0..arms.len())
+            .filter(|&k| k != first && k != second)
+            .all(|k| {
+                let at = arms[first].direction.angle_to(arms[k].direction);
+                !(at > 0.0 && at < sweep)
+            });
+        if adjacent {
+            arms[first].ccw_corner_radius_m = radius - half;
+        }
     }
     let shape = junction::junction_shape(
         center,

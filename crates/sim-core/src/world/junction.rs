@@ -3,11 +3,13 @@
 //! 교차로 중심에서 뻗은 팔(진행 방향 단위 벡터와 반폭)을 각도순으로 정렬하고, 이웃한 두 팔 사이마다
 //! 모서리를 만든다.
 //! - 두 팔 사이 각 φ가 180°보다 작으면: 두 팔의 마주 보는 가장자리 선을 반경 r의 원호(모서리 원호)로 잇는다.
-//!   원호 접점까지가 그 팔을 잘라 낼 최소 거리다.
+//!   원호 접점까지가 그 팔을 잘라 낼 최소 거리다. r은 모서리 반경이고, 앞 팔에 더 큰 값
+//!   ([`ArmInput::ccw_corner_radius_m`])을 주면 그 값을 쓴다(경로가 꺾는 안쪽 모서리).
 //! - φ가 180° 이상이면(곧은 길 옆에 붙은 T자의 반대쪽 등): 두 가장자리를 교차로 중심 둘레의 원호(반경 = 반폭)나
-//!   직선으로 잇는다.
+//!   직선으로 잇는다. 180°에 아주 가까우면(작은 쪽으로 1e-3 rad 안) 직선으로 잇는다.
 //!
-//! 각 팔의 잘라 낼 거리는 PLAN 기준 `다른 팔의 최대 반폭 + 모서리 반경`과 두 모서리 원호 접점 거리 중 큰 값이다.
+//! 각 팔의 잘라 낼 거리는 PLAN 기준 `다른 팔의 최대 반폭 + 모서리 반경`, 두 모서리 원호 접점 거리,
+//! 팔마다 따로 준 최소 거리([`ArmInput::min_cut_m`]) 중 가장 큰 값이다.
 //! 교차로 면은 중심에서 본 별 모양(star-shaped) 다각형이어야 하며, 부채꼴 삼각형으로 그린다.
 //! 좌표는 지면 (x, z) m이고, 각도는 `atan2(z, x)`가 커지는 방향(수학적 반시계)으로 잰다.
 
@@ -22,6 +24,10 @@ pub struct ArmInput {
     pub direction: Vec2,
     /// 팔 도로의 반폭(m).
     pub half_width_m: f32,
+    /// 이 팔을 적어도 잘라 낼 거리(m). 경로가 교차로에서 꺾일 때 회전할 공간을 두는 데 쓴다. 0이면 제한이 없다.
+    pub min_cut_m: f32,
+    /// 이 팔과 반시계 방향 다음 팔 사이 모서리(180° 미만일 때) 원호 반경의 하한(m). 0이면 공통 모서리 반경을 쓴다.
+    pub ccw_corner_radius_m: f32,
 }
 
 /// 교차로 면 생성 결과.
@@ -77,7 +83,7 @@ pub fn junction_shape(
                 .filter(|(j, _)| *j != i)
                 .map(|(_, arm)| arm.half_width_m)
                 .fold(0.0f32, f32::max);
-            other + corner_radius_m
+            (other + corner_radius_m).max(arms[i].min_cut_m)
         })
         .collect();
     let step = arc_step_deg.to_radians();
@@ -105,10 +111,11 @@ pub fn junction_shape(
             let s_a = cross(rhs, b.direction) / denom;
             let s_b = cross(rhs, a.direction) / denom;
             let x = center + edge_a + a.direction * s_a;
-            let t = corner_radius_m / (gap / 2.0).tan();
+            let radius = corner_radius_m.max(a.ccw_corner_radius_m);
+            let t = radius / (gap / 2.0).tan();
             let (t_a, t_b) = (x + a.direction * t, x + b.direction * t);
             let bisector = (a.direction + b.direction).normalize();
-            let arc_center = x + bisector * (corner_radius_m / (gap / 2.0).sin());
+            let arc_center = x + bisector * (radius / (gap / 2.0).sin());
             let from = t_a - arc_center;
             let sweep = from.angle_to(t_b - arc_center);
             let pieces = (sweep.abs() / step).ceil().max(1.0) as usize;
@@ -123,9 +130,13 @@ pub fn junction_shape(
         } else {
             // 180° 이상: 중심 둘레(반폭 원호) 또는 직선으로 잇는다.
             let (p, q) = (center + edge_a, center + edge_b);
-            if (a.half_width_m - b.half_width_m).abs() < 1.0e-4 {
+            // 반폭이 같으면 두 가장자리 사이 각은 φ - 180°다. 180°보다 조금 작은 φ(위 원호 조건의 허용 범위)는
+            // 각을 0..360°로 감으면 거의 한 바퀴가 되어 중심을 도는 고리가 생기므로, 0 이하로 보고 직선으로 잇는다.
+            let sweep = gap - PI;
+            if (a.half_width_m - b.half_width_m).abs() < 1.0e-4 && sweep <= 1.0e-3 {
+                Vec::new()
+            } else if (a.half_width_m - b.half_width_m).abs() < 1.0e-4 {
                 let from = edge_a;
-                let sweep = (angle(edge_b) - angle(edge_a)).rem_euclid(TAU);
                 let pieces = (sweep / step).ceil().max(1.0) as usize;
                 (0..=pieces)
                     .map(|n| {
@@ -181,11 +192,13 @@ pub fn junction_shape(
 mod tests {
     use super::*;
 
-    /// 각도(deg, 반시계)의 단위 벡터와 반폭 2 m인 팔을 만든다.
+    /// 각도(deg, 반시계)의 단위 벡터와 반폭 2 m인 팔을 만든다(최소 잘라 낼 거리 없음).
     fn arm(deg: f32) -> ArmInput {
         ArmInput {
             direction: Vec2::from_angle(deg.to_radians()),
             half_width_m: 2.0,
+            min_cut_m: 0.0,
+            ccw_corner_radius_m: 0.0,
         }
     }
 
@@ -258,5 +271,51 @@ mod tests {
                 assert!(cross(p - c, q - c) >= -1e-4);
             }
         }
+    }
+
+    /// 180°보다 아주 조금 작게(1e-3 rad 안) 벌어진 두 팔 사이를 중심 둘레 고리가 아닌 직선으로 잇는지 확인한다.
+    /// 고리가 생기면 그 위에 연석이 놓여 직진하는 차가 교차로 한가운데서 막힌다(여수 교차로 12669768610).
+    #[test]
+    fn nearly_straight_side_has_no_ring() {
+        let arms = [arm(0.0), arm(179.97), arm(270.0)];
+        let shape = junction_shape(Vec2::ZERO, &arms, 3.0, 3.0, 25.0).unwrap();
+        for corner in &shape.corners {
+            for p in corner {
+                assert!(p.length() > 2.5, "{p} in {corner:?}");
+            }
+        }
+        let straight = shape
+            .corners
+            .iter()
+            .find(|c| c[0].x > 0.0 && c[0].y > 0.0)
+            .unwrap();
+        assert_eq!(straight.len(), 2, "{straight:?}");
+    }
+
+    /// 팔마다 준 최소 잘라 낼 거리가 기본값보다 크면 그 팔만 그 거리에서 자르는지 확인한다.
+    #[test]
+    fn min_cut_lengthens_only_that_arm() {
+        let mut arms = [arm(0.0), arm(90.0), arm(180.0), arm(270.0)];
+        arms[1].min_cut_m = 8.0;
+        let shape = junction_shape(Vec2::ZERO, &arms, 3.0, 3.0, 25.0).unwrap();
+        assert!((shape.cut_m[1] - 8.0).abs() < 1e-4, "{:?}", shape.cut_m);
+        for k in [0, 2, 3] {
+            assert!((shape.cut_m[k] - 5.0).abs() < 1e-4, "{:?}", shape.cut_m);
+        }
+    }
+
+    /// 앞 팔에 준 큰 모서리 반경은 그 팔과 반시계 다음 팔 사이 모서리에만 쓰이고, 두 팔을 원호 접점까지 자르는지 확인한다.
+    #[test]
+    fn wide_corner_uses_given_radius() {
+        let mut arms = [arm(0.0), arm(90.0), arm(180.0), arm(270.0)];
+        arms[0].ccw_corner_radius_m = 6.0;
+        let shape = junction_shape(Vec2::ZERO, &arms, 3.0, 3.0, 25.0).unwrap();
+        // 0°~90° 모서리: 가장자리 교점 (2, 2)에서 반경 6 원호, 중심 (8, 8), 접점은 중심에서 8 m.
+        for p in &shape.corners[0][1..shape.corners[0].len() - 1] {
+            assert!((p.distance(Vec2::new(8.0, 8.0)) - 6.0).abs() < 1e-3, "{p}");
+        }
+        assert!((shape.cut_m[0] - 8.0).abs() < 1e-3, "{:?}", shape.cut_m);
+        assert!((shape.cut_m[1] - 8.0).abs() < 1e-3, "{:?}", shape.cut_m);
+        assert!((shape.cut_m[2] - 5.0).abs() < 1e-4, "{:?}", shape.cut_m);
     }
 }
