@@ -47,13 +47,31 @@ func build(data: Dictionary) -> void:
 		_triangles(vertices, 0.012, asphalt)
 	for marking in data.get("markings", []):
 		_box(marking.rect, 0.004, 0.016, COLORS.stop_line, paint.get(marking.kind, paint.stop_line))
-	for collider in data.get("colliders", []):
-		var height: float = collider.height_m
-		var surface: Material = concrete if collider.kind == "curb" else null
-		_box(collider.rect, height, height * 0.5, COLORS.get(collider.kind, COLORS.obstacle), surface)
+	_colliders(data.get("colliders", []), concrete)
 	var goal: Dictionary = data.get("goal", {})
 	if not goal.is_empty():
 		_goal_marker(goal)
+
+## 충돌 경계를 종류마다 메시 하나로 합쳐 표시한다(4-6). 지도 경로 코스는 연석 상자가 수백 개라 상자마다
+## 노드를 두면 그리기 호출이 그만큼 늘어난다. 연석은 `concrete` 재질, 나머지는 종류 색 무광 재질이다.
+func _colliders(colliders: Array, concrete: Material) -> void:
+	var tools := {}
+	for collider in colliders:
+		var height: float = collider.height_m
+		var rect: Dictionary = collider.rect
+		var box := BoxMesh.new()
+		box.size = Vector3(rect.size.x, height, rect.size.y)
+		if not tools.has(collider.kind):
+			tools[collider.kind] = SurfaceTool.new()
+			tools[collider.kind].begin(Mesh.PRIMITIVE_TRIANGLES)
+		var place := Transform3D(Basis(Vector3.UP, rect.heading_rad), rect.center + Vector3(0, height * 0.5, 0))
+		tools[collider.kind].append_from(box, 0, place)
+	for kind in tools:
+		var node := MeshInstance3D.new()
+		node.name = "Colliders_" + kind
+		node.mesh = tools[kind].commit()
+		node.material_override = concrete if kind == "curb" else material(COLORS.get(kind, COLORS.obstacle))
+		add_child(node)
 
 ## 경로 끝 목표 자세(계약 3절 `goal`)에 진행 방향을 가로지르는 체크무늬 띠와 "도착" 글자를 둔다. 충돌 판정은 없다.
 func _goal_marker(goal: Dictionary) -> void:

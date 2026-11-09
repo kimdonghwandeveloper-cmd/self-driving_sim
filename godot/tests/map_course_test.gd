@@ -79,9 +79,27 @@ func _check_screen() -> void:
 		var center := Vector2(drive.ground.position.x, drive.ground.position.z)
 		_check(Rect2(center - size * 0.5, size).encloses(bounds), "바닥이 코스 범위를 덮지 않음")
 		_check(drive.notice.text.contains("OpenStreetMap"), "화면에 OSM 출처 표기 없음")
+		_check_merged_colliders(drive)
 	drive.free()
 	_finish()
 
+
+## 충돌 경계가 종류마다 메시 하나로 합쳐졌고(4-6), 합친 연석 메시 범위가 모든 연석 중심을 덮는지 본다.
+func _check_merged_colliders(drive: Node) -> void:
+	var colliders: Array = drive.vehicle.call("course_data").colliders
+	var curbs := colliders.filter(func(collider): return collider.kind == "curb")
+	var merged: MeshInstance3D = drive.scene_content.find_child("Colliders_curb", true, false)
+	_check(curbs.size() > 100 and merged != null, "연석 합친 메시 없음(연석 %d개)" % curbs.size())
+	if merged == null:
+		return
+	var nodes: Array[Node] = drive.scene_content.find_children("*", "MeshInstance3D", true, false)
+	_check(nodes.size() < colliders.size(), "메시 노드가 충돌 경계 수보다 많음(%d / %d)" % [nodes.size(), colliders.size()])
+	var box := merged.get_aabb().grow(0.01)
+	for curb in curbs:
+		var center: Vector3 = curb.rect.center
+		if not box.has_point(center + Vector3(0, 0.01, 0)):
+			_check(false, "합친 연석 메시가 연석 %s를 덮지 않음" % center)
+			return
 
 ## 실패 항목을 모은다.
 func _check(condition: bool, message: String) -> void:

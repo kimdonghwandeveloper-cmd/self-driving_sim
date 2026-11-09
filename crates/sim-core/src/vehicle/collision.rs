@@ -22,6 +22,11 @@ const MIN_CERTIFY_SPAN_M: f32 = 1e-4;
 const BOUNDARY_RESOLUTION_M: f32 = 1e-5;
 /// 차체와 장애물 사이가 이 거리(m) 안이면 접촉으로 본다.
 pub const CONTACT_MARGIN_M: f32 = 0.02;
+/// 장애물 격자([`ObstacleGrid`]) 한 칸의 크기(m).
+const GRID_CELL_M: f32 = 8.0;
+/// 격자 후보에서 뺄 장애물의 최소 여유(m). 분리축 거리는 실제 거리의 1/√2까지 작을 수 있으므로
+/// 접촉 거리의 2배에 부동소수점 여유를 더한다. 이보다 먼 장애물은 한 단계 동안 닿거나 접촉 거리 안에 들 수 없다.
+const GRID_SLACK_M: f32 = 2.0 * CONTACT_MARGIN_M + 0.05;
 
 /// 차체 충돌 박스 기본값(길이 4.2 m, 폭 1.8 m, 후륜축에서 차체 중심까지 1.4 m). 실차 미확인 임시값.
 pub const VEHICLE_FOOTPRINT: Footprint = Footprint {
@@ -190,6 +195,132 @@ pub fn in_contact(footprint: &Footprint, motion: &Motion, obstacles: &[GroundRec
     hits_any(footprint, motion, obstacles, CONTACT_MARGIN_M)
 }
 
+/// 장애물 목록과, 그 목록을 일정 크기 격자 칸에 나눠 둔 색인(4-6). 충돌 경계가 많은 지도 코스에서 한 단계 검사 대상을 줄인다.
+///
+/// 장애물마다 감싸는 원(중심, 반지름)을 두고, 그 원이 걸치는 칸에 번호를 넣는다. 후보 순서는 원래 목록 순서이고,
+/// 후보에서 빠진 장애물은 그 단계에서 닿거나 접촉 거리 안에 들 수 없으므로 판정 결과는 전체 목록과 같다.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ObstacleGrid {
+    /// 장애물 목록(원래 순서). 장애물 번호는 이 목록 번호다.
+    rects: Vec<GroundRect>,
+    /// 격자 원점(가장 작은 x, z 모서리).
+    origin: Vec2,
+    /// 칸 수(x, z).
+    cols: usize,
+    rows: usize,
+    /// 칸마다 걸친 장애물 번호(오름차순).
+    cells: Vec<Vec<u32>>,
+    /// 장애물마다 감싸는 원(중심, 반지름).
+    bounds: Vec<(Vec2, f32)>,
+}
+
+impl ObstacleGrid {
+    /// 장애물 목록으로 격자를 만든다. 목록이 비면 칸 없는 격자다.
+    pub fn new(rects: Vec<GroundRect>) -> Self {
+        let bounds: Vec<(Vec2, f32)> = rects
+            .iter()
+            .map(|rect| (rect.center, rect.half_size.length()))
+            .collect();
+        let Some(min) = bounds
+            .iter()
+            .map(|&(center, radius)| center - Vec2::splat(radius))
+            .reduce(Vec2::min)
+        else {
+            return Self {
+                rects,
+                origin: Vec2::ZERO,
+                cols: 0,
+                rows: 0,
+                cells: Vec::new(),
+                bounds,
+            };
+        };
+        let max = bounds
+            .iter()
+            .map(|&(center, radius)| center + Vec2::splat(radius))
+            .fold(min, Vec2::max);
+        let count = ((max - min) / GRID_CELL_M).floor();
+        let (cols, rows) = (count.x as usize + 1, count.y as usize + 1);
+        let mut grid = Self {
+            rects,
+            origin: min,
+            cols,
+            rows,
+            cells: vec![Vec::new(); cols * rows],
+            bounds,
+        };
+        for index in 0..grid.bounds.len() {
+            let (center, radius) = grid.bounds[index];
+            if let Some((xs, zs)) = grid.cell_range(center, radius) {
+                for z in zs {
+                    for x in xs.clone() {
+                        grid.cells[z * cols + x].push(index as u32);
+                    }
+                }
+            }
+        }
+        grid
+    }
+
+    /// 장애물 목록(원래 순서)을 반환한다.
+    pub fn rects(&self) -> &[GroundRect] {
+        &self.rects
+    }
+
+    /// 중심 `center`, 반지름 `radius` 원을 감싸는 사각형이 걸치는 칸 범위(x, z). 격자 밖이면 `None`.
+    fn cell_range(
+        &self,
+        center: Vec2,
+        radius: f32,
+    ) -> Option<(
+        std::ops::RangeInclusive<usize>,
+        std::ops::RangeInclusive<usize>,
+    )> {
+        if self.cells.is_empty() || !center.is_finite() || !radius.is_finite() {
+            return None;
+        }
+        let low = ((center - Vec2::splat(radius) - self.origin) / GRID_CELL_M).floor();
+        let high = ((center + Vec2::splat(radius) - self.origin) / GRID_CELL_M).floor();
+        let last = Vec2::new(self.cols as f32 - 1.0, self.rows as f32 - 1.0);
+        if high.x < 0.0 || high.y < 0.0 || low.x > last.x || low.y > last.y {
+            return None;
+        }
+        let low = low.max(Vec2::ZERO);
+        let high = high.min(last);
+        Some((
+            low.x as usize..=high.x as usize,
+            low.y as usize..=high.y as usize,
+        ))
+    }
+
+    /// 후륜축이 `from`에서 출발해 차체 위 점이 `travel_m`까지 움직이는 한 단계에서 닿을 수 있는 장애물 번호(오름차순).
+    fn candidates(&self, footprint: &Footprint, from: &Motion, travel_m: f32) -> Vec<usize> {
+        let axle = Vec2::new(from.x_m, from.z_m);
+        let reach = footprint.reach_m() + travel_m + GRID_SLACK_M;
+        let mut found: Vec<usize> = Vec::new();
+        if let Some((xs, zs)) = self.cell_range(axle, reach) {
+            for z in zs {
+                for x in xs.clone() {
+                    found.extend(self.cells[z * self.cols + x].iter().map(|&i| i as usize));
+                }
+            }
+        }
+        found.sort_unstable();
+        found.dedup();
+        found.retain(|&index| {
+            let (center, radius) = self.bounds[index];
+            center.distance(axle) <= reach + radius
+        });
+        found
+    }
+}
+
+/// 한 단계 동안 차체 위 어느 점이든 움직이는 거리의 상한(m). [`PathCheck`]와 같은 식이다.
+fn travel_between(footprint: &Footprint, from: &Motion, to: &Motion) -> f32 {
+    Vec2::new(to.x_m - from.x_m, to.z_m - from.z_m).length()
+        + wrap_angle(to.heading_rad - from.heading_rad).abs() * footprint.reach_m()
+}
+
 /// 경로 위 한 자세의 검사 결과.
 #[derive(Debug, Clone, Copy)]
 struct Probe {
@@ -227,8 +358,7 @@ impl<'a> PathCheck<'a> {
             .filter(|&(_, depth)| depth > 0.0)
             .collect();
         // 위치·방향을 선형 보간하므로 점 이동 거리는 기준점 이동 + 회전각 × 기준점에서 가장 먼 모서리 거리 이하다.
-        let travel_m = Vec2::new(to.x_m - from.x_m, to.z_m - from.z_m).length()
-            + wrap_angle(to.heading_rad - from.heading_rad).abs() * footprint.reach_m();
+        let travel_m = travel_between(footprint, from, to);
         Self {
             footprint,
             from,
@@ -375,11 +505,71 @@ pub fn step_with_obstacles(
     obstacles: &[GroundRect],
     contact: &mut ContactState,
 ) -> Option<Impact> {
+    step_filtered(
+        state, motion, params, dt, footprint, obstacles, None, contact,
+    )
+}
+
+/// [`step_with_obstacles`]와 같되, `grid`의 장애물 중 닿을 수 있는 것만 검사한다(4-6).
+///
+/// 후보에서 빠진 장애물은 이 단계에서 닿거나 접촉 거리 안에 들 수 없으므로 결과(자세·속도·충돌·접촉 상태,
+/// 장애물 번호)는 전체 목록 검사와 같다. 충돌 경계가 많은 지도 코스에서 한 단계 비용을 줄인다.
+pub fn step_with_grid(
+    state: &mut VehicleState,
+    motion: &mut Motion,
+    params: &DynamicsParams,
+    dt: f32,
+    footprint: &Footprint,
+    grid: &ObstacleGrid,
+    contact: &mut ContactState,
+) -> Option<Impact> {
+    let obstacles = grid.rects();
+    step_filtered(
+        state,
+        motion,
+        params,
+        dt,
+        footprint,
+        obstacles,
+        Some(grid),
+        contact,
+    )
+}
+
+/// 한 단계 적분과 관통 방지. `grid`가 있으면 그 후보만 검사하고 장애물 번호는 원래 목록 번호로 되돌린다.
+#[allow(clippy::too_many_arguments)]
+fn step_filtered(
+    state: &mut VehicleState,
+    motion: &mut Motion,
+    params: &DynamicsParams,
+    dt: f32,
+    footprint: &Footprint,
+    obstacles: &[GroundRect],
+    grid: Option<&ObstacleGrid>,
+    contact: &mut ContactState,
+) -> Option<Impact> {
     let before = *motion;
     let speed_before = state.speed_mps();
     dynamics::step(state, motion, params, dt);
     let speed_at_contact = state.speed_mps();
-    let result = sweep(footprint, &before, motion, obstacles);
+    let candidates: Option<Vec<usize>> = grid.map(|grid| {
+        grid.candidates(
+            footprint,
+            &before,
+            travel_between(footprint, &before, motion),
+        )
+    });
+    let result = match &candidates {
+        None => sweep(footprint, &before, motion, obstacles),
+        Some(indices) => {
+            let subset: Vec<GroundRect> = indices.iter().map(|&i| obstacles[i]).collect();
+            let found = sweep(footprint, &before, motion, &subset);
+            Sweep {
+                fraction: found.fraction,
+                blocked_by: found.blocked_by.map(|k| indices[k]),
+            }
+        }
+    };
     if result.blocked() {
         *motion = pose_between(&before, motion, result.fraction);
         state.set_speed_mps(0.0);
@@ -391,7 +581,10 @@ pub fn step_with_obstacles(
             .get(index)
             .is_some_and(|obstacle| body.overlaps(obstacle, CONTACT_MARGIN_M))
     };
-    contact.touching = (0..obstacles.len()).any(near);
+    contact.touching = match &candidates {
+        None => (0..obstacles.len()).any(near),
+        Some(indices) => indices.iter().any(|&index| near(index)),
+    };
     contact.blocked = result.blocked();
     contact.reported.retain(|&index| near(index));
     let new_impact = match result.blocked_by {
@@ -495,6 +688,101 @@ mod tests {
             throttle: 1.0,
             ..VehicleInput::default()
         }
+    }
+
+    /// 기둥이 촘촘히 놓인 곳을 조향을 바꿔 가며 앞뒤로 달릴 때, 격자로 거른 단계([`step_with_grid`])가
+    /// 전체 목록 단계와 매 틱 자세·속도·충돌·접촉 상태까지 똑같은지 확인한다(4-6 격자 미리 거르기).
+    #[test]
+    fn grid_step_matches_full_step() {
+        let mut obstacles = Vec::new();
+        for i in -12..12 {
+            for j in -12..12 {
+                let center = Vec2::new(i as f32 * 3.1 + 0.7, j as f32 * 2.7 - 0.4);
+                if center.length() < 4.0 {
+                    continue;
+                }
+                obstacles.push(GroundRect {
+                    center,
+                    half_size: Vec2::new(0.2, 0.45),
+                    heading_rad: (i * 7 + j * 3) as f32 * 0.37,
+                });
+            }
+        }
+        let grid = ObstacleGrid::new(obstacles.clone());
+        let params = DynamicsParams::default();
+        let mut full = (
+            ready_in(Gear::Drive),
+            Motion::default(),
+            ContactState::default(),
+        );
+        let mut fast = full.clone();
+        let mut impacts = 0;
+        for tick in 0..64 * 90 {
+            let input = VehicleInput {
+                throttle: 0.6,
+                steering: (tick as f32 * 0.011).sin(),
+                ..VehicleInput::default()
+            };
+            full.0.set_input(input);
+            fast.0.set_input(input);
+            let a = step_with_obstacles(
+                &mut full.0,
+                &mut full.1,
+                &params,
+                DT,
+                &VEHICLE_FOOTPRINT,
+                &obstacles,
+                &mut full.2,
+            );
+            let b = step_with_grid(
+                &mut fast.0,
+                &mut fast.1,
+                &params,
+                DT,
+                &VEHICLE_FOOTPRINT,
+                &grid,
+                &mut fast.2,
+            );
+            assert_eq!(a, b, "tick {tick}");
+            assert_eq!(full.1, fast.1, "tick {tick}");
+            assert_eq!(full.2, fast.2, "tick {tick}");
+            assert_eq!(full.0.speed_mps(), fast.0.speed_mps(), "tick {tick}");
+            if a.is_some() {
+                impacts += 1;
+                // 막히면 반대 기어로 바꿔 계속 움직인다.
+                let gear = if full.0.gear() == Gear::Drive {
+                    Gear::Reverse
+                } else {
+                    Gear::Drive
+                };
+                full.0.apply(VehicleCommand::RequestGear(gear)).unwrap();
+                fast.0.apply(VehicleCommand::RequestGear(gear)).unwrap();
+            }
+        }
+        assert!(impacts >= 5, "impacts {impacts}");
+    }
+
+    /// 빈 목록·격자 밖 위치에서도 격자 후보가 비어 있고 범위를 넘지 않는지 확인한다.
+    #[test]
+    fn grid_handles_empty_and_outside() {
+        let empty = ObstacleGrid::new(Vec::new());
+        assert!(
+            empty
+                .candidates(&VEHICLE_FOOTPRINT, &Motion::default(), 1.0)
+                .is_empty()
+        );
+        let one = [GroundRect::axis_aligned(Vec2::new(100.0, 100.0), Vec2::ONE)];
+        let grid = ObstacleGrid::new(one.to_vec());
+        assert!(
+            grid.candidates(&VEHICLE_FOOTPRINT, &Motion::default(), 1.0)
+                .is_empty()
+        );
+        let near = Motion {
+            x_m: 100.0,
+            z_m: 103.0,
+            ..Motion::default()
+        };
+        assert_eq!(grid.candidates(&VEHICLE_FOOTPRINT, &near, 0.0), vec![0]);
     }
 
     /// 겹침·맞닿음·떨어짐·회전 배치에서 분리축 판정이 맞는지 확인한다.

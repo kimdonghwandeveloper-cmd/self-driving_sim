@@ -10,8 +10,8 @@ use std::collections::VecDeque;
 
 use crate::config::VehicleConfig;
 use crate::input::ControlRequest;
-use crate::vehicle::collision::step_with_obstacles;
-use crate::vehicle::collision::{ContactState, GroundRect, Impact, VEHICLE_FOOTPRINT};
+use crate::vehicle::collision::{ContactState, Impact, VEHICLE_FOOTPRINT};
+use crate::vehicle::collision::{ObstacleGrid, step_with_grid};
 use crate::vehicle::dynamics::{DynamicsParams, Motion};
 use crate::vehicle::state::{EngineState, Gear, VehicleCommand, VehicleInput, VehicleState};
 use crate::world::CourseDef;
@@ -135,7 +135,8 @@ pub struct QueueFull;
 #[derive(Debug, Clone)]
 pub struct DriveSession {
     course: CourseDef,
-    obstacles: Vec<GroundRect>,
+    /// 충돌 경계와 그 격자 색인(4-6). 한 단계 검사 대상을 닿을 수 있는 장애물로 줄인다(결과는 전체 검사와 같음).
+    obstacles: ObstacleGrid,
     params: DynamicsParams,
     state: VehicleState,
     motion: Motion,
@@ -148,7 +149,7 @@ pub struct DriveSession {
 impl DriveSession {
     /// 코스와 차량 설정으로 초기 상태(시동 OFF, P, 비상 정지 없음, 코스 시작 자세, 틱 0)의 세션을 만든다.
     pub fn new(course: CourseDef, config: &VehicleConfig) -> Self {
-        let obstacles = course.collision_rects();
+        let obstacles = ObstacleGrid::new(course.collision_rects());
         let motion = course.start;
         Self {
             course,
@@ -262,7 +263,7 @@ impl DriveSession {
         }
 
         self.state.set_input(device.input.unwrap_or(self.manual));
-        report.collided = step_with_obstacles(
+        report.collided = step_with_grid(
             &mut self.state,
             &mut self.motion,
             &self.params,
