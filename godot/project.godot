@@ -13,3 +13,12 @@ config_version=5
 config/name="Self-Driving Sim"
 run/main_scene="res://main.tscn"
 config/features=PackedStringArray("4.7", "Forward Plus")
+
+[physics]
+
+common/physics_ticks_per_second=64
+
+[display]
+
+window/size/viewport_width=1280
+window/size/viewport_height=720
