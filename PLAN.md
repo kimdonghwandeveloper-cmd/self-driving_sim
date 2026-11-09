@@ -459,23 +459,34 @@ tests/
 
 ### GD-0. Godot 연결 뼈대
 
-- [ ]  `godot/` 프로젝트(Forward+), `crates/sim-godot`(godot 0.5.5, `api-4-7`, cdylib), `SimBridge` 정적 함수, 헤드리스 연결 smoke(`godot/tests/smoke_test.gd`).
-- [ ]  캐시 없는 첫 import는 `--frame-delay 1000`으로 초기화한다(기본 `--import`는 종료 시 접근 위반, 원인 미확정). 회귀 검사 `tools/test-godot-cold-import.ps1`.
+- [x]  `godot/` 프로젝트(Forward+), `crates/sim-godot`(godot 0.5.5, `api-4-7`, cdylib), `SimBridge` 정적 함수, 헤드리스 연결 smoke(`godot/tests/smoke_test.gd`).
+- [x]  캐시 없는 첫 import는 `--frame-delay 1000`으로 초기화한다(기본 `--import`는 종료 시 접근 위반, 원인 미확정). 회귀 검사 `tools/test-godot-cold-import.ps1`.
 - **완료 기준:** 캐시 없는 복사본에서 첫 import와 Rust 호출이 exit 0. 기존 cargo 검사와 Bevy smoke 결과 불변.
+- 진행 기록(2026-11-09, 사용자 승인으로 체크): main e8d526e에 병합. 이후 병합 2196211 기준 test 워크트리에서 Godot import·`smoke_test.gd` exit 0, `tools/test-godot-cold-import.ps1` PASS.
 
 ### GD-1. `sim-core` 분리
 
 - [ ]  엔진과 무관한 로직(차량 상태·동역학·충돌 판정, 도로 그래프·형상·경로·스냅샷·PBF, 설정 읽기)을 `crates/sim-core`로 옮긴다. Bevy 타입 의존은 걷어 내거나 루트 앱 쪽 얇은 래퍼로 둔다.
-- [ ]  루트 Bevy 앱은 `sim-core`를 써서 동작이 같아야 한다. 기존 테스트 전부 통과, 재생 결과 불변.
+- [x]  루트 Bevy 앱은 `sim-core`를 써서 동작이 같아야 한다. 기존 테스트 전부 통과, 재생 결과 불변.
 - **완료 기준:** `sim-core`가 Bevy 없이 빌드·테스트되고, 기존 cargo 검사·Bevy smoke 통과.
+- 진행 기록(2026-11-09, 사용자 승인으로 체크): 병합 eaecde3(GD-1a~1d·1c). 차량 상태·동역학·충돌, 코스·교차로·도로 형상, 입력 합치기·매핑,
+  설정 읽기, 지도·OSM 그래프·지역 받기·스냅샷·경로·타일을 `sim-core`로 옮겼다. `sim-core` 단독 clippy·test(Bevy 없음) 통과,
+  워크스페이스 test 279개(이동 전과 같은 수에 새 시험 추가)·Bevy smoke 통과.
+  **남은 것:** PBF 모듈(`pbf_extract`·`pbf_compare`·`pbf_audit`)은 아직 루트에 있어 첫 항목은 체크하지 않았다.
 
 ### GD-2. Godot 주행
 
-- [ ]  `sim-godot`에 차량 노드를 둔다. 고정 시간 간격 갱신은 Rust 동역학을 Godot `_physics_process`에서 호출한다. 입력 규칙·매핑은 `config/input.toml`, 차량 값은 `config/vehicle.toml`을 그대로 쓴다.
-- [ ]  개발 코스(training·calibration)의 노면·연석·장애물을 Rust 형상 데이터로 받아 Godot 메시로 만든다.
-- [ ]  전·후·좌·우 1인칭 시점과 최소 실내 형상(3-0 계약 유지).
+- [x]  `sim-godot`에 차량 노드를 둔다. 고정 시간 간격 갱신은 Rust 동역학을 Godot `_physics_process`에서 호출한다. 입력 규칙·매핑은 `config/input.toml`, 차량 값은 `config/vehicle.toml`을 그대로 쓴다.
+- [x]  개발 코스(training·calibration)의 노면·연석·장애물을 Rust 형상 데이터로 받아 Godot 메시로 만든다.
+- [x]  전·후·좌·우 1인칭 시점과 최소 실내 형상(3-0 계약 유지).
 - [ ]  헤드리스 시험: 정해진 입력으로 일정 시간 주행한 위치가 Rust 단독 재생과 같은지 비교한다.
 - **완료 기준:** Godot 에디터에서 개발 코스를 게임패드·키보드로 주행하고 네 시점을 바꿀 수 있음. 사람 확인과 자동 시험을 따로 기록.
+- 진행 기록(2026-11-09, 사용자 승인으로 체크): 병합 eaecde3(`SimVehicle`·`SimCourse`·`SimReplay`, 계약 `docs/design/godot-interface.md` v1.1)과
+  c7ed977(Codex 주행 화면·코스 메시·카메라). 자동 확인: `presentation_smoke.gd`(코스 메시·네 시점·HUD) 통과,
+  헤드리스 키 이벤트 주입으로 키보드 시동·기어·가속·시점·디버그 카메라 확인(저장소 밖 임시 스크립트).
+  **남은 것:** 헤드리스 재생 비교는 저장소 밖 임시 스크립트로 `SimVehicle` 표본 = `SimReplay` 표본을 확인했을 뿐이라
+  네 번째 항목은 체크하지 않았다(`godot/tests/drive_replay_test.gd` 추가 필요). 사람 확인(에디터에서 게임패드·키보드 주행)도 아직 기록하지 않았다.
+  차량 외관은 사용자 제작 셔틀 모델로 임시 교체(2196211, 충돌 차체와 크기 다름).
 
 ### GD-3. 도로 렌더링 고도화
 
@@ -490,6 +501,9 @@ tests/
 - [ ]  HUD(속도·기어·시동·비상 정지·입력 상태)와 메인 메뉴(개발 코스·저장 경로 주행·종료).
 - [ ]  경로 선택 화면(4-5·4-5b)은 당분간 Bevy `--pick-route`를 쓰고, 이식은 Phase 5 이후로 미룬다.
 - **완료 기준:** Godot 판만으로 메뉴 → 코스 선택 → 주행 → 메뉴 복귀가 됨.
+- 진행 기록(2026-11-09): 사용자 지시(2026-11-08)로 경로 선택·지도 화면 이식을 앞당겼다. `SimRoutePicker`·`SimTiles`(eaecde3)와
+  Godot 지도 화면(c7ed977, 대한민국 범위 제한·근사 경계 밖 가림)을 병합했다. 저장 경로 주행·시나리오 A는 이번 범위에서 제외.
+  메뉴·HUD 뼈대는 있으나 이 단계 항목은 아직 체크하지 않았다(실제 네트워크 받기·경로 저장 확인 전).
 
 ### GD-5. Bevy 정리
 
