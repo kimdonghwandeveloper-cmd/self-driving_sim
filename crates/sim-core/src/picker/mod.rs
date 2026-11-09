@@ -3,4 +3,5 @@
 //! 화면·조작은 각 엔진 쪽(Bevy `src/picker`, Godot `SimRoutePicker`·`SimTiles`)에 있다.
 
 pub mod model;
+pub mod region;
 pub mod tiles;

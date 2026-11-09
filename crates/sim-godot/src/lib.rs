@@ -6,7 +6,10 @@
 
 pub mod course;
 pub mod devices;
+pub mod paths;
 pub mod replay;
+pub mod route_picker;
+pub mod tiles;
 // gdext 0.5.5의 `#[init(val = ...)]`가 만든 생성 코드가 `base: base` 형태라 clippy가 짚는다.
 // 생성 코드는 구조체 밖이라 모듈 단위로 허용한다.
 #[allow(clippy::redundant_field_names)]

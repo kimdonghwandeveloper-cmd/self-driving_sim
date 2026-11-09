@@ -581,6 +581,11 @@ impl TileFetcher {
         wake.notify_all();
     }
 
+    /// 403·429로 멈춘 받기가 다시 풀리는 유닉스 시각(초). 멈춘 적이 없으면 0이다(지난 시각일 수 있음).
+    pub fn paused_until_s(&self) -> u64 {
+        *self.paused_until.lock().expect("pause lock")
+    }
+
     /// 끝난 결과를 모두 꺼낸다(기다리지 않음).
     pub fn poll(&mut self) -> Vec<(TileId, TileOutcome)> {
         self.collect();
