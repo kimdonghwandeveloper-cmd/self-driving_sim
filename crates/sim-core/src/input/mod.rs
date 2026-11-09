@@ -11,7 +11,9 @@
 //! - 연결 해제: 게임패드로 주행 중 연결이 끊기면 비상 정지를 요청한다.
 
 pub mod commands;
+pub mod gamepad;
 pub mod gear;
+pub mod mapping;
 pub mod merge;
 
 use crate::vehicle::{Gear, VehicleCommand};

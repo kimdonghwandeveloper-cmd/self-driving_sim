@@ -1,21 +1,24 @@
 //! 차량 노드 `SimVehicle`(Godot 인터페이스 계약 v1 2절·5-1·6절).
 //!
 //! 주행 계산은 `sim_core::session::DriveSession`이 하고, 이 노드는 Godot 물리 틱마다 세션을 한 번 돌린 뒤
-//! 자기 `transform`을 갱신하고 틱 결과를 시그널로 보낸다.
-//! 장치 입력(키보드·게임패드)과 카메라 설정 읽기는 아직 없다(구현: 미). `read_input = true`면 연속 입력 0으로 돈다.
+//! 자기 `transform`을 갱신하고 틱 결과를 시그널로 보낸다. 장치 읽기는 `devices` 모듈이 한다.
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
 
+use godot::classes::notify::Node3DNotification;
 use godot::classes::{Engine, INode3D, Node3D, ProjectSettings};
 use godot::prelude::*;
+use sim_core::camera::{OperatorView, ViewDirection};
 use sim_core::config::{
-    ConfigError, VEHICLE_CONFIG_PATH, VehicleConfig, parse_vehicle_config, read_config,
+    CAMERA_CONFIG_PATH, ConfigError, VEHICLE_CONFIG_PATH, VehicleConfig, parse_operator_view,
+    parse_vehicle_config, read_config,
 };
-use sim_core::session::{DeviceTick, DriveCommand, DriveSession, QueueFull, TickReport};
+use sim_core::session::{DriveCommand, DriveSession, QueueFull, TickReport};
 use sim_core::vehicle::state::{Gear, VehicleInput};
 
 use crate::course::{build_course, course_dict, failure_dict, panic_message};
+use crate::devices::{Devices, load_bindings};
 
 /// 기본 설정 폴더(`res://` 기준). 저장소 루트의 `config/`다.
 const DEFAULT_CONFIG_DIR: &str = "res://../config";
@@ -32,27 +35,13 @@ pub fn gear_name(gear: Gear) -> &'static str {
     }
 }
 
-/// 입석 시점 방향.
-// 시점 키는 장치 입력 단계(GD-2c)에서 읽는다. 그 전까지 리셋으로 정해지는 Front만 쓴다.
-#[allow(dead_code)]
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-enum View {
-    #[default]
-    Front,
-    Rear,
-    Left,
-    Right,
-}
-
-impl View {
-    /// 계약 이름(`"front"` 등)을 반환한다.
-    fn name(self) -> &'static str {
-        match self {
-            View::Front => "front",
-            View::Rear => "rear",
-            View::Left => "left",
-            View::Right => "right",
-        }
+/// 시점 방향의 계약 이름(`"front"` 등)을 반환한다.
+fn view_name(view: ViewDirection) -> &'static str {
+    match view {
+        ViewDirection::Front => "front",
+        ViewDirection::Rear => "rear",
+        ViewDirection::Left => "left",
+        ViewDirection::Right => "right",
     }
 }
 
@@ -100,6 +89,33 @@ pub fn load_vehicle_config(config_dir: &Path, warnings: &mut Vec<String>) -> Veh
     }
 }
 
+/// 카메라 설정 파일을 읽는다. 없거나 잘못되면 기본값을 쓰고 경고문을 `warnings`에 더한다.
+/// 설정 폴더가 없으면(경고는 차량 설정에서 이미 남김) 기본값만 쓴다.
+pub fn load_operator_view(config_dir: &Path, warnings: &mut Vec<String>) -> OperatorView {
+    if !config_dir.is_dir() {
+        return OperatorView::default();
+    }
+    let path = config_dir.join(
+        Path::new(CAMERA_CONFIG_PATH)
+            .file_name()
+            .expect("config path has a file name"),
+    );
+    match read_config(&path, parse_operator_view) {
+        Ok(Some(view)) => view,
+        Ok(None) => {
+            warnings.push(format!(
+                "설정 파일이 없어 기본값을 씁니다: {}",
+                path.display()
+            ));
+            OperatorView::default()
+        }
+        Err(error) => {
+            warnings.push(config_warning(&path, &error));
+            OperatorView::default()
+        }
+    }
+}
+
 /// 설정 파일 오류를 화면 표시용 경고문으로 만든다.
 fn config_warning(path: &Path, error: &ConfigError) -> String {
     format!("설정 파일 {} {error}; 기본값을 씁니다", path.display())
@@ -124,7 +140,12 @@ pub struct SimVehicle {
     session: Option<DriveSession>,
     last_error: String,
     warnings: Vec<String>,
-    view: View,
+    /// 키보드·게임패드 상태. `_ready`에서 만든다.
+    devices: Option<Devices>,
+    /// 직전 틱의 `read_input`. 바뀌면 수동 입력과 장치 이력을 비운다.
+    last_read_input: Option<bool>,
+    operator_view: OperatorView,
+    view: ViewDirection,
     debug_camera: bool,
     /// 틱 간격 경고를 이미 남겼는지.
     tick_rate_warned: bool,
@@ -136,10 +157,12 @@ impl INode3D for SimVehicle {
     /// 설정을 읽고 코스를 만들어 시작 자세에 놓는다. 실패하면 `course_failed`를 한 번 보낸다.
     fn ready(&mut self) {
         let mut warnings = Vec::new();
-        let config = load_vehicle_config(
-            &resolve_config_dir(&self.config_dir.to_string()),
-            &mut warnings,
-        );
+        let config_dir = resolve_config_dir(&self.config_dir.to_string());
+        let config = load_vehicle_config(&config_dir, &mut warnings);
+        let input_dir = config_dir.is_dir().then_some(config_dir.as_path());
+        let (keys, pad) = load_bindings(input_dir, &mut warnings);
+        self.devices = Some(Devices::new(keys, pad));
+        self.operator_view = load_operator_view(&config_dir, &mut warnings);
         for warning in &warnings {
             godot_warn!("{warning}");
         }
@@ -167,14 +190,31 @@ impl INode3D for SimVehicle {
                 );
             }
         }
-        let device = self.device_tick();
         let (view_before, debug_before) = (self.view, self.debug_camera);
+        let read_input = self.read_input;
         let session = self.session.as_mut().expect("checked above");
-        let ticked = catch_unwind(AssertUnwindSafe(|| session.tick(&device)));
+        let devices = self.devices.as_mut().expect("created in ready");
+        if self.last_read_input.is_some_and(|last| last != read_input) {
+            session.set_manual_input(VehicleInput::default());
+            devices.reset_history();
+        }
+        self.last_read_input = Some(read_input);
+        let ticked = catch_unwind(AssertUnwindSafe(|| {
+            let read = read_input.then(|| devices.read(session.state().is_stopped()));
+            let device = read
+                .as_ref()
+                .map(|read| read.tick.clone())
+                .unwrap_or_default();
+            (session.tick(&device), read)
+        }));
         match ticked {
-            Ok(report) => {
+            Ok((report, read)) => {
                 if report.course_reset {
-                    self.view = View::Front;
+                    self.view = ViewDirection::Front;
+                }
+                if let Some(read) = read {
+                    self.view = read.next_view(self.view);
+                    self.debug_camera ^= read.debug_toggle;
                 }
                 self.sync_transform();
                 self.emit_report(&report, view_before, debug_before);
@@ -182,6 +222,18 @@ impl INode3D for SimVehicle {
             Err(payload) => {
                 self.fail(format!("내부 오류: {}", panic_message(payload.as_ref())));
             }
+        }
+    }
+
+    /// 창 포커스를 잃으면 다시 얻을 때까지 장치 입력을 0으로 본다(계약 5-1 2단계 신규 규칙).
+    fn on_notification(&mut self, what: Node3DNotification) {
+        let focused = match what {
+            Node3DNotification::APPLICATION_FOCUS_OUT => false,
+            Node3DNotification::APPLICATION_FOCUS_IN => true,
+            _ => return,
+        };
+        if let Some(devices) = self.devices.as_mut() {
+            devices.set_focused(focused);
         }
     }
 
@@ -325,7 +377,7 @@ impl SimVehicle {
     /// 입석 시점 방향(`"front"`, `"rear"`, `"left"`, `"right"`).
     #[func]
     fn view(&self) -> GString {
-        GString::from(self.view.name())
+        GString::from(view_name(self.view))
     }
 
     /// 외부 디버그 카메라 켜짐.
@@ -334,10 +386,29 @@ impl SimVehicle {
         self.debug_camera
     }
 
-    /// 마지막 입력 장치. 장치 입력은 아직 없으므로 `read_input`이면 `"none"`, 아니면 `"manual"`.
+    /// 주행에 쓰는 입력 장치(`"keyboard"`, `"gamepad"`, `"manual"`, `"none"`).
+    /// `read_input = false`면 `"manual"`, 장치 상태가 아직 없으면 `"none"`.
     #[func]
     fn input_source(&self) -> GString {
-        GString::from(if self.read_input { "none" } else { "manual" })
+        let name = match (&self.devices, self.read_input) {
+            (_, false) => "manual",
+            (Some(devices), true) => devices.source_name(),
+            (None, true) => "none",
+        };
+        GString::from(name)
+    }
+
+    /// `config/camera.toml`의 입석 시점 값(`eye_m`, `pitch_deg`, `vertical_fov_deg`, `near_clip_m`).
+    #[func]
+    fn operator_view(&self) -> VarDictionary {
+        let view = &self.operator_view;
+        let [x, y, z] = view.eye_m;
+        vdict! {
+            "eye_m" => Vector3::new(x, y, z),
+            "pitch_deg" => view.pitch_deg,
+            "vertical_fov_deg" => view.vertical_fov_deg,
+            "near_clip_m" => view.near_clip_m,
+        }
     }
 
     /// 화면에 계속 띄울 안내(임시값·출처 표기).
@@ -390,14 +461,6 @@ impl SimVehicle {
 }
 
 impl SimVehicle {
-    /// 이번 틱의 장치 입력을 만든다. 장치 읽기는 아직 없어 `read_input`이면 입력 0, 아니면 수동 입력을 쓴다.
-    fn device_tick(&self) -> DeviceTick {
-        DeviceTick {
-            input: self.read_input.then(VehicleInput::default),
-            ..DeviceTick::default()
-        }
-    }
-
     /// 세션의 자세를 노드 `position`·`rotation`에 옮긴다.
     fn sync_transform(&mut self) {
         let Some(motion) = self.session.as_ref().map(|session| *session.motion()) else {
@@ -423,7 +486,7 @@ impl SimVehicle {
     }
 
     /// 틱 결과를 계약 2절 시그널 표 순서로 보낸다. 시점·디버그 카메라는 틱 시작 값과 비교한다.
-    fn emit_report(&mut self, report: &TickReport, view_before: View, debug_before: bool) {
+    fn emit_report(&mut self, report: &TickReport, view_before: ViewDirection, debug_before: bool) {
         let (view, debug_camera) = (self.view, self.debug_camera);
         let mut base = self.base_mut();
         for result in &report.results {
@@ -455,7 +518,10 @@ impl SimVehicle {
             base.emit_signal("collided", &[]);
         }
         if view != view_before {
-            base.emit_signal("view_changed", &[GString::from(view.name()).to_variant()]);
+            base.emit_signal(
+                "view_changed",
+                &[GString::from(view_name(view)).to_variant()],
+            );
         }
         if debug_camera != debug_before {
             base.emit_signal("debug_camera_toggled", &[debug_camera.to_variant()]);

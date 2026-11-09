@@ -8,6 +8,9 @@ use std::{fmt, fs, io, path::Path};
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 
+use crate::camera::OperatorView;
+use crate::input::gamepad::GamepadMapping;
+use crate::input::mapping::KeyboardMapping;
 use crate::vehicle::dynamics::DynamicsParams;
 use crate::vehicle::state::{DEFAULT_STOP_THRESHOLD_MPS, MAX_STOP_THRESHOLD_MPS};
 
@@ -55,6 +58,21 @@ impl VehicleConfig {
     }
 }
 
+/// `config/input.toml` 전체 구조. 키·버튼 이름 검증은 각 엔진의 `resolve_with`가 한다.
+#[derive(Debug, Clone, PartialEq, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct InputConfig {
+    pub keyboard: KeyboardMapping,
+    pub gamepad: GamepadMapping,
+}
+
+/// `config/camera.toml` 전체 구조.
+#[derive(Debug, Clone, PartialEq, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct CameraConfig {
+    pub operator_view: OperatorView,
+}
+
 /// 설정 파일 처리 실패 사유.
 #[derive(Debug)]
 pub enum ConfigError {
@@ -98,6 +116,21 @@ pub fn parse_vehicle_config(text: &str) -> Result<VehicleConfig, ConfigError> {
     let config: VehicleConfig = parse_toml(text)?;
     config.validate().map_err(ConfigError::Invalid)?;
     Ok(config)
+}
+
+/// 입력 설정 문자열을 구조로 변환한다. 키·버튼 이름 검증은 하지 않는다.
+pub fn parse_input_config(text: &str) -> Result<InputConfig, ConfigError> {
+    parse_toml(text)
+}
+
+/// 카메라 설정 문자열을 변환하고 입석 시점 값을 검증한다.
+pub fn parse_operator_view(text: &str) -> Result<OperatorView, ConfigError> {
+    let config: CameraConfig = parse_toml(text)?;
+    config
+        .operator_view
+        .validate()
+        .map_err(ConfigError::Invalid)?;
+    Ok(config.operator_view)
 }
 
 #[cfg(test)]

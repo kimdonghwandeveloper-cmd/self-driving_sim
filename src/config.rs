@@ -1,36 +1,24 @@
 //! TOML 설정 파일 로드.
 //!
 //! 파일이 없거나 내용이 잘못되면 경고를 남기고 기본값을 사용한다.
-//! 차량 설정 구조·파싱과 공통 읽기 함수는 Godot 판과 함께 쓰도록 `sim_core::config`에 있다.
+//! 설정 구조·파싱과 공통 읽기 함수는 Godot 판과 함께 쓰도록 `sim_core::config`에 있고,
+//! 여기서는 Bevy 키·버튼 변환과 로그를 맡는다.
 //! 모든 수치는 실차 검증 전 **시뮬레이터 임시값**이다.
 
 use std::path::Path;
 
 use bevy::prelude::*;
-use serde::Deserialize;
 
-use crate::camera::{CameraSettings, OperatorView};
-use crate::input::{GamepadBindings, GamepadMapping, KeyBindings, KeyboardMapping};
+use crate::camera::CameraSettings;
+use crate::input::gamepad::ResolveGamepad;
+use crate::input::mapping::ResolveKeyboard;
+use crate::input::{GamepadBindings, KeyBindings};
 
 pub use sim_core::config::{
-    CAMERA_CONFIG_PATH, ConfigError, INPUT_CONFIG_PATH, StateMachineConfig, VEHICLE_CONFIG_PATH,
-    VehicleConfig, parse_toml, parse_vehicle_config, read_config,
+    CAMERA_CONFIG_PATH, CameraConfig, ConfigError, INPUT_CONFIG_PATH, InputConfig,
+    StateMachineConfig, VEHICLE_CONFIG_PATH, VehicleConfig, parse_input_config,
+    parse_operator_view, parse_toml, parse_vehicle_config, read_config,
 };
-
-/// `config/input.toml` 전체 구조.
-#[derive(Debug, Clone, PartialEq, Default, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct InputConfig {
-    pub keyboard: KeyboardMapping,
-    pub gamepad: GamepadMapping,
-}
-
-/// `config/camera.toml` 전체 구조.
-#[derive(Debug, Clone, PartialEq, Default, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct CameraConfig {
-    pub operator_view: OperatorView,
-}
 
 /// 입력 설정 문자열을 변환하고 키 매핑을 검증한다. 파일 로더도 이 함수를 쓴다.
 pub fn parse_key_bindings(text: &str) -> Result<KeyBindings, ConfigError> {
@@ -49,12 +37,7 @@ pub fn parse_gamepad_bindings(text: &str) -> Result<GamepadBindings, ConfigError
 
 /// 카메라 설정 문자열을 변환하고 검증한다. 파일 로더도 이 함수를 쓴다.
 pub fn parse_camera_config(text: &str) -> Result<CameraSettings, ConfigError> {
-    let config: CameraConfig = parse_toml(text)?;
-    config
-        .operator_view
-        .validate()
-        .map_err(ConfigError::Invalid)?;
-    Ok(CameraSettings(config.operator_view))
+    parse_operator_view(text).map(CameraSettings)
 }
 
 /// 차량 설정 파일을 읽는다. 실패하면 경고 후 기본값을 반환한다.
@@ -100,6 +83,7 @@ mod tests {
     use std::fs;
 
     use super::*;
+    use crate::camera::OperatorView;
     use crate::input::mapping::KeyAction;
     use crate::vehicle::dynamics::{DynamicsParams, SteerReturn};
 
