@@ -1,7 +1,10 @@
 //! Phase 5-0 Godot 연결 계층.
 //!
 //! Godot 에디터·게임이 `sim_godot.dll`을 불러오면 여기서 등록한 클래스를 GDScript에서 쓸 수 있다.
-//! 5-1에서 엔진과 무관한 로직을 `sim-core`로 분리한 뒤, 그 기능을 이 계층에서 Godot 클래스로 감싼다.
+//! 엔진과 무관한 로직은 `sim-core`에 있고, 이 계층은 그 기능을 Godot 클래스로 감싼다
+//! (클래스·좌표·실패 규칙은 `docs/design/godot-interface.md` v1).
+
+pub mod course;
 
 use godot::prelude::*;
 

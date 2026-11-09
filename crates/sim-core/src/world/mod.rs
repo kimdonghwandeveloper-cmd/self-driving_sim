@@ -6,4 +6,4 @@ pub mod course;
 pub mod junction;
 pub mod road_geom;
 
-pub use course::{CourseDef, CourseId};
+pub use course::{CourseDef, CourseId, ShapeError};
