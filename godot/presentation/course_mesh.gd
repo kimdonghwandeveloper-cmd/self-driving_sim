@@ -52,9 +52,19 @@ func _triangles(vertices: PackedVector3Array, y: float, color: Color) -> void:
 		return
 	var surface := SurfaceTool.new()
 	surface.begin(Mesh.PRIMITIVE_TRIANGLES)
-	for point in vertices:
-		surface.set_normal(Vector3.UP)
-		surface.add_vertex(Vector3(point.x, y, point.z))
+	var count := 0
+	for i in range(0, vertices.size(), 3):
+		var a := Vector3(vertices[i].x, y, vertices[i].z)
+		var b := Vector3(vertices[i + 1].x, y, vertices[i + 1].z)
+		var c := Vector3(vertices[i + 2].x, y, vertices[i + 2].z)
+		if (b - a).cross(c - a).length_squared() == 0.0:
+			continue
+		for point in [a, b, c]:
+			surface.set_normal(Vector3.UP)
+			surface.add_vertex(point)
+			count += 1
+	if count == 0:
+		return
 	var node := MeshInstance3D.new()
 	node.mesh = surface.commit()
 	node.material_override = material(color)
