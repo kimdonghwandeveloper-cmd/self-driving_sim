@@ -11,7 +11,7 @@ Godot에 노출할 클래스·메서드·시그널·좌표 규칙·실패 처리
 | v0.2 제안 | Codex 검토 질문 1~9에 대한 Claude 답변(부록 A) |
 | v1 | Codex 동의(부록 A)에 따라 v0.2를 1~7절 본문에 옮김. Codex 추가 요청 `view_to_latlon`, `forget_displayed` 채택(부록 A 끝). 본문 옮김이 합의와 다르면 Codex가 부록 A에 적고 고친다 |
 | v1.1 | 구현 중 정한 세부(이름·인자 변경 없음): 장치 기어 충돌 결과 이름 `gear_conflict`, 재생 드라이버 시작 시점(`ready` 시그널 뒤), `load_snapshot` 경로 형식, 좌우 수식 키 구분 없음, 장치 중립 대기 범위 |
-| v1.2 | 항목 추가(기존 이름·인자 변경 없음, 2026-11-10 Claude. Codex 사용량 한도 중 사용자 지시로 Godot 쪽도 Claude가 맞춤): 지도 코스 이름 `map:<파일>`(2절 `course`, 3절, 5-3 `SimReplay.run`), `SimCourse.course_files()`(3절), `SimTiles.country_outline()`·`country_bounds()`(7-3, 대한민국 범위 제한·경계 밖 가림, 사용자 지시 2026-11-09). 저장 경로 주행을 범위에 다시 넣음(7-4, 사용자 지시 "남은 플랜 완료") |
+| v1.2 | 항목 추가(기존 이름·인자 변경 없음, 2026-11-10 Claude. Codex 사용량 한도 중 사용자 지시로 Godot 쪽도 Claude가 맞춤): 지도 코스 이름 `map:<파일>`(2절 `course`, 3절, 5-3 `SimReplay.run`), `SimCourse.course_files()`(3절), `SimTiles.country_outline()`·`country_bounds()`(7-3, 대한민국 범위 제한·경계 밖 가림, 사용자 지시 2026-11-09). 저장 경로 주행을 범위에 다시 넣음(7-4, 사용자 지시 "남은 플랜 완료"). Godot에 보내는 사람이 읽는 문구(명령 거부 사유, 코스 안내, 경로 선택 안내·경고·오류)는 한국어(1절) |
 
 변경 규칙:
 
@@ -21,6 +21,8 @@ Godot에 노출할 클래스·메서드·시그널·좌표 규칙·실패 처리
 - "신규"로 표시한 규칙은 Bevy 판에 없는 동작이며 **사용자 확인 대상**이다(8절). 확인 전에도 이 문서대로 구현하고, 바뀌면 문서부터 고친다.
 
 ## 1. 공통 규칙
+
+- (v1.2) Godot에 보내는 사람이 읽는 문구는 `sim-godot`(`korean.rs`)가 한국어로 바꿔 보낸다: `command_rejected`의 `reason`, `course_notices()`·코스 사전 `notices`, `SimRoutePicker.status_lines()`·`route().error`·`route().warnings`. `sim-core` 원문은 Bevy 판(한글 글꼴 없음)과 시험이 함께 쓰므로 영어로 둔다. 모르는 문장은 그대로, 오류 상세(노드 번호 등)는 원문 그대로 붙는다. OSM 출처 표기 문장은 바꾸지 않는다. 명령·기어·입력 장치 이름 같은 **값**은 바꾸지 않는다(화면 표시는 Godot이 바꾼다).
 
 | 항목 | 규칙 |
 | --- | --- |
