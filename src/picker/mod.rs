@@ -15,8 +15,12 @@
 //! 자동 맞춤은 지역을 받았을 때 그 지역에, 경로를 처음 계산했을 때 경로에 **한 번씩만** 한다. 그 뒤에는 사용자가
 //! 화면을 움직여도 다시 맞추지 않는다.
 
-pub mod model;
-pub mod tiles;
+// 점·경로 모델과 타일 받기·캐시(GD-1c), 지역 범위·캐시 목록·모델 열기(GD-2d)는 엔진과 무관해
+// `sim-core`로 옮겼다.
+pub use sim_core::picker::region::{
+    FETCH_HALF_SIDE_M, ROUTE_DIR, bbox_around, cached_regions, region_to_load,
+};
+pub use sim_core::picker::{model, region, tiles};
 
 use std::collections::HashMap;
 use std::f32::consts::FRAC_PI_2;
@@ -33,20 +37,15 @@ use bevy::window::PrimaryWindow;
 use crate::AppMode;
 use crate::vehicle::VehicleMotion;
 use crate::world::ActiveCourse;
-use crate::world::map::{LatLon, OSM_ATTRIBUTION};
+use crate::world::map::OSM_ATTRIBUTION;
 use crate::world::map_fetch::{self, Bbox, FetchJob, FetchPolicy, FetchSettings};
-use crate::world::road_snapshot;
-use crate::world::route_plan::{self, RoadGraphConfig};
+use crate::world::route_plan;
 use model::PickerModel;
 use tiles::{TileFetcher, TileId, TileOutcome, TileSettings, UreqTileTransport};
 
 /// 미리 정한 지역 이름과 그 지역의 저장된 노드 ID 스냅샷.
 pub const PRESET_REGIONS: [(&str, &str); 1] =
     [("yeosu", "assets/maps/yeosu-expo/graph-2026-11-06.osm.json")];
-/// 위경도 입력·"이 지역 도로 받기"로 받을 범위의 반 변(m). 한 변 1.5 km(PLAN 코스 범위 상한과 같음, 2 km 받기 상한 안).
-pub const FETCH_HALF_SIDE_M: f64 = 750.0;
-/// 경로 파일 저장 폴더(실행 폴더 기준, 저장소에서 제외되는 `cache/` 아래).
-pub const ROUTE_DIR: &str = "cache/routes";
 /// 카메라 높이. 직교 투영이라 값 자체는 보이는 크기에 영향이 없다.
 const CAMERA_HEIGHT_M: f32 = 500.0;
 /// 확대 수준 허용 범위(화면 1 px당 메르카토르 m). 전국(약 3 km/px)부터 거리(0.15 m/px)까지.
@@ -102,79 +101,13 @@ impl PickerSource {
     }
 }
 
-/// 위경도를 가운데로 하는 한 변 2 × [`FETCH_HALF_SIDE_M`] 범위를 만들고 검사한다.
-pub fn bbox_around(lat: f64, lon: f64) -> Result<Bbox, String> {
-    if !(lat.is_finite() && lon.is_finite() && lat.abs() < 85.0) {
-        return Err(format!("invalid point [{lat}, {lon}]"));
-    }
-    let radius = 6_371_008.8_f64;
-    let d_lat = (FETCH_HALF_SIDE_M / radius).to_degrees();
-    let d_lon = (FETCH_HALF_SIDE_M / (radius * lat.to_radians().cos())).to_degrees();
-    let bbox = Bbox {
-        south: lat - d_lat,
-        west: lon - d_lon,
-        north: lat + d_lat,
-        east: lon + d_lon,
-    };
-    bbox.validate()?;
-    Ok(bbox)
-}
-
-/// 스냅샷 파일을 읽어 경로 선택 상태를 만든다. Geofabrik 추출이면 연결 정보를 함께 읽어 검사에 쓴다.
+/// 스냅샷 파일을 읽어 경로 선택 상태를 만든다. 도로 그래프 설정을 읽지 못하면 경고 후 기본값을 쓴다.
 pub fn load_model(path: &Path) -> Result<PickerModel, String> {
-    let snapshot = road_snapshot::load_road_snapshot(path)?;
-    let config = std::fs::read_to_string(route_plan::ROAD_GRAPH_CONFIG_PATH)
-        .map_err(|error| error.to_string())
-        .and_then(|text| route_plan::parse_road_graph_config(&text))
-        .unwrap_or_else(|error| {
-            warn!("road graph config unavailable ({error}); using defaults");
-            RoadGraphConfig::default()
-        });
-    PickerModel::new(path.to_path_buf(), snapshot.ways, config)
-        .map(|model| model.with_connectivity(snapshot.connectivity))
-}
-
-/// 캐시 폴더에서 이미 받은 범위 목록을 읽는다(`bbox_<남>_<서>_<북>_<동>` 폴더 중 최신 세대가 있는 것).
-pub fn cached_regions(root: &Path) -> Vec<Bbox> {
-    let Ok(entries) = std::fs::read_dir(root) else {
-        return Vec::new();
-    };
-    let mut regions: Vec<Bbox> = entries
-        .flatten()
-        .filter(|entry| entry.path().join(map_fetch::LATEST_FILE).exists())
-        .filter_map(|entry| {
-            let name = entry.file_name().to_string_lossy().into_owned();
-            let values: Vec<f64> = name
-                .strip_prefix("bbox_")?
-                .split('_')
-                .map(|part| part.parse::<f64>().ok())
-                .collect::<Option<_>>()?;
-            let [south, west, north, east] = values[..] else {
-                return None;
-            };
-            let bbox = Bbox {
-                south,
-                west,
-                north,
-                east,
-            };
-            bbox.validate().ok().map(|()| bbox)
-        })
-        .collect();
-    regions.sort_by_key(Bbox::cache_name);
-    regions
-}
-
-/// "이 지역 도로 받기"의 범위와 정책: 화면 가운데가 이미 받은 범위 안이면 그 범위를 캐시만으로, 아니면 가운데
-/// 주변 1.5 km를 새로 받는다.
-pub fn region_to_load(center: LatLon, cached: &[Bbox]) -> Result<(Bbox, FetchPolicy), String> {
-    if let Some(bbox) = cached.iter().find(|bbox| {
-        (bbox.south..=bbox.north).contains(&center.lat)
-            && (bbox.west..=bbox.east).contains(&center.lon)
-    }) {
-        return Ok((*bbox, FetchPolicy::CacheOnly));
+    let (model, warning) = region::load_model(path, Path::new(route_plan::ROAD_GRAPH_CONFIG_PATH))?;
+    if let Some(warning) = warning {
+        warn!("{warning}");
     }
-    Ok((bbox_around(center.lat, center.lon)?, FetchPolicy::Refresh))
+    Ok(model)
 }
 
 /// 경로 선택 화면 플러그인. 메인 화면의 "맵 생성하기"나 `--pick-route`로 들어온다.
@@ -1063,52 +996,6 @@ mod tests {
             cursor_to_ground(Vec2::new(500.0, 400.0), size, camera, 2.0),
             Vec2::new(210.0, 180.0)
         );
-    }
-
-    /// 받은 범위 목록: `bbox_` 폴더 중 최신 세대 포인터가 있는 것만, 이름의 좌표로 읽는다.
-    #[test]
-    fn cached_regions_are_read_from_folder_names() {
-        let root = std::env::temp_dir().join(format!("sds-cached-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
-        let bbox = bbox_around(34.75, 127.75).unwrap();
-        let dir = root.join(bbox.cache_name());
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join(map_fetch::LATEST_FILE), "generation = \"x\"\n").unwrap();
-        std::fs::create_dir_all(root.join("bbox_1_2_3_4")).unwrap();
-        std::fs::create_dir_all(root.join("other")).unwrap();
-        let found = cached_regions(&root);
-        assert_eq!(found.len(), 1);
-        assert!(
-            (found[0].south - bbox.south).abs() < 1e-6 && (found[0].east - bbox.east).abs() < 1e-6
-        );
-        // 받은 범위 안의 가운데는 캐시만, 밖은 새로 받기(1.5 km).
-        let inside = LatLon {
-            lat: 34.75,
-            lon: 127.75,
-        };
-        assert!(matches!(
-            region_to_load(inside, &found),
-            Ok((_, FetchPolicy::CacheOnly))
-        ));
-        let outside = LatLon {
-            lat: 37.5665,
-            lon: 126.978,
-        };
-        assert!(matches!(
-            region_to_load(outside, &found),
-            Ok((_, FetchPolicy::Refresh))
-        ));
-        assert!(
-            region_to_load(
-                LatLon {
-                    lat: 45.0,
-                    lon: 140.0
-                },
-                &found
-            )
-            .is_err()
-        );
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// 맞춤 보기: 범위 가운데로 옮기고 창에 들어오는 축척(여백 10 %)을 고른다.

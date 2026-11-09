@@ -204,11 +204,12 @@ impl DynamicsParams {
     }
 }
 
-#[cfg(test)]
+// 루트 앱 테스트(보정 도구)도 쓰므로 crate 밖에 공개한다(GD-1a). 실제 주행 설정에는 쓰지 않는다.
 impl DynamicsParams {
     /// 테스트용 Phase 2 기준 모델 값을 만든다: 최고 5 m/s, 관성 감속 0.3, 저항·출력 한계·언더스티어·
     /// 횡가속도 상한 없음. 운동 모델이 아닌 충돌·보정 로직을 예전 수치로 확인할 때 쓴다.
-    pub(crate) fn phase2_reference() -> Self {
+    #[doc(hidden)]
+    pub fn phase2_reference() -> Self {
         Self {
             max_forward_speed_mps: 5.0,
             coast_decel_mps2: 0.3,
@@ -345,6 +346,11 @@ fn approach_zero(value: f32, amount: f32) -> f32 {
 pub(crate) fn wrap_angle(angle: f32) -> f32 {
     let wrapped = (angle + PI).rem_euclid(TAU) - PI;
     if wrapped == -PI { PI } else { wrapped }
+}
+
+/// 최대 조향각에서의 최소 회전 반경(m, 후륜축 중심 기준)을 자전거 모델로 계산한다.
+pub fn min_turn_radius_m(params: &DynamicsParams) -> f32 {
+    params.wheelbase_m / params.max_steer_angle_deg.to_radians().tan()
 }
 
 #[cfg(test)]

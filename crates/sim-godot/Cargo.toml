@@ -12,3 +12,7 @@ crate-type = ["cdylib"]
 [dependencies]
 # godot-rust(gdext). 설치한 Godot 4.7.2에 맞춰 4.7 API로 빌드한다.
 godot = { version = "=0.5.5", features = ["api-4-7"] }
+# Phase GD-2: 엔진 무관 로직. Godot 쪽은 bevy 기능 없이 쓴다.
+sim-core = { path = "../sim-core" }
+# sim-core와 같은 glam(지면 좌표 Vec2).
+glam = "=0.32.1"

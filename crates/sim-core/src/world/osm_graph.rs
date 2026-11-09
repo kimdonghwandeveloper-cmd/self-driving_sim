@@ -88,7 +88,7 @@ pub fn parse_overpass_graph(json: &str) -> Result<Vec<OsmGraphWay>, String> {
 }
 
 /// 본문의 `generator` 값과 way 목록을 읽는다(출처 확인 없이). 검사 규칙은 [`parse_overpass_graph`]와 같다.
-pub(crate) fn parse_graph_body(json: &str) -> Result<(Option<String>, Vec<OsmGraphWay>), String> {
+pub fn parse_graph_body(json: &str) -> Result<(Option<String>, Vec<OsmGraphWay>), String> {
     let response: GraphResponse =
         serde_json::from_str(json).map_err(|error| format!("invalid Overpass JSON: {error}"))?;
     let generator = response.generator;
@@ -153,9 +153,10 @@ pub fn node_degrees(ways: &[OsmGraphWay], allowed: &BTreeSet<&str>) -> BTreeMap<
     degrees
 }
 
-#[cfg(test)]
-pub(crate) mod fixtures {
-    //! 합성 시험 자료(PLAN 4 선행 자료). 지역 미터 좌표로 형상을 정의하고 위경도로 바꿔
+#[cfg(any(test, feature = "test-fixtures"))]
+pub mod fixtures {
+    //! 합성 시험 자료(PLAN 4 선행 자료). 루트 앱 시험도 쓰도록 `test-fixtures` 기능에서도 연다.
+    //! 지역 미터 좌표로 형상을 정의하고 위경도로 바꿔
     //! 실제 자료와 같은 경로([`parse_overpass_graph`])를 거치게 한다. 실제 도로가 아니다.
 
     use super::*;
@@ -407,7 +408,7 @@ mod tests {
 
     /// 저장소의 여수 노드 ID 스냅샷 경로(PLAN 4 선행 자료).
     const SNAPSHOT: &str = concat!(
-        env!("CARGO_MANIFEST_DIR"),
+        concat!(env!("CARGO_MANIFEST_DIR"), "/../.."),
         "/assets/maps/yeosu-expo/graph-2026-11-06.osm.json"
     );
     /// 교차로 판정에 쓰는 `highway` 허용 목록(시험용, 4-3에서 설정 파일로 옮긴다).
@@ -475,7 +476,7 @@ mod tests {
         ] {
             let path = format!(
                 "{}/assets/maps/yeosu-expo/{file}",
-                env!("CARGO_MANIFEST_DIR")
+                concat!(env!("CARGO_MANIFEST_DIR"), "/../..")
             );
             let json = std::fs::read_to_string(path).unwrap();
             let error = parse_overpass_graph(&json).unwrap_err();
@@ -544,7 +545,7 @@ mod tests {
         // 원호 중심 (-20, 0) → 지역 좌표 (-20, 0)(북쪽 0 → z 0).
         for p in &arc_points {
             assert!(
-                (p.distance(bevy::math::Vec2::new(-20.0, 0.0)) - 20.0).abs() < 0.01,
+                (p.distance(glam::Vec2::new(-20.0, 0.0)) - 20.0).abs() < 0.01,
                 "{p}"
             );
         }

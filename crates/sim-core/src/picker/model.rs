@@ -6,7 +6,7 @@
 
 use std::path::{Component, Path, PathBuf};
 
-use bevy::math::Vec2;
+use glam::Vec2;
 
 use super::tiles;
 use crate::world::map::LatLon;
@@ -310,7 +310,7 @@ mod tests {
 
     /// 저장소의 실제 스냅샷 경로.
     fn snapshot_path() -> PathBuf {
-        Path::new(env!("CARGO_MANIFEST_DIR"))
+        Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."))
             .join("assets/maps/yeosu-expo/graph-2026-11-06.osm.json")
     }
 
@@ -373,7 +373,7 @@ mod tests {
         // 같은 점이면 저장소 예제 경로 파일과 같은 노드 순서다.
         let example: route_plan::RouteFile = toml::from_str(
             &std::fs::read_to_string(
-                Path::new(env!("CARGO_MANIFEST_DIR"))
+                Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."))
                     .join("assets/maps/yeosu-expo/route-junctions.toml"),
             )
             .unwrap(),

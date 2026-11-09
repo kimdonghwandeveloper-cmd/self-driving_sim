@@ -11,7 +11,7 @@
 
 use std::path::Path;
 
-use bevy::prelude::*;
+use glam::Vec2;
 use serde::Deserialize;
 
 use super::course::{Area, Collider, ColliderKind, CourseDef, Strip, StripKind};
@@ -27,7 +27,7 @@ const JOIN_TOLERANCE_M: f32 = 0.5;
 /// 임시 폭 허용 범위(m).
 pub const WIDTH_RANGE_M: std::ops::RangeInclusive<f32> = 2.5..=12.0;
 /// 연석 두께(m)와 표시 높이(m).
-pub(crate) const CURB_THICKNESS_M: f32 = 0.3;
+pub const CURB_THICKNESS_M: f32 = 0.3;
 const CURB_HEIGHT_M: f32 = 0.25;
 /// 끝 벽 두께(m)와 표시 높이(m).
 const END_WALL_THICKNESS_M: f32 = 0.5;
@@ -208,7 +208,7 @@ fn extent_of<'a>(
 
 /// 지도 코스에 쓰는 차량 최소 회전 반경(m). 기본 운동 모델 값(후륜축 기준)이다.
 pub fn vehicle_min_radius_m() -> f32 {
-    crate::calibration::min_turn_radius_m(&DynamicsParams::default())
+    crate::vehicle::dynamics::min_turn_radius_m(&DynamicsParams::default())
 }
 
 /// 중심선과 임시 폭으로 굽은 도로 코스를 만든다(기본 원호 분할 각도). [`build_road_course_with`] 참고.
@@ -253,7 +253,7 @@ pub fn build_road_course_with(
 }
 
 /// 임시 폭이 허용 범위([`WIDTH_RANGE_M`]) 안인지 검사한다.
-pub(crate) fn check_width(width_m: f32) -> Result<(), String> {
+pub fn check_width(width_m: f32) -> Result<(), String> {
     if !WIDTH_RANGE_M.contains(&width_m) {
         return Err(format!(
             "temporary width {width_m} m must be within {}..={} m",
@@ -266,7 +266,7 @@ pub(crate) fn check_width(width_m: f32) -> Result<(), String> {
 
 /// 도로 조각 하나(경로 조각·교차로 곁가지 공통)의 생성 결과.
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) struct RoadPiece {
+pub struct RoadPiece {
     /// 필렛을 넣은 매끄러운 중심선.
     pub centerline: Vec<Vec2>,
     /// 노면 띠와 양쪽 가장자리 표시선 띠.
@@ -280,11 +280,7 @@ pub(crate) struct RoadPiece {
 /// 중심선 점들로 도로 조각을 만든다. `walls`는 [시작 쪽, 끝 쪽]에 끝 벽을 세울지다.
 ///
 /// 중복점 정리, 필렛, 연석 바깥선 단순 다각형 검사를 거친다. 교차로에 붙는 쪽은 벽 없이 열어 둔다.
-pub(crate) fn road_piece(
-    points: &[Vec2],
-    spec: &RoadSpec,
-    walls: [bool; 2],
-) -> Result<RoadPiece, String> {
+pub fn road_piece(points: &[Vec2], spec: &RoadSpec, walls: [bool; 2]) -> Result<RoadPiece, String> {
     let points = clean_polyline(points)?;
     let geometry = road_geom::build_geometry(&points, spec)?;
     let center = geometry.centerline;
@@ -342,7 +338,7 @@ pub(crate) fn road_piece(
 }
 
 /// 중심선 시작 쪽 끝 벽에서 차체 뒤끝까지 [`START_REAR_CLEARANCE_M`]인 곳의 시작 자세를 만든다. 짧으면 오류.
-pub(crate) fn start_pose(center: &[Vec2]) -> Result<Motion, String> {
+pub fn start_pose(center: &[Vec2]) -> Result<Motion, String> {
     let rear_overhang = VEHICLE_FOOTPRINT.length_m / 2.0 - VEHICLE_FOOTPRINT.rear_axle_to_center_m;
     let front_reach = VEHICLE_FOOTPRINT.rear_axle_to_center_m + VEHICLE_FOOTPRINT.length_m / 2.0;
     let start_offset = START_REAR_CLEARANCE_M + rear_overhang;
@@ -366,7 +362,7 @@ pub(crate) fn start_pose(center: &[Vec2]) -> Result<Motion, String> {
 /// 시작 자세 비접촉과 코스 크기 상한 `max_extent_m`(긴 변, 짧은 변; m)을 검사하고 코스 정의를 완성한다.
 ///
 /// 단일 통로 코스는 [`MAX_EXTENT_M`], 경로 코스는 [`super::route::ROUTE_MAX_EXTENT_M`]을 쓴다.
-pub(crate) fn finish_course(
+pub fn finish_course(
     name: &str,
     notices: Vec<String>,
     start: Motion,
@@ -737,7 +733,8 @@ mod tests {
     /// 시작 자세가 비접촉이며, 시작 위치에서 조향 없이 직진해도 도중에 막히지 않고 끝 부근까지 가는지 확인한다.
     #[test]
     fn committed_yeosu_course_is_drivable() {
-        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/maps/yeosu-expo/course.toml");
+        let path = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."))
+            .join("assets/maps/yeosu-expo/course.toml");
         let course = load_map_course(&path).unwrap();
         assert!(
             course
@@ -933,7 +930,7 @@ mod tests {
     #[test]
     fn real_curved_way_is_drivable() {
         use crate::world::osm_graph::parse_overpass_graph;
-        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        let path = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."))
             .join("assets/maps/yeosu-expo/graph-2026-11-06.osm.json");
         let ways = parse_overpass_graph(&std::fs::read_to_string(path).unwrap()).unwrap();
         let way = ways.iter().find(|way| way.id == 529_495_041).unwrap();
@@ -942,8 +939,8 @@ mod tests {
         let course = build_road_course("way-529495041", &line, 4.0, Vec::new()).unwrap();
         assert_strips_valid(&course);
         // 저장소의 굽은 길 확인 코스 파일도 같은 way로 읽히고 출처 안내가 붙는다.
-        let file =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/maps/yeosu-expo/curved-course.toml");
+        let file = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."))
+            .join("assets/maps/yeosu-expo/curved-course.toml");
         let from_file = load_map_course(&file).unwrap();
         assert!(from_file.notices.iter().any(|n| n == OSM_ATTRIBUTION));
         assert_eq!(from_file.start, course.start);

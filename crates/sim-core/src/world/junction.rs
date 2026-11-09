@@ -13,7 +13,7 @@
 
 use std::f32::consts::{PI, TAU};
 
-use bevy::prelude::*;
+use glam::Vec2;
 
 /// 교차로 팔 하나.
 #[derive(Debug, Clone, Copy, PartialEq)]

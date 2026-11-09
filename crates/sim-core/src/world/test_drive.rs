@@ -2,7 +2,7 @@
 //!
 //! 사람의 주행이나 실차 주행을 대신하지 않는다. 생성한 코스가 차량으로 지나갈 수 있는지 확인하는 용도다.
 
-use bevy::prelude::*;
+use glam::Vec2;
 
 use super::course::CourseDef;
 use super::road_geom;

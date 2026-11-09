@@ -2,22 +2,17 @@
 //!
 //! 지도 코스([`map`])가 없거나 읽지 못해도 [`course`]의 개발 코스만으로 조작·카메라를 검증할 수 있다.
 
-pub mod course;
-pub mod junction;
-pub mod map;
-pub mod map_fetch;
-pub mod osm_graph;
 pub mod pbf_audit;
 pub mod pbf_compare;
 pub mod pbf_extract;
 #[cfg(test)]
 pub(crate) mod pbf_fixture;
-pub mod road_geom;
-pub mod road_snapshot;
-pub mod route;
-pub mod route_plan;
-#[cfg(test)]
-pub(crate) mod test_drive;
+
+// 코스 정의·교차로 면·도로 형상(GD-1b)과 지도·경로·스냅샷 모듈(GD-1c)은 엔진과 무관해 `sim-core`로 옮겼다.
+// 기존 경로(`crate::world::course` 등)는 그대로 쓸 수 있게 다시 내보낸다.
+pub use sim_core::world::{
+    course, junction, map, map_fetch, osm_graph, road_geom, road_snapshot, route, route_plan,
+};
 
 use std::path::PathBuf;
 

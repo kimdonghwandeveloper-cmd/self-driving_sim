@@ -700,7 +700,7 @@ mod tests {
 
     /// 저장소의 실제 스냅샷을 읽는다.
     fn real_snapshot() -> Vec<OsmGraphWay> {
-        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        let path = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."))
             .join("assets/maps/yeosu-expo/graph-2026-11-06.osm.json");
         parse_overpass_graph(&std::fs::read_to_string(path).unwrap()).unwrap()
     }
@@ -708,7 +708,8 @@ mod tests {
     /// 저장소의 `config/road_graph.toml`이 오류 없이 읽히고 코드 기본값과 같은지 확인한다.
     #[test]
     fn shipped_road_graph_config_matches_defaults() {
-        let config = parse_road_graph_config(include_str!("../../config/road_graph.toml")).unwrap();
+        let config =
+            parse_road_graph_config(include_str!("../../../../config/road_graph.toml")).unwrap();
         assert_eq!(config, RoadGraphConfig::default());
         let mut broken = RoadGraphConfig::default();
         broken.default_width_m.remove("service");
@@ -943,7 +944,8 @@ mod tests {
     /// 실제 교차로를 지나 경로 추종 조향기가 충돌 없이 끝 부근까지 가는지 확인한다.
     #[test]
     fn committed_route_file_is_reproducible_and_drivable() {
-        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/maps/yeosu-expo");
+        let dir =
+            Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../..")).join("assets/maps/yeosu-expo");
         let text = std::fs::read_to_string(dir.join("route-junctions.toml")).unwrap();
         let file: RouteFile = toml::from_str(&text).unwrap();
         let ways = real_snapshot();
@@ -970,7 +972,8 @@ mod tests {
     /// 노드 ID가 없는 스냅샷(`out geom`)을 가리키는 경로 파일은 거부한다.
     #[test]
     fn snapshot_without_node_ids_is_rejected() {
-        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/maps/yeosu-expo");
+        let dir =
+            Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../..")).join("assets/maps/yeosu-expo");
         let text = std::fs::read_to_string(dir.join("route-junctions.toml")).unwrap();
         let mut file: RouteFile = toml::from_str(&text).unwrap();
         file.snapshot = "survey-2026-11-06.osm.json".to_owned();

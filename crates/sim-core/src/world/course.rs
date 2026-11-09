@@ -5,7 +5,7 @@
 //! 좌표는 지면 (x, z) m이며 시작 자세의 전방은 -Z다. 모든 치수는 **훈련용 임시값**이며
 //! 실제 도로·공원 통로의 실측값이 아니다.
 
-use bevy::prelude::*;
+use glam::Vec2;
 
 use crate::vehicle::{GroundRect, Motion, VEHICLE_FOOTPRINT};
 
@@ -297,6 +297,145 @@ pub fn calibration_course() -> CourseDef {
     }
 }
 
+/// 코스 형상이 표시 계약(Godot 인터페이스 3절)을 어긴 이유.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ShapeError {
+    /// 좌표·크기·각도에 유한하지 않은 값이 있음.
+    NonFinite { part: &'static str, index: usize },
+    /// 직사각형 크기가 0 이하.
+    EmptyRect { part: &'static str, index: usize },
+    /// 띠의 점이 2개 미만이거나 양쪽 점 개수가 다름.
+    BadStrip {
+        index: usize,
+        left: usize,
+        right: usize,
+    },
+    /// 교차로 면 경계점이 3개 미만.
+    TooFewBoundaryPoints { index: usize, count: usize },
+    /// 중심에서 본 부채꼴 삼각형이 반시계가 아님(중심이 모든 경계점을 볼 수 없음).
+    FanNotVisible { index: usize, edge: usize },
+}
+
+impl std::fmt::Display for ShapeError {
+    /// 사람이 읽는 한국어 오류 문구를 쓴다.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NonFinite { part, index } => {
+                write!(
+                    f,
+                    "코스 형상 오류: {part}[{index}]에 유한하지 않은 값이 있습니다"
+                )
+            }
+            Self::EmptyRect { part, index } => {
+                write!(
+                    f,
+                    "코스 형상 오류: {part}[{index}] 직사각형 크기가 0 이하입니다"
+                )
+            }
+            Self::BadStrip { index, left, right } => write!(
+                f,
+                "코스 형상 오류: strips[{index}] 점 개수가 맞지 않습니다(왼쪽 {left}, 오른쪽 {right}, 각각 2개 이상이고 같아야 함)"
+            ),
+            Self::TooFewBoundaryPoints { index, count } => write!(
+                f,
+                "코스 형상 오류: areas[{index}] 경계점이 {count}개입니다(3개 이상 필요)"
+            ),
+            Self::FanNotVisible { index, edge } => write!(
+                f,
+                "코스 형상 오류: areas[{index}] 중심에서 경계 {edge}번 변이 반시계로 보이지 않습니다"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for ShapeError {}
+
+/// 점의 두 좌표가 모두 유한한지 확인한다.
+fn finite_point(point: Vec2) -> bool {
+    point.x.is_finite() && point.y.is_finite()
+}
+
+/// 직사각형의 중심·크기·각도가 유한하고 크기가 양수인지 확인한다.
+fn check_rect(rect: &GroundRect, part: &'static str, index: usize) -> Result<(), ShapeError> {
+    if !finite_point(rect.center) || !finite_point(rect.half_size) || !rect.heading_rad.is_finite()
+    {
+        return Err(ShapeError::NonFinite { part, index });
+    }
+    if rect.half_size.x <= 0.0 || rect.half_size.y <= 0.0 {
+        return Err(ShapeError::EmptyRect { part, index });
+    }
+    Ok(())
+}
+
+impl CourseDef {
+    /// 형상이 표시 계약을 지키는지 검사한다. 어기면 첫 번째 위반을 돌려준다.
+    ///
+    /// 교차로 면은 경계점 3개 이상, 중심에서 각 변 (b[i], b[i+1])을 잇는 삼각형이 (x, z) 평면에서
+    /// 반시계(외적 > 0)여야 한다. 그래야 부채꼴 삼각형이 겹치거나 뒤집히지 않는다. 닫는 점은 중복하지 않는다고 본다.
+    pub fn validate(&self) -> Result<(), ShapeError> {
+        if !finite_point(Vec2::new(self.start.x_m, self.start.z_m))
+            || !self.start.heading_rad.is_finite()
+        {
+            return Err(ShapeError::NonFinite {
+                part: "start",
+                index: 0,
+            });
+        }
+        for (index, rect) in self.surfaces.iter().enumerate() {
+            check_rect(rect, "surfaces", index)?;
+        }
+        for (index, marking) in self.markings.iter().enumerate() {
+            check_rect(&marking.rect, "markings", index)?;
+        }
+        for (index, collider) in self.colliders.iter().enumerate() {
+            check_rect(&collider.rect, "colliders", index)?;
+            if !collider.height_m.is_finite() {
+                return Err(ShapeError::NonFinite {
+                    part: "colliders",
+                    index,
+                });
+            }
+        }
+        for (index, strip) in self.strips.iter().enumerate() {
+            let (left, right) = (strip.left.len(), strip.right.len());
+            if left < 2 || left != right {
+                return Err(ShapeError::BadStrip { index, left, right });
+            }
+            if !strip
+                .left
+                .iter()
+                .chain(&strip.right)
+                .all(|p| finite_point(*p))
+            {
+                return Err(ShapeError::NonFinite {
+                    part: "strips",
+                    index,
+                });
+            }
+        }
+        for (index, area) in self.areas.iter().enumerate() {
+            let count = area.boundary.len();
+            if count < 3 {
+                return Err(ShapeError::TooFewBoundaryPoints { index, count });
+            }
+            if !finite_point(area.center) || !area.boundary.iter().all(|p| finite_point(*p)) {
+                return Err(ShapeError::NonFinite {
+                    part: "areas",
+                    index,
+                });
+            }
+            for edge in 0..count {
+                let a = area.boundary[edge] - area.center;
+                let b = area.boundary[(edge + 1) % count] - area.center;
+                if a.perp_dot(b) <= 0.0 {
+                    return Err(ShapeError::FanNotVisible { index, edge });
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -458,5 +597,88 @@ mod tests {
         }
         assert_eq!(CourseId::parse("yeosu"), None);
         assert_eq!(CourseId::default(), CourseId::Training);
+    }
+
+    /// 원점을 중심으로 한 정사각형 교차로 면을 만든다. `ccw`가 거짓이면 경계 순서를 뒤집는다.
+    fn square_area(center: Vec2, ccw: bool) -> Area {
+        let mut boundary = vec![
+            Vec2::new(1.0, -1.0),
+            Vec2::new(1.0, 1.0),
+            Vec2::new(-1.0, 1.0),
+            Vec2::new(-1.0, -1.0),
+        ];
+        if !ccw {
+            boundary.reverse();
+        }
+        Area { center, boundary }
+    }
+
+    /// 개발 코스 두 개가 형상 계약 검사를 통과하는지 확인한다.
+    #[test]
+    fn development_courses_pass_shape_validation() {
+        for id in [CourseId::Training, CourseId::Calibration] {
+            assert_eq!(id.build().validate(), Ok(()), "{}", id.name());
+        }
+    }
+
+    /// atan2(z, x)가 커지는 순서의 교차로 면만 받고, 반대 순서나 바깥 중심은 거부하는지 확인한다.
+    #[test]
+    fn junction_area_must_be_ccw_fan_from_center() {
+        let mut course = training_course();
+        course.areas = vec![square_area(Vec2::ZERO, true)];
+        assert_eq!(course.validate(), Ok(()));
+        course.areas = vec![square_area(Vec2::ZERO, false)];
+        assert!(matches!(
+            course.validate(),
+            Err(ShapeError::FanNotVisible { index: 0, .. })
+        ));
+        course.areas = vec![square_area(Vec2::new(3.0, 0.0), true)];
+        assert!(matches!(
+            course.validate(),
+            Err(ShapeError::FanNotVisible { index: 0, .. })
+        ));
+        course.areas = vec![Area {
+            center: Vec2::ZERO,
+            boundary: vec![Vec2::X, Vec2::Y],
+        }];
+        assert_eq!(
+            course.validate(),
+            Err(ShapeError::TooFewBoundaryPoints { index: 0, count: 2 })
+        );
+    }
+
+    /// 띠의 양쪽 점 개수가 다르거나 2개 미만이면 거부하는지 확인한다.
+    #[test]
+    fn strip_needs_matching_point_counts() {
+        let mut course = training_course();
+        course.strips = vec![Strip {
+            kind: StripKind::Road,
+            left: vec![Vec2::ZERO, Vec2::Y],
+            right: vec![Vec2::X],
+        }];
+        assert_eq!(
+            course.validate(),
+            Err(ShapeError::BadStrip {
+                index: 0,
+                left: 2,
+                right: 1
+            })
+        );
+    }
+
+    /// 충돌 경계에 NaN이 있으면 거부하고, 오류 문구가 한국어 사유를 담는지 확인한다.
+    #[test]
+    fn non_finite_collider_is_rejected() {
+        let mut course = training_course();
+        course.colliders[0].rect.center.x = f32::NAN;
+        let error = course.validate().unwrap_err();
+        assert_eq!(
+            error,
+            ShapeError::NonFinite {
+                part: "colliders",
+                index: 0
+            }
+        );
+        assert!(error.to_string().contains("colliders[0]"));
     }
 }

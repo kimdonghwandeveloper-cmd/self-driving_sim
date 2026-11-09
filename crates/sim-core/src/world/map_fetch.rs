@@ -374,7 +374,7 @@ pub fn utc_now_compact() -> String {
 }
 
 /// 지금 시각을 UTC RFC 3339 문자열(초 단위)로 만든다.
-pub(crate) fn utc_now() -> String {
+pub fn utc_now() -> String {
     let seconds = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |elapsed| elapsed.as_secs());
@@ -382,7 +382,7 @@ pub(crate) fn utc_now() -> String {
 }
 
 /// 유닉스 시각(초)을 `YYYY-MM-DDThh:mm:ssZ`로 바꾼다(그레고리력, 1970년 이후).
-pub(crate) fn rfc3339(seconds: u64) -> String {
+pub fn rfc3339(seconds: u64) -> String {
     let (days, rest) = (seconds / 86_400, seconds % 86_400);
     // 1970-01-01부터의 날 수 → 연월일 (H. Hinnant의 civil_from_days).
     let z = days as i64 + 719_468;
@@ -408,7 +408,7 @@ pub(crate) fn rfc3339(seconds: u64) -> String {
 }
 
 /// 파일을 임시 이름으로 쓴 뒤 바꿔 달아, 중간에 실패해도 쓰다 만 파일이 남지 않게 한다.
-pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
+pub fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
     let temporary = path.with_extension("partial");
     let result = std::fs::File::create(&temporary)
         .and_then(|mut file| {
@@ -737,7 +737,7 @@ mod tests {
     /// 저장소의 실제 노드 ID 스냅샷 원본.
     fn real_body() -> Vec<u8> {
         std::fs::read(
-            Path::new(env!("CARGO_MANIFEST_DIR"))
+            Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."))
                 .join("assets/maps/yeosu-expo/graph-2026-11-06.osm.json"),
         )
         .unwrap()

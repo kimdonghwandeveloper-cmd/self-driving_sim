@@ -8,8 +8,7 @@
 //! 미끄러지며 벽을 따라가는 처리는 하지 않는다(접촉하면 정지).
 //! 차체 크기와 후륜축 위치는 실차 치수를 확인하지 않은 **시뮬레이터 임시값**이다.
 
-use bevy::math::Vec2;
-use bevy::prelude::Component;
+use glam::Vec2;
 
 use super::dynamics::{self, DynamicsParams, Motion, wrap_angle};
 use super::state::VehicleState;
@@ -121,7 +120,8 @@ impl Footprint {
 }
 
 /// 장애물로 쓰는 고정 지면 직사각형 컴포넌트. 차량은 이 영역을 통과하지 못한다.
-#[derive(Component, Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "bevy", derive(bevy_ecs::component::Component))]
 pub struct Obstacle(pub GroundRect);
 
 /// 한 단계 이동 경로 검사 결과.

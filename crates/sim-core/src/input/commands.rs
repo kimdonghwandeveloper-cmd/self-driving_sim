@@ -1,0 +1,157 @@
+//! 키 입력 상태를 명령 요청과 연속 입력으로 바꾸는 규칙.
+
+use super::ControlRequest;
+use super::gear::GearSelection;
+use crate::vehicle::{VehicleCommand, VehicleInput};
+
+/// 모든 입력 장치를 합친 한 프레임의 단발성 입력 상태.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KeyFrame {
+    /// 비상 정지 키가 이번 프레임에 새로 눌림.
+    pub emergency_stop_pressed: bool,
+    /// 비상 정지 키가 눌려 있음(새로 눌린 경우 포함).
+    pub emergency_stop_held: bool,
+    pub emergency_release_pressed: bool,
+    pub engine_toggle_pressed: bool,
+    pub gear: GearSelection,
+}
+
+/// 키 입력 상태를 명령 요청 목록으로 바꾼다.
+///
+/// 비상 정지 키가 눌려 있는 동안에는 비상 정지 진입만 보내고 해제·시동·기어 요청은 버린다.
+/// 따라서 해제는 비상 정지 키를 뗀 뒤 별도로 눌러야 한다.
+/// 그 외에는 해제 → 시동 → 기어 순으로 보낸다.
+pub fn command_requests(frame: KeyFrame) -> Vec<ControlRequest> {
+    if frame.emergency_stop_held || frame.emergency_stop_pressed {
+        return if frame.emergency_stop_pressed {
+            vec![ControlRequest::Command(VehicleCommand::EngageEmergencyStop)]
+        } else {
+            Vec::new()
+        };
+    }
+    let mut requests = Vec::new();
+    if frame.emergency_release_pressed {
+        requests.push(ControlRequest::Command(
+            VehicleCommand::ReleaseEmergencyStop,
+        ));
+    }
+    if frame.engine_toggle_pressed {
+        requests.push(ControlRequest::Command(VehicleCommand::ToggleEngine));
+    }
+    match frame.gear {
+        GearSelection::None => {}
+        GearSelection::Requested(gear) => {
+            requests.push(ControlRequest::Command(VehicleCommand::RequestGear(gear)));
+        }
+        GearSelection::Conflict(gears) => {
+            requests.push(ControlRequest::GearConflict(gears));
+        }
+    }
+    requests
+}
+
+/// 디지털 키 상태를 연속 입력으로 변환한다. 가속과 제동이 동시에 눌리면 제동을 우선한다.
+pub fn keyboard_vehicle_input(
+    throttle: bool,
+    brake: bool,
+    left: bool,
+    right: bool,
+) -> VehicleInput {
+    /// 눌림 여부를 0 또는 1로 바꾼다.
+    fn level(pressed: bool) -> f32 {
+        if pressed { 1.0 } else { 0.0 }
+    }
+    VehicleInput {
+        throttle: level(throttle && !brake),
+        brake: level(brake),
+        steering: level(right) - level(left),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::vehicle::Gear;
+
+    /// 아무 키도 누르지 않은 프레임을 만든다.
+    fn idle_frame() -> KeyFrame {
+        KeyFrame {
+            emergency_stop_pressed: false,
+            emergency_stop_held: false,
+            emergency_release_pressed: false,
+            engine_toggle_pressed: false,
+            gear: GearSelection::None,
+        }
+    }
+
+    /// 가속과 제동을 함께 누르면 제동만 적용되는지 확인한다.
+    #[test]
+    fn brake_overrides_throttle() {
+        let input = keyboard_vehicle_input(true, true, false, false);
+        assert_eq!(input.throttle, 0.0);
+        assert_eq!(input.brake, 1.0);
+    }
+
+    /// 좌우 조향 키를 함께 누르면 상쇄되고, 하나만 누르면 -1/+1이 되는지 확인한다.
+    #[test]
+    fn opposite_steering_keys_cancel() {
+        assert_eq!(
+            keyboard_vehicle_input(false, false, true, true).steering,
+            0.0
+        );
+        assert_eq!(
+            keyboard_vehicle_input(false, false, true, false).steering,
+            -1.0
+        );
+        assert_eq!(
+            keyboard_vehicle_input(false, false, false, true).steering,
+            1.0
+        );
+    }
+
+    /// 비상 정지와 해제·시동·기어 키를 같은 프레임에 누르면 비상 정지만 보내는지 확인한다.
+    #[test]
+    fn emergency_stop_press_suppresses_other_requests() {
+        let frame = KeyFrame {
+            emergency_stop_pressed: true,
+            emergency_stop_held: true,
+            emergency_release_pressed: true,
+            engine_toggle_pressed: true,
+            gear: GearSelection::Requested(Gear::Drive),
+        };
+        assert_eq!(
+            command_requests(frame),
+            [ControlRequest::Command(VehicleCommand::EngageEmergencyStop)]
+        );
+    }
+
+    /// 비상 정지 키를 누르고 있는 동안에는 해제 키를 새로 눌러도 요청이 없는지 확인한다.
+    #[test]
+    fn release_ignored_while_emergency_stop_held() {
+        let frame = KeyFrame {
+            emergency_stop_held: true,
+            emergency_release_pressed: true,
+            ..idle_frame()
+        };
+        assert!(command_requests(frame).is_empty());
+    }
+
+    /// 비상 정지 키를 뗀 뒤에는 해제·시동·기어 요청을 정해진 순서로 보내는지 확인한다.
+    #[test]
+    fn requests_follow_release_engine_gear_order() {
+        let frame = KeyFrame {
+            emergency_release_pressed: true,
+            engine_toggle_pressed: true,
+            gear: GearSelection::Requested(Gear::Drive),
+            ..idle_frame()
+        };
+        assert_eq!(
+            command_requests(frame),
+            [
+                ControlRequest::Command(VehicleCommand::ReleaseEmergencyStop),
+                ControlRequest::Command(VehicleCommand::ToggleEngine),
+                ControlRequest::Command(VehicleCommand::RequestGear(Gear::Drive)),
+            ]
+        );
+    }
+}

@@ -12,7 +12,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use bevy::prelude::*;
+use glam::Vec2;
 
 use super::course::{Area, Collider, ColliderKind, CourseDef, Strip};
 use super::junction::{self, ArmInput};
@@ -190,7 +190,7 @@ const ARM_WALK_M: f32 = 80.0;
 ///
 /// 경로 노드 전부와, 경로 위 교차로마다 모든 팔을 [`ARM_WALK_M`] 또는 다음 교차로·way 끝까지 따라간 노드다.
 /// 코스 생성([`build_route_course_with`])과 같은 그래프·같은 걷기 규칙을 쓴다. 가상 노드도 포함한다.
-pub(crate) fn shape_nodes(
+pub fn shape_nodes(
     ways: &[OsmGraphWay],
     allowed: &BTreeSet<&str>,
     route: &[u64],
@@ -209,7 +209,7 @@ pub(crate) fn shape_nodes(
 }
 
 /// `oneway` 태그가 일방통행을 뜻하는지 판정한다.
-pub(crate) fn is_oneway(way: &OsmGraphWay) -> bool {
+pub fn is_oneway(way: &OsmGraphWay) -> bool {
     matches!(
         way.tags.get("oneway").map(String::as_str),
         Some("yes" | "1" | "-1" | "true" | "reversible")
@@ -895,7 +895,7 @@ mod tests {
     /// 끝 부근까지 가는지 확인한다(PLAN 4-2 실제 스냅샷 완료 기준).
     #[test]
     fn real_route_through_junctions_is_drivable() {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        let path = std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."))
             .join("assets/maps/yeosu-expo/graph-2026-11-06.osm.json");
         let ways = parse_overpass_graph(&std::fs::read_to_string(path).unwrap()).unwrap();
         let ids = |id: u64| -> Vec<u64> {

@@ -1,7 +1,19 @@
 //! Phase 5-0 Godot 연결 계층.
 //!
 //! Godot 에디터·게임이 `sim_godot.dll`을 불러오면 여기서 등록한 클래스를 GDScript에서 쓸 수 있다.
-//! 5-1에서 엔진과 무관한 로직을 `sim-core`로 분리한 뒤, 그 기능을 이 계층에서 Godot 클래스로 감싼다.
+//! 엔진과 무관한 로직은 `sim-core`에 있고, 이 계층은 그 기능을 Godot 클래스로 감싼다
+//! (클래스·좌표·실패 규칙은 `docs/design/godot-interface.md` v1).
+
+pub mod course;
+pub mod devices;
+pub mod paths;
+pub mod replay;
+pub mod route_picker;
+pub mod tiles;
+// gdext 0.5.5의 `#[init(val = ...)]`가 만든 생성 코드가 `base: base` 형태라 clippy가 짚는다.
+// 생성 코드는 구조체 밖이라 모듈 단위로 허용한다.
+#[allow(clippy::redundant_field_names)]
+pub mod vehicle;
 
 use godot::prelude::*;
 
