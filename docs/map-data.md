@@ -262,7 +262,7 @@ PLAN 4 "선행 자료"에 따라 4-1~4-3을 오프라인으로 검증할 자료�
 - 재현: 저장한 경로 파일을 `--course map:`으로 다시 열면 계산한 것과 같은 코스가 나온다(테스트로 확인).
 - 미검증: 사람이 마우스로 경로를 찍고 주행을 시작하는 화면 조작, `latlon:` 실제 받기.
 
-## Geofabrik 지역 추출 (Phase 4-5G G-1, `src/world/pbf_extract.rs`·`road_snapshot.rs`)
+## Geofabrik 지역 추출 (Phase 4-5G G-1, `crates/sim-core/src/world/pbf_extract.rs`·`road_snapshot.rs`)
 
 설계: `docs/proposals/geofabrik-road-source.md`(5판). 경로 선택 화면의 배경 지도와는 별개인 **도로 원자료** 공급원이다.
 전국 자료를 써도 지원·거부 조건(허용 도로, 한국 범위, 범위·길이 상한, 교차로 검사)은 그대로다.
