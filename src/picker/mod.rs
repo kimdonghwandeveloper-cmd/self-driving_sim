@@ -261,6 +261,24 @@ pub struct TileLayer {
     mesh: Option<Handle<Mesh>>,
     /// 프레임 번호.
     frame: u64,
+    /// 받지 못한(또는 디코딩하지 못한) 타일 결과 수. 화면 상태 문구에 보여 준다.
+    failed: u64,
+    /// 마지막 실패 사유. 사유가 바뀔 때만 경고 로그를 남긴다(매 타일마다 남기지 않게).
+    last_error: Option<String>,
+}
+
+impl TileLayer {
+    /// 타일 실패를 센다. 직전과 다른 사유면 경고 로그를 남기고 화면에 보일 사유를 바꾼다.
+    fn record_failure(&mut self, tile: TileId, reason: String) {
+        self.failed += 1;
+        if self.last_error.as_deref() != Some(reason.as_str()) {
+            warn!(
+                "map tile {}/{}/{} unavailable: {reason}",
+                tile.z, tile.x, tile.y
+            );
+            self.last_error = Some(reason);
+        }
+    }
 }
 
 /// 경로 선택 화면의 위에서 본 카메라.
@@ -770,9 +788,15 @@ fn update_tiles(
         .copied()
         .collect();
     fetcher.request(&missing);
+    // 실패는 받기 작업자를 빌린 동안 모아 두었다가 루프 뒤에 센다.
+    let mut failures = Vec::new();
     for (tile, outcome) in fetcher.poll() {
-        let TileOutcome::Image { bytes, expires_at } = outcome else {
-            continue;
+        let (bytes, expires_at) = match outcome {
+            TileOutcome::Image { bytes, expires_at } => (bytes, expires_at),
+            TileOutcome::Failed(reason) => {
+                failures.push((tile, reason));
+                continue;
+            }
         };
         let Ok(image) = Image::from_buffer(
             &bytes,
@@ -784,6 +808,7 @@ fn update_tiles(
         ) else {
             // 디코딩하지 못하면 캐시를 지우고 실패로 셈한다(매 프레임 다시 처리하지 않게).
             fetcher.report_bad(tile);
+            failures.push((tile, "PNG decode failed".to_owned()));
             continue;
         };
         let material = materials.add(StandardMaterial {
@@ -797,6 +822,9 @@ fn update_tiles(
         if let Some(entity) = layer.entities.remove(&tile) {
             commands.entity(entity).despawn();
         }
+    }
+    for (tile, reason) in failures {
+        layer.record_failure(tile, reason);
     }
     for tile in &wanted {
         if let Some((material, seen, _)) = layer.materials.get_mut(tile) {
@@ -929,6 +957,16 @@ fn update_picker_text(
     if !layer.settings.network {
         lines.push("Map tiles: offline (cached tiles only)".to_owned());
     }
+    // 배경 지도가 비어 보일 때 원인을 화면에서 바로 알 수 있게 그린 수·실패 수·마지막 사유를 보여 준다.
+    let mut tile_line = format!(
+        "Map tiles: {} shown, {} failed",
+        layer.entities.len(),
+        layer.failed
+    );
+    if let Some(error) = &layer.last_error {
+        tile_line.push_str(&format!(" (last: {error})"));
+    }
+    lines.push(tile_line);
     match &picker.model {
         Some(model) => {
             lines.push(format!("Map: {}", model.snapshot_path.display()));
@@ -949,6 +987,27 @@ fn update_picker_text(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 타일 실패는 모두 세고, 마지막 사유는 가장 최근 것으로 바뀐다(같은 사유가 이어져도 그대로).
+    #[test]
+    fn tile_failures_are_counted_with_last_reason() {
+        let mut layer = TileLayer::default();
+        let tile = TileId {
+            z: 7,
+            x: 109,
+            y: 50,
+        };
+        layer.record_failure(tile, "tile server answered HTTP 403".to_owned());
+        layer.record_failure(tile, "tile server answered HTTP 403".to_owned());
+        assert_eq!(layer.failed, 2);
+        assert_eq!(
+            layer.last_error.as_deref(),
+            Some("tile server answered HTTP 403")
+        );
+        layer.record_failure(tile, "PNG decode failed".to_owned());
+        assert_eq!(layer.failed, 3);
+        assert_eq!(layer.last_error.as_deref(), Some("PNG decode failed"));
+    }
 
     /// 지역 인자: 미리 정한 지역, 위경도(대한민국·크기 검사), 스냅샷 경로, 잘못된 값.
     #[test]
