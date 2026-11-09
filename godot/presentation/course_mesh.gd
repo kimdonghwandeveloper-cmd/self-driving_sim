@@ -11,6 +11,10 @@ const COLORS = {
 	"stop_line": Color("f5f4e8"), "curb": Color("c4c6bf"),
 	"wall": Color("9eaaa7"), "barrier": Color("dbb35b"), "obstacle": Color("d37e57")
 }
+## 경로 끝 목표 표시: 체크무늬 띠 칸 수(가로, 세로)와 칸 크기(m), 안내 글자 높이(m).
+const GOAL_CELLS := Vector2i(6, 2)
+const GOAL_CELL_M := 0.6
+const GOAL_LABEL_Y_M := 3.0
 
 ## 이전 메시를 제거하고 전달받은 코스 스냅샷만 그린다.
 func build(data: Dictionary) -> void:
@@ -47,6 +51,36 @@ func build(data: Dictionary) -> void:
 		var height: float = collider.height_m
 		var surface: Material = concrete if collider.kind == "curb" else null
 		_box(collider.rect, height, height * 0.5, COLORS.get(collider.kind, COLORS.obstacle), surface)
+	var goal: Dictionary = data.get("goal", {})
+	if not goal.is_empty():
+		_goal_marker(goal)
+
+## 경로 끝 목표 자세(계약 3절 `goal`)에 진행 방향을 가로지르는 체크무늬 띠와 "도착" 글자를 둔다. 충돌 판정은 없다.
+func _goal_marker(goal: Dictionary) -> void:
+	var marker := Node3D.new()
+	marker.name = "GoalMarker"
+	marker.position = goal.position
+	marker.rotation.y = goal.heading_rad
+	add_child(marker)
+	var cells := {true: material(Color("f5f4e8")), false: material(Color("2b2e30"))}
+	var mesh := BoxMesh.new()
+	mesh.size = Vector3(GOAL_CELL_M, 0.004, GOAL_CELL_M)
+	for column in GOAL_CELLS.x:
+		for row in GOAL_CELLS.y:
+			var cell := MeshInstance3D.new()
+			cell.mesh = mesh
+			cell.material_override = cells[(column + row) % 2 == 0]
+			cell.position = Vector3((column - (GOAL_CELLS.x - 1) * 0.5) * GOAL_CELL_M, 0.018, (row - (GOAL_CELLS.y - 1) * 0.5) * GOAL_CELL_M)
+			marker.add_child(cell)
+	var label := Label3D.new()
+	label.text = "도착"
+	label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+	label.font_size = 96
+	label.pixel_size = 0.01
+	label.outline_size = 18
+	label.modulate = Color("7ee08a")
+	label.position = Vector3(0, GOAL_LABEL_Y_M, 0)
+	marker.add_child(label)
 
 ## 지면 직사각형을 주어진 전체 높이의 상자로 표시한다. `surface`가 없으면 `color` 무광 재질을 쓴다.
 func _box(rect: Dictionary, height: float, center_y: float, color: Color, surface: Material = null) -> void:

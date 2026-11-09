@@ -12,6 +12,9 @@ const INPUT_NAMES := {"keyboard": "키보드", "gamepad": "게임패드", "manua
 const VIEW_NAMES := {"front": "전방", "rear": "후방", "left": "좌측", "right": "우측"}
 ## 외부(디버그) 시점에서 보이는 차체가 임시 모델임을 알리는 문구.
 const EXTERIOR_NOTICE := "외부 시점 · 차체 외관은 임시 모델이며 충돌 판정 차체와 크기가 다릅니다"
+## 지도 코스(`map:`)를 열지 못했을 때 대신 여는 개발 코스와 안내 문구(Bevy `--course map:` 대체와 같음, 4-6).
+const FALLBACK_COURSE := "training"
+const FALLBACK_NOTICE := "지도 코스를 열지 못해 개발 코스(training)로 대체했습니다.\n%s"
 var vehicle: Node3D
 var rig: Node3D
 var hud := Label.new()
@@ -19,6 +22,8 @@ var warnings_label := Label.new()
 var notice := Label.new()
 var is_preview := false
 var failure := ""
+## 지도 코스 대신 개발 코스를 열었을 때의 안내. 대체하지 않았으면 빈 문자열.
+var fallback_notice := ""
 var dismiss := Button.new()
 var scene_content: Node3D
 var command_notice := ""
@@ -30,9 +35,11 @@ var ground := MeshInstance3D.new()
 func start(course_name: String, force_preview: bool = false) -> void:
 	_environment()
 	is_preview = force_preview or not ClassDB.class_exists("SimVehicle")
-	vehicle = Preview.new() if is_preview else ClassDB.instantiate("SimVehicle")
-	vehicle.set("course", course_name)
-	add_child(vehicle)
+	vehicle = _make_vehicle(course_name)
+	if not is_preview and course_name.begins_with("map:") and not bool(vehicle.call("is_ready")):
+		fallback_notice = FALLBACK_NOTICE % str(vehicle.call("last_error"))
+		vehicle.free()
+		vehicle = _make_vehicle(FALLBACK_COURSE)
 	_ui()
 	if not bool(vehicle.call("is_ready")):
 		_fail(str(vehicle.call("last_error")))
@@ -58,11 +65,21 @@ func start(course_name: String, force_preview: bool = false) -> void:
 		vehicle.connect("command_rejected", _command_rejected)
 		rig.apply_view(str(vehicle.call("view")))
 		rig.set_external(bool(vehicle.call("debug_camera")))
-	warnings_label.text = "\n".join(vehicle.call("config_warnings"))
+	var warnings := Array(vehicle.call("config_warnings"))
+	if not fallback_notice.is_empty():
+		warnings.push_front(fallback_notice)
+	warnings_label.text = "\n".join(warnings)
 	dismiss.visible = not warnings_label.text.is_empty()
 	notice.text = "\n".join(vehicle.call("course_notices"))
 	if is_preview:
 		notice.text += "\n정지 미리보기 · 1 전방 / 2 후방 / 3 좌측 / 4 우측 / C 외부"
+
+## `course_name` 코스의 Rust 차량(또는 정지 미리보기) 노드를 만들어 장면에 넣는다. 준비 결과는 `is_ready`로 본다.
+func _make_vehicle(course_name: String) -> Node3D:
+	var node: Node3D = Preview.new() if is_preview else ClassDB.instantiate("SimVehicle")
+	node.set("course", course_name)
+	add_child(node)
+	return node
 
 ## 절차 생성 하늘·태양광(그림자)·보조광·옅은 안개와 바닥을 만든다. 외부 애셋은 쓰지 않는다.
 func _environment() -> void:

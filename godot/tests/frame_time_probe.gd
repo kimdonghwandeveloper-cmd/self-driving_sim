@@ -35,8 +35,8 @@ func _open() -> void:
 	drive = Drive.new()
 	root.add_child(drive)
 	drive.start(course)
-	if not drive.failure.is_empty():
-		printerr("FRAME PROBE FAIL: " + drive.failure)
+	if not drive.failure.is_empty() or not drive.fallback_notice.is_empty():
+		printerr("FRAME PROBE FAIL: " + drive.failure + drive.fallback_notice)
 		quit(1)
 		return
 	if not drive.is_preview:

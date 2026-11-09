@@ -241,7 +241,7 @@ pub fn build_road_course_with(
     check_width(spec.width_m)?;
     let piece = road_piece(centerline, spec, [true, true])?;
     let start = start_pose(&piece.centerline)?;
-    finish_course(
+    let mut course = finish_course(
         name,
         notices,
         start,
@@ -249,7 +249,9 @@ pub fn build_road_course_with(
         Vec::new(),
         piece.colliders,
         MAX_EXTENT_M,
-    )
+    )?;
+    course.goal = Some(goal_pose(&piece.centerline)?);
+    Ok(course)
 }
 
 /// 임시 폭이 허용 범위([`WIDTH_RANGE_M`]) 안인지 검사한다.
@@ -359,6 +361,26 @@ pub fn start_pose(center: &[Vec2]) -> Result<Motion, String> {
     })
 }
 
+/// 중심선 끝 쪽 끝 벽에서 차체 앞끝까지 [`START_REAR_CLEARANCE_M`]인 곳의 목표 자세(진행 방향)를 만든다. 짧으면 오류.
+///
+/// 시작 자세와 같은 여유를 끝 쪽에 둔 것이며, 경로 끝 목표 표시(4-6)에 쓴다.
+pub fn goal_pose(center: &[Vec2]) -> Result<Motion, String> {
+    let front_reach = VEHICLE_FOOTPRINT.rear_axle_to_center_m + VEHICLE_FOOTPRINT.length_m / 2.0;
+    let length = road_geom::polyline_length(center);
+    let distance = length - START_REAR_CLEARANCE_M - front_reach;
+    let too_short = || format!("course is {length:.1} m long; too short for the goal pose");
+    if distance < 0.0 {
+        return Err(too_short());
+    }
+    let (axle, direction) = road_geom::point_at_distance(center, distance).ok_or_else(too_short)?;
+    Ok(Motion {
+        x_m: axle.x,
+        z_m: axle.y,
+        heading_rad: road_geom::heading_of(direction),
+        ..Motion::default()
+    })
+}
+
 /// 시작 자세 비접촉과 코스 크기 상한 `max_extent_m`(긴 변, 짧은 변; m)을 검사하고 코스 정의를 완성한다.
 ///
 /// 단일 통로 코스는 [`MAX_EXTENT_M`], 경로 코스는 [`super::route::ROUTE_MAX_EXTENT_M`]을 쓴다.
@@ -393,6 +415,7 @@ pub fn finish_course(
         name: name.to_owned(),
         notices,
         start,
+        goal: None,
         surfaces: Vec::new(),
         strips,
         areas,

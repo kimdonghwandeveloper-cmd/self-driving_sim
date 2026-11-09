@@ -11,7 +11,7 @@ Godot에 노출할 클래스·메서드·시그널·좌표 규칙·실패 처리
 | v0.2 제안 | Codex 검토 질문 1~9에 대한 Claude 답변(부록 A) |
 | v1 | Codex 동의(부록 A)에 따라 v0.2를 1~7절 본문에 옮김. Codex 추가 요청 `view_to_latlon`, `forget_displayed` 채택(부록 A 끝). 본문 옮김이 합의와 다르면 Codex가 부록 A에 적고 고친다 |
 | v1.1 | 구현 중 정한 세부(이름·인자 변경 없음): 장치 기어 충돌 결과 이름 `gear_conflict`, 재생 드라이버 시작 시점(`ready` 시그널 뒤), `load_snapshot` 경로 형식, 좌우 수식 키 구분 없음, 장치 중립 대기 범위 |
-| v1.2 | 항목 추가(기존 이름·인자 변경 없음, 2026-11-10 Claude. Codex 사용량 한도 중 사용자 지시로 Godot 쪽도 Claude가 맞춤): 지도 코스 이름 `map:<파일>`(2절 `course`, 3절, 5-3 `SimReplay.run`), `SimCourse.course_files()`(3절), `SimTiles.country_outline()`·`country_bounds()`(7-3, 대한민국 범위 제한·경계 밖 가림, 사용자 지시 2026-11-09). 저장 경로 주행을 범위에 다시 넣음(7-4, 사용자 지시 "남은 플랜 완료"). Godot에 보내는 사람이 읽는 문구(명령 거부 사유, 코스 안내, 경로 선택 안내·경고·오류)는 한국어(1절) |
+| v1.2 | 항목 추가(기존 이름·인자 변경 없음, 2026-11-10 Claude. Codex 사용량 한도 중 사용자 지시로 Godot 쪽도 Claude가 맞춤): 지도 코스 이름 `map:<파일>`(2절 `course`, 3절, 5-3 `SimReplay.run`), `SimCourse.course_files()`(3절), `SimTiles.country_outline()`·`country_bounds()`(7-3, 대한민국 범위 제한·경계 밖 가림, 사용자 지시 2026-11-09). 저장 경로 주행을 범위에 다시 넣음(7-4, 사용자 지시 "남은 플랜 완료"). Godot에 보내는 사람이 읽는 문구(명령 거부 사유, 코스 안내, 경로 선택 안내·경고·오류)는 한국어(1절). 코스 사전 `goal`(3절, 4-6 경로 끝 목표 표시) |
 
 변경 규칙:
 
@@ -133,6 +133,7 @@ Godot 쪽이 주행 장면을 `queue_free()`한다. `SimVehicle`은 트리에서
   "name": String,
   "notices": PackedStringArray,
   "start": { "position": Vector3, "heading_rad": float },
+  "goal":  { "position": Vector3, "heading_rad": float } | {},   # (v1.2) 경로 끝 목표. 개발 코스는 빈 사전
   "surfaces":  [ Rect, ... ],                       # 포장 노면(직사각형)
   "strips":    [ { "kind": "road"|"edge_line",
                    "left": PackedVector3Array, "right": PackedVector3Array }, ... ],
@@ -147,6 +148,9 @@ Rect = { "center": Vector3, "size": Vector2(폭 x, 길이 z), "heading_rad": flo
 - 모든 `Vector3`의 y는 0이다. 표시 높이는 Godot 쪽에서 정한다. Bevy 판 값은 `src/world/mod.rs`의
   `SURFACE_Y_M`(0.012), `MARKING_Y_M`(0.016), `PAINT_THICKNESS_M`(0.004) 참고.
 - 빈 배열인 키도 항상 넣는다. 반환값은 매번 새 복사본이다.
+- (v1.2) `goal`: 지도 코스(`map:<파일>`)의 경로 끝 목표 자세. 마지막 도로 조각 중심선 위, 끝 벽에서 차체 앞끝까지
+  시작 자세와 같은 여유(5 m)인 곳의 뒤차축 위치와 진행 방향이다. 표시용이며 도착 판정·점수는 아직 없다.
+  목표가 없는 코스(`training`, `calibration`)는 빈 사전 `{}`이다. 리셋(`reset_course`)은 계속 `start`로 돌아간다.
 - `strips`: 점 2개 이상, `left[i]`와 `right[i]`가 마주 보고 점 개수가 같다. 길이 0인 구간이 있을 수 있으며
   Godot은 넓이 0 삼각형을 건너뛰기만 하고 점을 옮기지 않는다.
 - `areas.boundary`: (x, z) 평면에서 `atan2(z, x)`가 커지는 방향(수학적 반시계, Rust `junction.rs`와 같음).
