@@ -9,6 +9,16 @@ var route_line := PackedVector2Array()
 var tile_layers: Array = []
 var dragging := false
 var status := Label.new()
+var picker: Object
+var tiles: Object
+var active_request := 0
+var feedback := ""
+var textures: Dictionary = {}
+var texture_order: Array[String] = []
+var receive := Button.new()
+var save_button := Button.new()
+var route_name := LineEdit.new()
+var overwrite := CheckBox.new()
 
 ## 전국 범위를 담을 배율로 시작하고 출처 및 비활성 기능을 표시한다.
 func _ready() -> void:
@@ -57,6 +67,12 @@ func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton:
 		if event.button_index == MOUSE_BUTTON_RIGHT:
 			dragging = event.pressed
+		elif event.pressed and event.button_index == MOUSE_BUTTON_LEFT and picker != null:
+			if event.shift_pressed:
+				picker.call("remove_near", get_global_mouse_position(), 12.0 / camera.zoom.x)
+			else:
+				picker.call("add_point", get_global_mouse_position())
+			_refresh_route()
 		elif event.pressed and event.button_index in [MOUSE_BUTTON_WHEEL_UP, MOUSE_BUTTON_WHEEL_DOWN]:
 			var before := get_global_mouse_position()
 			var factor := 1.25 if event.button_index == MOUSE_BUTTON_WHEEL_UP else 0.8
@@ -95,3 +111,148 @@ func _draw() -> void:
 		draw_polyline(route_line, Color("58c4ef"), 4.0 / scale_m, true)
 	for i in range(points.size()):
 		draw_circle(points[i], 6.0 / scale_m, Color("f3bf63") if i == 0 else Color("9ee5c2"))
+## v1 ???? ??? ???? ??? ??????? ?? ??? ???.
+func _services(canvas: CanvasLayer) -> void:
+	var offline := DisplayServer.get_name() == "headless" or "--offline" in OS.get_cmdline_user_args()
+	if ClassDB.class_exists("SimRoutePicker"):
+		picker = ClassDB.instantiate("SimRoutePicker")
+		picker.set("network", not offline)
+	if ClassDB.class_exists("SimTiles"):
+		tiles = ClassDB.instantiate("SimTiles")
+		tiles.set("offline", offline)
+	var controls := HBoxContainer.new()
+	controls.position = Vector2(24, 220)
+	canvas.add_child(controls)
+	receive.text = "? ?? ?? ??"
+	receive.pressed.connect(_request_region)
+	controls.add_child(receive)
+	var cancel := Button.new()
+	cancel.text = "?? ??"
+	cancel.pressed.connect(_cancel_region)
+	controls.add_child(cancel)
+	var undo := Button.new()
+	undo.text = "??? ? ??"
+	undo.pressed.connect(_remove_last)
+	controls.add_child(undo)
+	var clear := Button.new()
+	clear.text = "? ?? ??"
+	clear.pressed.connect(_clear_points)
+	controls.add_child(clear)
+	route_name.placeholder_text = "?? ?? (??????_- )"
+	route_name.custom_minimum_size.x = 210
+	controls.add_child(route_name)
+	overwrite.text = "????"
+	controls.add_child(overwrite)
+	save_button.text = "?? ??"
+	save_button.pressed.connect(_save_route)
+	controls.add_child(save_button)
+	for button in [cancel, undo, clear]:
+		button.disabled = picker == null
+
+## ?? ?? ??? Rust?? ???? ?? ???? ?? ??? ???.
+func _request_region() -> void:
+	if picker == null or active_request != 0:
+		return
+	var latlon: PackedFloat64Array = picker.call("view_to_latlon", camera.position)
+	if latlon.size() != 2:
+		return
+	var result: Dictionary = picker.call("request_region", latlon)
+	feedback = str(result.get("error", ""))
+	if result.get("ok", false):
+		active_request = int(result.request_id)
+
+## ??? ??? ?? ??? ??? ?? ??? ?? ??? ???.
+func _cancel_region() -> void:
+	if picker != null:
+		picker.call("cancel_region")
+	active_request = 0
+	feedback = "?? ??? ??????."
+
+## ??? ? ??? ?? ??? Rust? ???.
+func _remove_last() -> void:
+	if picker != null:
+		picker.call("remove_last")
+		_refresh_route()
+
+## ?? ?? ??? ?? ??? ????.
+func _clear_points() -> void:
+	if picker != null:
+		picker.call("clear_points")
+		_refresh_route()
+
+## ?? ??? ???? ??? ???? ???? ????.
+func _save_route() -> void:
+	if picker == null:
+		return
+	var result: Dictionary = picker.call("save", route_name.text, overwrite.button_pressed)
+	feedback = "??: " + str(result.path) if result.get("ok", false) else str(result.error)
+
+## ?? ?? ?? ?? ??? ? ?? ???? ?? ??? ???.
+func _refresh_route() -> void:
+	var result: Dictionary = picker.call("route")
+	display_geometry(picker.call("road_segments"), picker.call("road_usable"), picker.call("points"), result.line)
+
+## ?? ???? ?? ??? ???? ????? ??? Rust? ??.
+func _process(_delta: float) -> void:
+	if picker != null:
+		for event in picker.call("poll"):
+			if active_request == 0 or int(event.request_id) != active_request:
+				continue
+			feedback = str(event.message)
+			if event.type in ["region_loaded", "failed"]:
+				active_request = 0
+				_refresh_route()
+		var latlon: PackedFloat64Array = picker.call("view_to_latlon", camera.position)
+		receive.disabled = active_request != 0 or latlon.size() != 2
+		var result: Dictionary = picker.call("route")
+		save_button.disabled = not bool(result.ok)
+		status.text = "??? ??: ?? / ?: ?? / ??: ? ?? / Shift+??: ? ??\n" + "\n".join(picker.call("status_lines")) + "\n" + feedback
+	else:
+		receive.disabled = true
+		save_button.disabled = true
+	if tiles != null:
+		_update_tiles()
+	queue_redraw()
+
+## ??? ??? ???? PNG? ????? ???? ?? 512? ????.
+func _update_tiles() -> void:
+	var span := get_viewport_rect().size / camera.zoom.x
+	var visible := Rect2(camera.position - span * 0.5, span)
+	tiles.call("request_visible", visible.position, visible.end, 1.0 / camera.zoom.x)
+	for tile in tiles.call("poll"):
+		if tile.status != "ok":
+			feedback = "?? ??: " + str(tile.error)
+			continue
+		var image := Image.new()
+		if image.load_png_from_buffer(tile.png) != OK:
+			tiles.call("report_bad", tile.x, tile.y, tile.z)
+			continue
+		var key := "%d/%d/%d" % [tile.z, tile.x, tile.y]
+		textures[key] = {"texture": ImageTexture.create_from_image(image), "rect": tile.rect, "x": tile.x, "y": tile.y, "z": tile.z}
+		texture_order.erase(key)
+		texture_order.append(key)
+	for key in textures:
+		if visible.intersects(textures[key].rect):
+			texture_order.erase(key)
+			texture_order.append(key)
+	while texture_order.size() > 512:
+		var key: String = texture_order.pop_front()
+		var tile: Dictionary = textures[key]
+		tiles.call("forget_displayed", tile.x, tile.y, tile.z)
+		textures.erase(key)
+	tile_layers = []
+	for tile in textures.values():
+		if visible.intersects(tile.rect):
+			tile_layers.append(tile)
+	if int(tiles.call("paused_until_s")) > int(Time.get_unix_time_from_system()):
+		status.text += "\n?? ?? ?? ?? ??"
+
+## ?? ?? ? ??? ???? ???? GPU ??? ??? ????.
+func _exit_tree() -> void:
+	if picker != null:
+		picker.call("cancel_region")
+	picker = null
+	tiles = null
+	textures.clear()
+	tile_layers.clear()
+	texture_order.clear()

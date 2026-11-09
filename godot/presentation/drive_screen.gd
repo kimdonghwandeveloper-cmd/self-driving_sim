@@ -14,6 +14,8 @@ var is_preview := false
 var failure := ""
 var dismiss := Button.new()
 var scene_content: Node3D
+var command_notice := ""
+var command_notice_until := 0
 
 ## 전달받은 코스로 화면을 만들고 실패 시 메시를 생성하지 않는다.
 func start(course_name: String, force_preview: bool = false) -> void:
@@ -43,6 +45,7 @@ func start(course_name: String, force_preview: bool = false) -> void:
 		vehicle.connect("view_changed", rig.apply_view)
 		vehicle.connect("debug_camera_toggled", rig.set_external)
 		vehicle.connect("course_failed", _fail)
+		vehicle.connect("command_rejected", _command_rejected)
 		rig.apply_view(str(vehicle.call("view")))
 		rig.set_external(bool(vehicle.call("debug_camera")))
 	warnings_label.text = "\n".join(vehicle.call("config_warnings"))
@@ -109,6 +112,9 @@ func _ui() -> void:
 ## 읽기 함수만 호출해 주행 상태를 표시한다.
 func _process(_delta: float) -> void:
 	if not failure.is_empty() or not is_instance_valid(vehicle):
+		return
+	if not bool(vehicle.call("is_ready")):
+		_fail(str(vehicle.call("last_error")))
 		return
 	hud.text = "%05.1f km/h    %s    시동 %s    비상 %s\n입력 %s    접촉 %s    시점 %s" % [
 		vehicle.call("speed_kmh"), vehicle.call("gear"), "ON" if vehicle.call("engine_on") else "OFF",
