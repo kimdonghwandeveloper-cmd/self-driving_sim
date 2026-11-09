@@ -33,8 +33,7 @@ func _ready() -> void:
 	title.add_theme_font_size_override("font_size", 30)
 	column.add_child(title)
 	var info := Label.new()
-	info.text = "개발 코스 또는 지도 코스를 골라 주행합니다.
-지도 코스는 OSM 중심선으로 만든 가상 교육 코스입니다."
+	info.text = "개발 코스 또는 지도 코스를 골라 주행합니다.\n지도 코스는 OSM 도로로 만든 가상 교육 코스입니다(실측 아님)."
 	if not ClassDB.class_exists("SimVehicle"):
 		info.text = "주행 기능 연결 전 · 정지 미리보기\n코스와 네 방향 시야를 확인할 수 있습니다."
 	column.add_child(info)

@@ -62,7 +62,7 @@ pub fn course_dict(course: &CourseDef) -> VarDictionary {
     let notices: PackedStringArray = course
         .notices
         .iter()
-        .map(|notice| GString::from(notice.as_str()))
+        .map(|notice| GString::from(crate::korean::course_notice(notice).as_str()))
         .collect();
     let surfaces: VarArray = course
         .surfaces

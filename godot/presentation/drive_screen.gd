@@ -7,6 +7,11 @@ const Visual = preload("res://presentation/vehicle_visual.gd")
 const Rig = preload("res://presentation/camera_rig.gd")
 ## 코스 범위 밖으로 바닥을 더 까는 여백(m).
 const GROUND_MARGIN_M := 300.0
+## HUD에 보일 입력 장치·시점 이름(계약 값 → 한국어).
+const INPUT_NAMES := {"keyboard": "키보드", "gamepad": "게임패드", "manual": "외부 입력", "none": "없음"}
+const VIEW_NAMES := {"front": "전방", "rear": "후방", "left": "좌측", "right": "우측"}
+## 외부(디버그) 시점에서 보이는 차체가 임시 모델임을 알리는 문구.
+const EXTERIOR_NOTICE := "외부 시점 · 차체 외관은 임시 모델이며 충돌 판정 차체와 크기가 다릅니다"
 var vehicle: Node3D
 var rig: Node3D
 var hud := Label.new()
@@ -116,25 +121,39 @@ func _fit_ground(bounds: Rect2) -> void:
 func _ui() -> void:
 	var canvas := CanvasLayer.new()
 	add_child(canvas)
-	var panel := VBoxContainer.new()
 	var overlay := Control.new()
 	overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	canvas.add_child(overlay)
-	panel.set_anchors_and_offsets_preset(Control.PRESET_TOP_WIDE)
-	panel.offset_left = 24
-	panel.offset_right = -24
-	panel.offset_top = 80
+	var panel := VBoxContainer.new()
+	panel.set_anchors_and_offsets_preset(Control.PRESET_TOP_LEFT)
+	panel.offset_left = 20
+	panel.offset_top = 64
+	panel.add_theme_constant_override("separation", 8)
 	overlay.add_child(panel)
+	var hud_box := _backdrop()
+	panel.add_child(hud_box)
+	hud_box.add_child(hud)
+	panel.add_child(warnings_label)
+	var notice_box := _backdrop()
+	notice_box.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_RIGHT)
+	notice_box.grow_horizontal = Control.GROW_DIRECTION_BEGIN
+	notice_box.grow_vertical = Control.GROW_DIRECTION_BEGIN
+	notice_box.offset_right = -12
+	notice_box.offset_bottom = -12
+	overlay.add_child(notice_box)
+	notice_box.add_child(notice)
 	for label in [hud, notice, warnings_label]:
-		label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		label.add_theme_color_override("font_color", Color.WHITE)
 		label.add_theme_color_override("font_shadow_color", Color.BLACK)
 		label.add_theme_constant_override("shadow_offset_x", 1)
 		label.add_theme_constant_override("shadow_offset_y", 1)
-		panel.add_child(label)
-	hud.add_theme_font_size_override("font_size", 24)
+	warnings_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	warnings_label.custom_minimum_size.x = 640
+	hud.add_theme_font_size_override("font_size", 22)
+	notice.add_theme_font_size_override("font_size", 14)
+	notice.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	dismiss.text = "설정 경고 닫기"
 	dismiss.pressed.connect(_dismiss_warnings)
 	dismiss.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
@@ -147,10 +166,16 @@ func _process(_delta: float) -> void:
 	if not bool(vehicle.call("is_ready")):
 		_fail(str(vehicle.call("last_error")))
 		return
-	hud.text = "%05.1f km/h    %s    시동 %s    비상 %s\n입력 %s    접촉 %s    시점 %s" % [
-		vehicle.call("speed_kmh"), vehicle.call("gear"), "ON" if vehicle.call("engine_on") else "OFF",
-		"ON" if vehicle.call("emergency_active") else "OFF", vehicle.call("input_source"),
-		"ON" if vehicle.call("in_contact") else "OFF", "외부" if rig.external else rig.current_view]
+	var emergency: bool = vehicle.call("emergency_active")
+	var source := str(vehicle.call("input_source"))
+	hud.text = "%5.1f km/h    기어 %s    시동 %s    비상 정지 %s\n입력 %s    접촉 %s    시점 %s" % [
+		vehicle.call("speed_kmh"), vehicle.call("gear"), "켜짐" if vehicle.call("engine_on") else "꺼짐",
+		"작동" if emergency else "해제", INPUT_NAMES.get(source, source),
+		"있음" if vehicle.call("in_contact") else "없음",
+		"외부" if rig.external else VIEW_NAMES.get(rig.current_view, rig.current_view)]
+	hud.add_theme_color_override("font_color", Color("ff8a7a") if emergency else Color.WHITE)
+	if rig.external:
+		hud.text += "\n" + EXTERIOR_NOTICE
 
 	if Time.get_ticks_msec() < command_notice_until:
 		hud.text += "\n" + command_notice
@@ -179,6 +204,17 @@ func _fail(message: String) -> void:
 	notice.text = "상단 메뉴로 돌아가세요."
 	warnings_label.hide()
 	dismiss.hide()
+## 반투명 어두운 배경 상자를 만든다(HUD·안내 글자가 하늘·노면 위에서도 읽히게).
+func _backdrop() -> PanelContainer:
+	var box := PanelContainer.new()
+	var style := StyleBoxFlat.new()
+	style.bg_color = Color(0, 0, 0, 0.45)
+	style.set_corner_radius_all(6)
+	style.set_content_margin_all(10)
+	box.add_theme_stylebox_override("panel", style)
+	box.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	return box
+
 ## 경고 문구와 닫기 버튼을 함께 숨긴다.
 func _dismiss_warnings() -> void:
 	warnings_label.hide()
