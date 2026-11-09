@@ -324,7 +324,12 @@ Windows에서 확장을 빌드한 뒤 다음 명령으로 초기화합니다.
 cargo.exe build --locked -p sim-godot
 & '<Godot 콘솔 실행 파일>' --headless --path godot --import --frame-delay 1000
 & '<Godot 콘솔 실행 파일>' --headless --path godot --script res://tests/smoke_test.gd
+& '<Godot 콘솔 실행 파일>' --headless --path godot --script res://tests/presentation_smoke.gd
+& '<Godot 콘솔 실행 파일>' --headless --fixed-fps 64 --path godot --script res://tests/drive_replay_test.gd
 ```
+
+`drive_replay_test.gd`는 정해진 입력 열을 `SimVehicle`의 실제 물리 틱으로 재생한 위치·속도·기어가
+Rust 단독 재생(`SimReplay.run`)과 같은지 비교합니다(GD-2). 같은 열의 기대 표본은 `sim-core` 시험에도 고정되어 있습니다.
 
 Godot 4.7.2와 godot-rust 0.5.5 조합에서는 캐시 없는 기본 `--import`가 종료 시 접근 위반으로 실패했습니다.
 `--frame-delay 1000`으로 첫 import의 정상 종료를 확인했으며, 엔진 자체를 수정한 것은 아닙니다.
