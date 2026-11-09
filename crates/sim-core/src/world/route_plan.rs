@@ -969,6 +969,71 @@ mod tests {
         assert!(result.remaining_m < 12.5, "{result:?}");
     }
 
+    /// 4-6 자동 주행 회귀: 저장된 여수 스냅샷에서 고정한 점 쌍 4개로 경로를 계획하면 지나는 교차로와 길이가
+    /// 기록과 같고, 경로 끝 목표가 있으며, 경로 추종 조향기가 굽은 길·교차로를 지나 충돌 없이 끝 부근까지 가는지 확인한다.
+    /// 경로·코스 생성이나 운동 모델·충돌 판정이 바뀌면 여기서 드러난다. 사람의 주행 확인을 대신하지 않는다.
+    #[test]
+    fn fixed_yeosu_routes_drive_to_goal() {
+        let ways = real_snapshot();
+        let config = RoadGraphConfig::default();
+        /// (찍은 두 점, 기록한 경로 길이 m, 지나는 교차로 노드).
+        type FixedRoute = ([[f64; 2]; 2], f64, &'static [u64]);
+        let cases: [FixedRoute; 4] = [
+            (
+                [[34.749_661_4, 127.748_854_7], [34.751_844_2, 127.750_709_2]],
+                972.0,
+                &[
+                    5_143_354_386,
+                    5_239_572_002,
+                    5_143_358_070,
+                    5_143_358_064,
+                    5_167_348_575,
+                    1_784_623_475,
+                    11_250_563_544,
+                ],
+            ),
+            (
+                [[34.747_886, 127.746_555_2], [34.754_151_8, 127.752_092_5]],
+                863.0,
+                &[
+                    5_239_572_765,
+                    5_167_348_577,
+                    5_178_188_925,
+                    5_143_354_386,
+                    5_239_572_002,
+                    5_143_358_070,
+                    5_143_358_064,
+                    5_167_348_575,
+                ],
+            ),
+            (
+                [[34.749_896_1, 127.745_697_9], [34.752_479_9, 127.748_534]],
+                433.0,
+                &[5_528_563_752, 5_528_563_751, 5_143_358_021, 1_784_623_428],
+            ),
+            (
+                [[34.752_391_2, 127.746_953_7], [34.748_973_2, 127.750_058_2]],
+                603.0,
+                &[5_143_358_021, 5_143_358_070, 5_239_572_002, 5_143_354_386],
+            ),
+        ];
+        for (points, length_m, junctions) in cases {
+            let planned = plan_route_detailed(&ways, None, "snapshot", &points, &config)
+                .unwrap_or_else(|e| panic!("{points:?}: {e}"));
+            assert_eq!(planned.course.junctions, junctions, "{points:?}");
+            assert!(
+                (planned.length_m - length_m).abs() < 1.0,
+                "{points:?}: {}",
+                planned.length_m
+            );
+            assert!(planned.course.course.goal.is_some(), "{points:?}");
+            let result = follow_path(&planned.course.course, &planned.course.guide, 4.0);
+            assert_eq!(result.impacts, 0, "{points:?}: {result:?}");
+            assert!(result.remaining_m < 12.5, "{points:?}: {result:?}");
+            assert!(result.max_offset_m < 1.2, "{points:?}: {result:?}");
+        }
+    }
+
     /// 노드 ID가 없는 스냅샷(`out geom`)을 가리키는 경로 파일은 거부한다.
     #[test]
     fn snapshot_without_node_ids_is_rejected() {
