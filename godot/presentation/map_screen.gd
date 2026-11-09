@@ -14,12 +14,15 @@ var tiles: Object
 var active_request := 0
 var feedback := ""
 var textures: Dictionary = {}
-var texture_order: Array[String] = []
+## 타일 표시 프레임 번호. 텍스처마다 마지막으로 화면에 보인 번호를 기록해 오래된 것부터 버린다.
+var tile_frame := 0
 var receive := Button.new()
 var save_button := Button.new()
 var route_name := LineEdit.new()
 var overwrite := CheckBox.new()
 var snapshot_dialog := FileDialog.new()
+## Godot 쪽 지도 텍스처 보관 상한(계약 7-3 권장값).
+const MAX_TEXTURES := 512
 
 ## 전국 범위를 담을 배율로 시작하고 출처 및 비활성 기능을 표시한다.
 func _ready() -> void:
@@ -30,9 +33,10 @@ func _ready() -> void:
 	get_viewport().size_changed.connect(queue_redraw)
 	var canvas := CanvasLayer.new()
 	add_child(canvas)
-	status.position = Vector2(24, 84)
+	status.position = Vector2(24, 152)
 	status.text = "지도 미리보기 · Rust 지도 서비스 미연결\n우클릭 끌기: 이동 / 휠: 확대·축소\n지역 받기·점 편집·경로 계산·저장은 연결 대기 중입니다.\n회색 칸은 실제 지도 타일이 아닙니다."
 	canvas.add_child(status)
+	_services(canvas)
 	var attribution := LinkButton.new()
 	attribution.text = "© OpenStreetMap contributors"
 	attribution.uri = "https://www.openstreetmap.org/copyright"
@@ -112,7 +116,8 @@ func _draw() -> void:
 		draw_polyline(route_line, Color("58c4ef"), 4.0 / scale_m, true)
 	for i in range(points.size()):
 		draw_circle(points[i], 6.0 / scale_m, Color("f3bf63") if i == 0 else Color("9ee5c2"))
-## v1 서비스 호출과 화면 상태를 처리한다.
+
+## Rust 지도 서비스(SimRoutePicker·SimTiles)를 만들고 받기·편집·저장·맞춤 보기 버튼을 화면에 붙인다. 헤드리스·--offline이면 네트워크를 끈다.
 func _services(canvas: CanvasLayer) -> void:
 	var offline := DisplayServer.get_name() == "headless" or "--offline" in OS.get_cmdline_user_args()
 	if ClassDB.class_exists("SimRoutePicker"):
@@ -122,7 +127,7 @@ func _services(canvas: CanvasLayer) -> void:
 		tiles = ClassDB.instantiate("SimTiles")
 		tiles.set("offline", offline)
 	var controls := HBoxContainer.new()
-	controls.position = Vector2(24, 220)
+	controls.position = Vector2(24, 64)
 	canvas.add_child(controls)
 	receive.text = "이 지역 도로 받기"
 	receive.pressed.connect(_request_region)
@@ -148,7 +153,7 @@ func _services(canvas: CanvasLayer) -> void:
 	save_button.pressed.connect(_save_route)
 	controls.add_child(save_button)
 	var navigation := HBoxContainer.new()
-	navigation.position = Vector2(24, 264)
+	navigation.position = Vector2(24, 108)
 	canvas.add_child(navigation)
 	for item in [["전체 지도", _fit_country], ["선택 지역", _fit_region], ["경로", _fit_route], ["스냅샷 열기", _open_snapshot]]:
 		var button := Button.new()
@@ -163,7 +168,7 @@ func _services(canvas: CanvasLayer) -> void:
 	for button in [cancel, undo, clear]:
 		button.disabled = picker == null
 
-## v1 서비스 호출과 화면 상태를 처리한다.
+## 화면 가운데 위경도로 지역 도로 받기를 요청하고 요청 번호를 기억한다. 받는 중이거나 좌표가 무효면 하지 않는다.
 func _request_region() -> void:
 	if picker == null or active_request != 0:
 		return
@@ -175,38 +180,38 @@ func _request_region() -> void:
 	if result.get("ok", false):
 		active_request = int(result.request_id)
 
-## v1 서비스 호출과 화면 상태를 처리한다.
+## 받는 중인 지역 요청을 취소하고 그 결과를 더 기다리지 않는다.
 func _cancel_region() -> void:
 	if picker != null:
 		picker.call("cancel_region")
 	active_request = 0
 	feedback = "지역 받기를 취소했습니다."
 
-## v1 서비스 호출과 화면 상태를 처리한다.
+## 마지막으로 찍은 점을 지우고 도로·경로 표시를 다시 받는다.
 func _remove_last() -> void:
 	if picker != null:
 		picker.call("remove_last")
 		_refresh_route()
 
-## v1 서비스 호출과 화면 상태를 처리한다.
+## 찍은 점을 모두 지우고 표시를 다시 받는다.
 func _clear_points() -> void:
 	if picker != null:
 		picker.call("clear_points")
 		_refresh_route()
 
-## v1 서비스 호출과 화면 상태를 처리한다.
+## 입력한 이름과 덮어쓰기 선택으로 경로를 저장하고 결과(경로 또는 오류)를 안내에 남긴다.
 func _save_route() -> void:
 	if picker == null:
 		return
 	var result: Dictionary = picker.call("save", route_name.text, overwrite.button_pressed)
 	feedback = "저장: " + str(result.path) if result.get("ok", false) else str(result.error)
 
-## v1 서비스 호출과 화면 상태를 처리한다.
+## Rust에서 도로 선분·사용 가능 여부·점·경로선을 받아 그리기 자료를 바꾼다.
 func _refresh_route() -> void:
 	var result: Dictionary = picker.call("route")
 	display_geometry(picker.call("road_segments"), picker.call("road_usable"), picker.call("points"), result.line)
 
-## v1 서비스 호출과 화면 상태를 처리한다.
+## 매 프레임 받기 이벤트를 처리하고 버튼 상태·안내를 갱신하며 배경 타일을 요청한다.
 func _process(_delta: float) -> void:
 	if picker != null:
 		for event in picker.call("poll"):
@@ -216,6 +221,8 @@ func _process(_delta: float) -> void:
 			if event.type in ["region_loaded", "failed"]:
 				active_request = 0
 				_refresh_route()
+				if event.type == "region_loaded":
+					_fit_region()
 		var latlon: PackedFloat64Array = picker.call("view_to_latlon", camera.position)
 		receive.disabled = active_request != 0 or latlon.size() != 2
 		var result: Dictionary = picker.call("route")
@@ -228,7 +235,7 @@ func _process(_delta: float) -> void:
 		_update_tiles()
 	queue_redraw()
 
-## v1 서비스 호출과 화면 상태를 처리한다.
+## 보이는 범위의 타일을 요청하고 받은 PNG를 텍스처로 만든다. 디코딩 실패는 report_bad로 알린다.
 func _update_tiles() -> void:
 	var span := get_viewport_rect().size / camera.zoom.x
 	var visible := Rect2(camera.position - span * 0.5, span)
@@ -242,26 +249,21 @@ func _update_tiles() -> void:
 			tiles.call("report_bad", tile.x, tile.y, tile.z)
 			continue
 		var key := "%d/%d/%d" % [tile.z, tile.x, tile.y]
-		textures[key] = {"texture": ImageTexture.create_from_image(image), "rect": tile.rect, "x": tile.x, "y": tile.y, "z": tile.z}
-		texture_order.erase(key)
-		texture_order.append(key)
-	for key in textures:
-		if visible.intersects(textures[key].rect):
-			texture_order.erase(key)
-			texture_order.append(key)
-	while texture_order.size() > 512:
-		var key: String = texture_order.pop_front()
-		var tile: Dictionary = textures[key]
-		tiles.call("forget_displayed", tile.x, tile.y, tile.z)
-		textures.erase(key)
+		textures[key] = {"texture": ImageTexture.create_from_image(image), "rect": tile.rect, "x": tile.x, "y": tile.y, "z": tile.z, "seen": tile_frame}
+	tile_frame += 1
 	tile_layers = []
 	for tile in textures.values():
 		if visible.intersects(tile.rect):
+			tile.seen = tile_frame
 			tile_layers.append(tile)
+	# 낮은 확대 수준부터 그려 더 자세한 타일이 위에 오게 한다.
+	tile_layers.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return a.z < b.z)
+	if textures.size() > MAX_TEXTURES:
+		_evict_textures()
 	if int(tiles.call("paused_until_s")) > int(Time.get_unix_time_from_system()):
 		status.text += "\n지도 서버 요청 일시 중지"
 
-## v1 서비스 호출과 화면 상태를 처리한다.
+## 화면을 떠날 때 지역 받기를 취소하고 서비스 객체와 텍스처를 놓는다.
 func _exit_tree() -> void:
 	if picker != null:
 		picker.call("cancel_region")
@@ -269,19 +271,18 @@ func _exit_tree() -> void:
 	tiles = null
 	textures.clear()
 	tile_layers.clear()
-	texture_order.clear()
 
-## v1 서비스 호출과 화면 상태를 처리한다.
+## 전국이 보이는 처음 위치·배율로 돌아간다.
 func _fit_country() -> void:
 	camera.position = Vector2.ZERO
 	camera.zoom = Vector2.ONE * 0.001
 
-## v1 서비스 호출과 화면 상태를 처리한다.
+## 지금 열린 지역 범위가 화면에 들어오게 맞춘다.
 func _fit_region() -> void:
 	if picker != null:
 		_fit_rect(picker.call("loaded_region"))
 
-## v1 서비스 호출과 화면 상태를 처리한다.
+## 계산된 경로선이 25 m 여백과 함께 화면에 들어오게 맞춘다.
 func _fit_route() -> void:
 	if route_line.is_empty():
 		return
@@ -290,7 +291,7 @@ func _fit_route() -> void:
 		bounds = bounds.expand(point)
 	_fit_rect(bounds.grow(25.0))
 
-## v1 서비스 호출과 화면 상태를 처리한다.
+## 주어진 지도 범위가 버튼 영역을 뺀 화면에 들어오도록 배율과 가운데를 정한다.
 func _fit_rect(bounds: Rect2) -> void:
 	if bounds.size.x <= 0.0 or bounds.size.y <= 0.0:
 		return
@@ -301,12 +302,12 @@ func _fit_rect(bounds: Rect2) -> void:
 	camera.zoom = Vector2.ONE * zoom_value
 	camera.position = bounds.get_center() - Vector2(0, 150.0 / zoom_value)
 
-## v1 서비스 호출과 화면 상태를 처리한다.
+## 로컬 스냅샷(graph*.osm.json) 파일 선택 창을 연다. 받는 중에는 열지 않는다.
 func _open_snapshot() -> void:
 	if picker != null and active_request == 0:
 		snapshot_dialog.popup_centered_ratio(0.75)
 
-## v1 서비스 호출과 화면 상태를 처리한다.
+## 고른 스냅샷을 열고 성공하면 표시를 갱신해 그 지역에 맞춘다.
 func _load_snapshot(path: String) -> void:
 	if picker == null or active_request != 0:
 		return
@@ -315,3 +316,16 @@ func _load_snapshot(path: String) -> void:
 	if result.get("ok", false):
 		_refresh_route()
 		_fit_region()
+
+## 텍스처가 상한을 넘으면 이번 프레임에 보이지 않은 것 중 가장 오래 안 보인 것부터 버리고 Rust에 재전달을 허용한다.
+func _evict_textures() -> void:
+	var hidden: Array = []
+	for key in textures:
+		if textures[key].seen != tile_frame:
+			hidden.append([textures[key].seen, key])
+	hidden.sort()
+	var extra := textures.size() - MAX_TEXTURES
+	for item in hidden.slice(0, extra):
+		var tile: Dictionary = textures[item[1]]
+		tiles.call("forget_displayed", tile.x, tile.y, tile.z)
+		textures.erase(item[1])

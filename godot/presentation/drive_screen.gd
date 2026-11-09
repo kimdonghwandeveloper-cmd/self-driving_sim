@@ -136,6 +136,8 @@ func _unhandled_key_input(event: InputEvent) -> void:
 
 ## 코스 실패 후 주행을 멈추고 오류만 표시한다.
 func _fail(message: String) -> void:
+	if message.is_empty():
+		message = "차량을 준비하지 못했습니다(사유 없음)."
 	failure = message
 	if is_instance_valid(vehicle):
 		vehicle.set_physics_process(false)
