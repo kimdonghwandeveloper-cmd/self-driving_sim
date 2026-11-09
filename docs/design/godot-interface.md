@@ -10,6 +10,7 @@ Godot에 노출할 클래스·메서드·시그널·좌표 규칙·실패 처리
 | v0.1 | 사용자 지시 반영: 시나리오 A·여수 경로 제외, 경로 선택·지도 화면 추가(7절). 재생 시험의 틱 안 적용 순서(5절), 코스·설정 실패 처리(6절) 명확화 |
 | v0.2 제안 | Codex 검토 질문 1~9에 대한 Claude 답변(부록 A) |
 | v1 | Codex 동의(부록 A)에 따라 v0.2를 1~7절 본문에 옮김. Codex 추가 요청 `view_to_latlon`, `forget_displayed` 채택(부록 A 끝). 본문 옮김이 합의와 다르면 Codex가 부록 A에 적고 고친다 |
+| v1.1 | 구현 중 정한 세부(이름·인자 변경 없음): 장치 기어 충돌 결과 이름 `gear_conflict`, 재생 드라이버 시작 시점(`ready` 시그널 뒤), `load_snapshot` 경로 형식, 좌우 수식 키 구분 없음, 장치 중립 대기 범위 |
 
 변경 규칙:
 
@@ -98,6 +99,7 @@ Godot 쪽은 이 노드의 **자식**으로 차체 메시·실내·카메라를 
 | — | `course_failed` | `error: String` | 6절 코스 실패·패닉. `_ready` 중 또는 패닉 난 틱에 1번(연결이 늦을 수 있으니 `is_ready()`도 확인) |
 
 - `source`는 `"api"`(`send_command`) 또는 `"device"`(키보드·게임패드). `reset_course`도 같은 규칙을 따른다.
+- (v1.1) 장치에서 서로 다른 기어를 동시에 누르면 `command_rejected("gear_conflict", "device", "simultaneous gear keys (R+D)")`다. `send_command` 이름 목록에는 없다.
 - 같은 틱에 D → R → D처럼 바뀌었다가 돌아오면 상태 시그널은 보내지 않는다(명령 결과 시그널은 모두 보낸다).
 
 ### 카메라 설정
@@ -169,6 +171,9 @@ Rect = { "center": Vector3, "size": Vector2(폭 x, 길이 z), "heading_rad": flo
    `src/input/merge.rs`·`keyboard::command_requests` 규칙을 그대로 쓴다. 이 순수 규칙은 Claude가 `sim-core`로 옮겨 두 판이 같은 코드를 쓴다.
    - 시점·디버그 카메라 키는 여기서 처리하고 주행 계산에 영향을 주지 않는다.
    - `read_input`이 바뀐 첫 틱: 수동 입력 래치를 0으로, 장치 눌림 이력을 비우고, 장치는 **입력이 중립이 된 뒤** 다시 받는다.
+   - (v1.1) 중립 대기는 키보드와 게임패드 모두에 적용한다(주행 입력·단발 명령만, 비상 정지는 대기 중에도 받는다). 시점·디버그 카메라 키는 대기하지 않는다.
+   - (v1.1) 키 이름 `ShiftLeft`/`ShiftRight`, `ControlLeft`/`ControlRight`, `AltLeft`/`AltRight`는 Godot `Key`에서 좌우가 구분되지 않아 같은 키로 본다.
+     좌우를 서로 다른 동작에 쓰면 Godot 판에서만 중복 할당 오류로 키보드 기본 매핑을 쓴다.
    - **신규:** 창 포커스를 잃으면(`NOTIFICATION_APPLICATION_FOCUS_OUT`) 다시 얻을 때까지 장치 연속 입력을 0으로 보고 눌림 이력을 비운다. 시동·기어는 바꾸지 않는다.
 3. **명령 처리:** `send_command` 대기열 명령을 **들어온 순서대로** 먼저, 그다음 2단계 장치 명령을 처리한다.
    각 명령은 이번 틱 시작 시점의 속도로 상태 머신이 판정하고, 결과를 8단계에서 보낼 목록에 적는다. 처리한 명령은 대기열에서 지운다.
@@ -223,6 +228,8 @@ Rect = { "center": Vector3, "size": Vector2(폭 x, 길이 z), "heading_rad": flo
   같은 형식의 표본을 만든 뒤 `SimReplay.run` 결과와 비교한다.
   - 드라이버는 노드 순서·대기 시간에 기대지 않는다. `tick_finished`에서 (a) 항목이 끝났으면 표본을 읽고 (b) 다음 항목의 명령·입력을 넣는다.
     따라서 항목 k의 첫 틱은 항목 k-1의 마지막 틱 바로 다음 틱이다. 첫 항목은 `_ready` 직후(틱 0, 첫 `tick_finished` 전)에 넣는다.
+  - (v1.1) "`_ready` 직후"는 차량 노드의 `ready` 시그널(또는 `is_ready() == true` 확인) 뒤다. `SceneTree._init`에서 `add_child` 직후에는 아직 `_ready`가 돌지 않아
+    `send_command`가 `false`를 돌려준다(6절 "실패 상태에서 send_command"와 같은 규칙).
   - `rejected`는 `command_rejected` 중 `source == "api"`인 것으로 모은다.
   - 허용 오차는 위치 1e-4 m, heading 1e-5 rad, 속도 1e-4 m/s로 시작한다
     (같은 Rust 함수를 같은 순서로 부르므로 원칙적으로 같아야 한다. 다르면 틱 수·순서 오류로 본다).
@@ -266,7 +273,7 @@ Bevy 판 `src/picker/`(4-5·4-5b)의 계산·캐시·받기 부분은 Bevy와 �
 | 함수·속성 | 반환 | 설명 |
 | --- | --- | --- |
 | `network: bool` (속성) | — | 기본 `true`. `false`면 캐시만 쓰고, 캐시에 없으면 `failed` 이벤트. 헤드리스 시험은 `false` |
-| `load_snapshot(path: String)` | `{ok, error}` | 스냅샷(지역 도로) 열기. 실패 시 이전 상태 유지 |
+| `load_snapshot(path: String)` | `{ok, error}` | 스냅샷(지역 도로) 열기. 실패 시 이전 상태 유지. (v1.1) `path`는 스냅샷 **폴더** 또는 그 안의 `graph.osm.json` 파일 경로 둘 다 받는다(같은 폴더의 meta·`connectivity.json`을 함께 읽는다) |
 | `cached_regions()` | `Array[Rect2]` | **디스크 캐시**에 있는 지역 범위(Bevy `cached_regions(map_fetch::CACHE_DIR)`), 지도 좌표 |
 | `loaded_region()` | `Rect2` | 지금 열린 지역 범위. 없으면 크기 0 |
 | `view_to_latlon(view: Vector2)` | `PackedFloat64Array` | 지도 좌표를 `[lat, lon]`으로. Bevy 판 투영(`tiles::to_view`)의 역변환. 값이 유한하지 않거나 메르카토르 유효 위도(±85.05112878°) 밖이면 **빈 배열**(Godot은 받기 버튼을 끈다) |
