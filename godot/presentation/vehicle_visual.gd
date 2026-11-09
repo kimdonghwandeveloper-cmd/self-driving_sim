@@ -2,10 +2,19 @@ extends Node3D
 ## 사진 기준 Bevy 최소 실내를 단순 도형으로 옮긴다. 모든 치수는 미확인 임시값이다.
 
 const Meshes = preload("res://presentation/course_mesh.gd")
+## 사용자 제작 셔틀 외관(임시). 충돌 차체(폭 1.8 m, 길이 4.2 m)와 크기가 달라 외관 표시에만 쓴다.
+const SHUTTLE_PATH := "res://assets/vehicle/autonomous_shuttle_topology_v4.glb"
+## 모델은 Z축 위·앞쪽 -Y로 저장돼 있어 차량 로컬(+Y 위, -Z 앞)로 돌린다: X = -x, Y = z, Z = y.
+const SHUTTLE_ROTATION_DEG := Vector3(-90, 180, 0)
+## 모델 원점은 두 차축 가운데(축간 2.54 m)라 뒷바퀴 축이 차량 원점에 오도록 앞으로 1.27 m 옮긴다.
+const SHUTTLE_OFFSET := Vector3(0, 0, -1.27)
+## 외부 카메라만 보는 외관 시각 레이어.
+const EXTERIOR_LAYER := 2
 
 ## 후륜축 원점에 외부 차체와 최소 실내를 조립한다.
 func _ready() -> void:
-	_box(self, Vector3(1.8, 2.2, 4.2), Vector3(0, 1.1, -1.4), Color("c9cbd0"), 2)
+	if not _add_shuttle():
+		_box(self, Vector3(1.8, 2.2, 4.2), Vector3(0, 1.1, -1.4), Color("c9cbd0"), EXTERIOR_LAYER)
 	_box(self, Vector3(1.7, 0.05, 4.1), Vector3(0, 0.325, -1.4), Color("202123"))
 	for side in [-1.0, 1.0]:
 		_box(self, Vector3(0.05, 0.8, 4.1), Vector3(side * 0.875, 0.75, -1.4), Color("4c4c4f"))
@@ -15,6 +24,31 @@ func _ready() -> void:
 		end.rotation.y = yaw
 		add_child(end)
 		_window_end(end)
+
+## 셔틀 모델이 있으면 외관 레이어에 붙이고 `true`를 돌려준다. 파일이 없거나 읽지 못하면 `false`(상자 외관을 쓴다).
+func _add_shuttle() -> bool:
+	if not ResourceLoader.exists(SHUTTLE_PATH):
+		return false
+	var scene := load(SHUTTLE_PATH) as PackedScene
+	if scene == null:
+		push_warning("셔틀 외관을 읽지 못해 상자 외관을 씁니다: " + SHUTTLE_PATH)
+		return false
+	var model := scene.instantiate() as Node3D
+	model.name = "ShuttleExterior"
+	model.rotation_degrees = SHUTTLE_ROTATION_DEG
+	model.position = SHUTTLE_OFFSET
+	add_child(model)
+	_to_exterior_layer(model)
+	return true
+
+## 모델 안의 모든 표시 노드를 외관 레이어로 옮기고 그림자를 끈다(입석 카메라에 보이지 않게).
+func _to_exterior_layer(node: Node) -> void:
+	if node is VisualInstance3D:
+		node.layers = EXTERIOR_LAYER
+	if node is GeometryInstance3D:
+		node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	for child in node.get_children():
+		_to_exterior_layer(child)
 
 ## 창 아래 선반·끝벽·기운 기둥·원형 개구부를 한쪽 끝에 배치한다.
 func _window_end(parent: Node3D) -> void:
@@ -42,7 +76,7 @@ func _box(parent: Node3D, size: Vector3, center: Vector3, color: Color, layer: i
 	node.mesh = box
 	node.position = center
 	node.layers = layer
-	if layer == 2:
+	if layer == EXTERIOR_LAYER:
 		node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	node.material_override = Meshes.material(color)
 	parent.add_child(node)
