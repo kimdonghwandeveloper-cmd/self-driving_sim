@@ -255,4 +255,86 @@ mod tests {
                 .starts_with("entries[0].steering")
         );
     }
+
+    /// `godot/tests/drive_replay_test.gd`와 같은 입력 열.
+    fn godot_test_entries() -> Vec<ReplayEntry> {
+        let input = |ticks, command: Option<&str>, throttle, brake, steering| ReplayEntry {
+            ticks,
+            command: command.map(str::to_owned),
+            throttle,
+            brake,
+            steering,
+        };
+        vec![
+            command(64, "engine_toggle"),
+            command(1, "gear_drive"),
+            input(320, None, Some(0.5), Some(0.0), Some(0.2)),
+            input(64, Some("gear_reverse"), Some(0.3), None, Some(-0.4)),
+            input(192, None, Some(0.0), Some(1.0), Some(0.0)),
+            command(1, "gear_park"),
+            input(64, Some("reset_course"), None, Some(0.0), None),
+        ]
+    }
+
+    /// Godot 재생 시험과 같은 열의 기대 표본을 고정해 운동 모델·상태 머신 회귀를 잡는다(계약 5-3).
+    /// 값은 2026-11-10 현재 기본 설정으로 재생한 결과다. 동역학을 일부러 바꿨다면 다시 뽑아 고친다.
+    #[test]
+    fn godot_test_entries_match_pinned_samples() {
+        // (틱, x, z, heading, 속도, 기어, 거부 명령)
+        type Pinned = (u64, f32, f32, f32, f32, Gear, &'static [&'static str]);
+        let pinned: [Pinned; 7] = [
+            (64, 0.0, 0.0, 0.0, 0.0, Gear::Park, &[]),
+            (65, 0.0, 0.0, 0.0, 0.0, Gear::Drive, &[]),
+            (
+                385,
+                0.368_786,
+                -4.411_375,
+                -0.166_052_1,
+                1.763_104_1,
+                Gear::Drive,
+                &[],
+            ),
+            (
+                449,
+                0.591_883_5,
+                -6.236_104,
+                -0.055_700_064,
+                1.913_594_1,
+                Gear::Drive,
+                &["gear_reverse"],
+            ),
+            (
+                641,
+                0.616_744_8,
+                -6.775_709_6,
+                -0.044_084_787,
+                0.0,
+                Gear::Drive,
+                &[],
+            ),
+            (
+                642,
+                0.616_744_8,
+                -6.775_709_6,
+                -0.044_084_787,
+                0.0,
+                Gear::Park,
+                &[],
+            ),
+            (706, 0.0, 0.0, 0.0, 0.0, Gear::Park, &[]),
+        ];
+        let samples = run(session(), &godot_test_entries()).unwrap();
+        assert_eq!(samples.len(), pinned.len());
+        for (sample, (tick, x, z, heading, speed, gear, rejected)) in samples.iter().zip(pinned) {
+            assert_eq!(sample.tick, tick);
+            assert!(
+                (sample.x_m - x).abs() < 1e-4 && (sample.z_m - z).abs() < 1e-4,
+                "{sample:?}"
+            );
+            assert!((sample.heading_rad - heading).abs() < 1e-5, "{sample:?}");
+            assert!((sample.speed_mps - speed).abs() < 1e-4, "{sample:?}");
+            assert_eq!(sample.gear, gear);
+            assert_eq!(sample.rejected, rejected);
+        }
+    }
 }

@@ -235,6 +235,8 @@ Rect = { "center": Vector3, "size": Vector2(폭 x, 길이 z), "heading_rad": flo
     (같은 Rust 함수를 같은 순서로 부르므로 원칙적으로 같아야 한다. 다르면 틱 수·순서 오류로 본다).
   - 헤드리스 실행은 `--headless --fixed-fps 64`로 한다. 실패하면 첫 불일치 표본을 출력하고 exit 1.
 - Rust 쪽은 같은 열의 기대 표본을 `sim-core` 테스트로 고정해, Bevy 판 운동 모델 회귀도 함께 잡는다.
+- 구현(2026-11-10, Codex 사용량 한도로 Claude가 작성): `godot/tests/drive_replay_test.gd`(7개 항목: 시동·D·가속 조향·주행 중 R 거부·제동·P·리셋)와
+  `sim-core` `session::replay::tests::godot_test_entries_match_pinned_samples`(같은 열의 기대 표본 고정).
 
 ## 6. 실패 처리
 
