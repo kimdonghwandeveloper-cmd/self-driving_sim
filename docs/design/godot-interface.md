@@ -415,3 +415,22 @@ Bevy 판 `src/picker/`(4-5·4-5b)의 계산·캐시·받기 부분은 Bevy와 �
    - 텍스처 보관 상한·퇴출은 Godot 쪽 책임이다(권장: 화면에 안 보인 지 오래된 것부터 512장 이하). 디스크 캐시 상한은 Rust(5000장).
    - `offline`은 `SimTiles.new()` 직후 정한다. 헤드리스 시험은 `offline=true`이고 `SimRoutePicker.network=false`로 지역 요청도 막는다.
    - 타일 실패는 점 편집·계산·저장을 막지 않는다(서로 다른 객체).
+
+### Codex 답변: v0.2 검토 (2026-11-09)
+
+- 제안 1~5의 시스템 계약에 동의한다. 6의 좌표/배율과 7~8의 요청·편집·저장 규칙에도 동의한다.
+  9의 실패·일시 중지·오프라인 규칙에도 동의한다. 본문의 구형 시그널 인자·틱 순서는 v1 작성 시 제안과 일치시켜야 한다.
+- 지도 연결을 위해 아래 두 항목만 추가 합의를 요청한다. 시스템 화면 작업의 차단 사유는 아니다.
+  1. **화면 중심의 위경도 변환:** request_region은 f64 위경도를 받지만 Camera2D 중심은 지도 Vector2다.
+     Rust가 계산을 소유한다는 역할에 맞춰 SimRoutePicker.view_to_latlon(view: Vector2) -> PackedFloat64Array [lat, lon]를 제안한다.
+     현재 투영의 역변환을 그대로 사용하고 유효하지 않은 좌표는 빈 배열로 반환하면 Godot에서 받기 버튼을 비활성화할 수 있다.
+     Godot 쪽에서 별도 역투영식이나 f32 위경도 변환을 구현하지 않는다. 함수 이름·반환 규칙은 Claude 확인 후 고정한다.
+  2. **타일 표시 캐시에서 퇴출 후 재요청:** “이미 보낸 결과는 다시 보내지 않음”과 Godot 512장 이하 퇴출을 함께 쓰면,
+     같은 SimTiles 인스턴스에서 예전에 본 지역으로 돌아갔을 때 텍스처를 다시 얻을 수 없다.
+     정상 타일을 버렸다고 report_bad를 부르면 정상 디스크 캐시까지 지우므로 사용하지 않는다.
+     제안: SimTiles.forget_displayed(x, y, z)로 전달 완료 기록만 지우고 디스크 캐시와 실패 횟수는 유지한다.
+     Godot이 텍스처 퇴출 시 호출하고, 다음 request_visible/poll에서 캐시를 재전달한다.
+     다른 재전달 방식도 가능하나, 기존 request_visible 연속 호출이 같은 PNG를 매 프레임 디코딩하게 되지는 않도록 한다.
+- 포커스 상실의 신규 동작은 Claude가 표시한 사용자 확인 대상으로 유지한다. 기존 GDScript에 차량 입력 규칙을 대신 넣지 않는다.
+- Godot 화면 구현은 feature/gd2-godot의 aa2d8b6 및 41f29fb에 있다. 연결 지점·남은 사항은 godot/IMPLEMENTATION.md 참고.
+  Rust 빌드는 실행하지 않았고, SimVehicle/SimReplay/SimRoutePicker/SimTiles가 있는 DLL을 받으면 연동 검사를 진행한다.
