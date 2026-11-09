@@ -326,7 +326,17 @@ cargo.exe build --locked -p sim-godot
 & '<Godot 콘솔 실행 파일>' --headless --path godot --script res://tests/smoke_test.gd
 & '<Godot 콘솔 실행 파일>' --headless --path godot --script res://tests/presentation_smoke.gd
 & '<Godot 콘솔 실행 파일>' --headless --fixed-fps 64 --path godot --script res://tests/drive_replay_test.gd
+& '<Godot 콘솔 실행 파일>' --headless --fixed-fps 64 --path godot --script res://tests/map_course_test.gd
 ```
+
+`map_course_test.gd`는 저장소의 여수 경로 코스(`map:assets/maps/yeosu-expo/route-junctions.toml`)를 Godot에서 만들고 몇 초 주행합니다(GD-3).
+프레임 시간은 실제 창에서 잽니다(헤드리스 아님, 측정만 하고 실패로 끝내지 않음).
+
+```powershell
+& '<Godot 콘솔 실행 파일>' --path godot --resolution 1280x720 --script res://tests/frame_time_probe.gd -- --seconds=15
+```
+
+Godot 메인 메뉴의 코스 목록에서 개발 코스, 저장소 지도 코스, 경로 선택 화면이 저장한 경로(`cache/routes`)를 고를 수 있습니다.
 
 `drive_replay_test.gd`는 정해진 입력 열을 `SimVehicle`의 실제 물리 틱으로 재생한 위치·속도·기어가
 Rust 단독 재생(`SimReplay.run`)과 같은지 비교합니다(GD-2). 같은 열의 기대 표본은 `sim-core` 시험에도 고정되어 있습니다.

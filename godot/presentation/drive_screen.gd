@@ -5,6 +5,8 @@ const Preview = preload("res://preview/vehicle_preview.gd")
 const CourseMesh = preload("res://presentation/course_mesh.gd")
 const Visual = preload("res://presentation/vehicle_visual.gd")
 const Rig = preload("res://presentation/camera_rig.gd")
+## 코스 범위 밖으로 바닥을 더 까는 여백(m).
+const GROUND_MARGIN_M := 300.0
 var vehicle: Node3D
 var rig: Node3D
 var hud := Label.new()
@@ -16,6 +18,8 @@ var dismiss := Button.new()
 var scene_content: Node3D
 var command_notice := ""
 var command_notice_until := 0
+## 코스 둘레 바닥. 코스 범위를 안 뒤 크기를 맞춘다.
+var ground := MeshInstance3D.new()
 
 ## 전달받은 코스로 화면을 만들고 실패 시 메시를 생성하지 않는다.
 func start(course_name: String, force_preview: bool = false) -> void:
@@ -37,6 +41,7 @@ func start(course_name: String, force_preview: bool = false) -> void:
 	var course_mesh := CourseMesh.new()
 	scene_content.add_child(course_mesh)
 	course_mesh.build(data)
+	_fit_ground(CourseMesh.ground_bounds(data))
 	vehicle.add_child(Visual.new())
 	rig = Rig.new()
 	vehicle.add_child(rig)
@@ -54,34 +59,60 @@ func start(course_name: String, force_preview: bool = false) -> void:
 	if is_preview:
 		notice.text += "\n정지 미리보기 · 1 전방 / 2 후방 / 3 좌측 / 4 우측 / C 외부"
 
-## 하늘·주광·보조광과 넓은 바닥을 만든다.
+## 절차 생성 하늘·태양광(그림자)·보조광·옅은 안개와 바닥을 만든다. 외부 애셋은 쓰지 않는다.
 func _environment() -> void:
+	var sky_material := ProceduralSkyMaterial.new()
+	sky_material.sky_top_color = Color("5d8fc4")
+	sky_material.sky_horizon_color = Color("c3d5e2")
+	sky_material.ground_bottom_color = Color("6b6f6a")
+	sky_material.ground_horizon_color = Color("b9c3b5")
+	sky_material.sun_angle_max = 20.0
+	var sky := Sky.new()
+	sky.sky_material = sky_material
 	var environment := Environment.new()
-	environment.background_mode = Environment.BG_COLOR
-	environment.background_color = Color("a7c3d5")
-	environment.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-	environment.ambient_light_color = Color("d8e1ea")
-	environment.ambient_light_energy = 0.3
+	environment.background_mode = Environment.BG_SKY
+	environment.sky = sky
+	environment.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
+	environment.ambient_light_energy = 0.45
+	if RenderingServer.get_current_rendering_method() == "gl_compatibility":
+		# Compatibility 렌더러는 하늘 주변광·태양광이 과하게 밝게 나와 이전 단색 주변광 값과 약한 태양광을 쓴다.
+		environment.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
+		environment.ambient_light_color = Color("d8e1ea")
+		environment.ambient_light_energy = 0.3
+	environment.tonemap_mode = Environment.TONE_MAPPER_FILMIC
+	environment.fog_enabled = true
+	environment.fog_light_color = Color("bccbd6")
+	environment.fog_density = 0.0012
+	environment.fog_sky_affect = 0.3
 	var world := WorldEnvironment.new()
 	world.environment = environment
 	add_child(world)
 	var sun := DirectionalLight3D.new()
 	sun.rotation_degrees = Vector3(-55, -35, 0)
-	sun.light_energy = 0.65
+	sun.light_energy = 0.85
+	if RenderingServer.get_current_rendering_method() == "gl_compatibility":
+		sun.light_energy = 0.6
 	sun.shadow_enabled = true
+	sun.directional_shadow_max_distance = 120.0
 	add_child(sun)
 	var fill := DirectionalLight3D.new()
 	fill.rotation_degrees = Vector3(-35, 140, 0)
-	fill.light_energy = 0.15
+	fill.light_energy = 0.12
 	add_child(fill)
-	var ground := MeshInstance3D.new()
-	var plane := PlaneMesh.new()
-	plane.size = Vector2(500, 500)
-	ground.mesh = plane
-	ground.material_override = CourseMesh.material(Color("8c9a7d"))
+	ground.mesh = PlaneMesh.new()
+	ground.material_override = CourseMesh.textured("grass", Color("6f7f5f"), Color("8e9a74"), 12.0)
+	ground.position.y = -0.002
+	_fit_ground(Rect2(Vector2(-250, -250), Vector2(500, 500)))
 	add_child(ground)
 
-## HUDと閉じられる設定警告の表示領域を配置する。
+## 바닥이 코스 범위와 여백을 덮도록 크기·위치를 맞춘다(최소 500 m 사방).
+func _fit_ground(bounds: Rect2) -> void:
+	var size := (bounds.size + Vector2.ONE * GROUND_MARGIN_M * 2.0).max(Vector2(500, 500))
+	(ground.mesh as PlaneMesh).size = size
+	var center := bounds.get_center()
+	ground.position = Vector3(center.x, ground.position.y, center.y)
+
+## HUD와 닫을 수 있는 설정 경고 표시 영역을 배치한다.
 func _ui() -> void:
 	var canvas := CanvasLayer.new()
 	add_child(canvas)
