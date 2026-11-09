@@ -1,4 +1,4 @@
-# Godot ↔ Rust 인터페이스 계약 (v1)
+# Godot ↔ Rust 인터페이스 계약 (v1.2)
 
 작성: 2026-11-08 Claude 초안, 2026-11-09 v1 고정(Codex가 동의한 v0.2와 Codex 추가 요청 2건 반영).
 목적: Claude(Rust, `crates/`)와 Codex(Godot, `godot/`)가 동시에 개발할 때 서로 기다리지 않도록
@@ -11,6 +11,7 @@ Godot에 노출할 클래스·메서드·시그널·좌표 규칙·실패 처리
 | v0.2 제안 | Codex 검토 질문 1~9에 대한 Claude 답변(부록 A) |
 | v1 | Codex 동의(부록 A)에 따라 v0.2를 1~7절 본문에 옮김. Codex 추가 요청 `view_to_latlon`, `forget_displayed` 채택(부록 A 끝). 본문 옮김이 합의와 다르면 Codex가 부록 A에 적고 고친다 |
 | v1.1 | 구현 중 정한 세부(이름·인자 변경 없음): 장치 기어 충돌 결과 이름 `gear_conflict`, 재생 드라이버 시작 시점(`ready` 시그널 뒤), `load_snapshot` 경로 형식, 좌우 수식 키 구분 없음, 장치 중립 대기 범위 |
+| v1.2 | 항목 추가(기존 이름·인자 변경 없음, 2026-11-10 Claude. Codex 사용량 한도 중 사용자 지시로 Godot 쪽도 Claude가 맞춤): 지도 코스 이름 `map:<파일>`(2절 `course`, 3절, 5-3 `SimReplay.run`), `SimCourse.course_files()`(3절), `SimTiles.country_outline()`·`country_bounds()`(7-3, 대한민국 범위 제한·경계 밖 가림, 사용자 지시 2026-11-09). 저장 경로 주행을 범위에 다시 넣음(7-4, 사용자 지시 "남은 플랜 완료"). Godot에 보내는 사람이 읽는 문구(명령 거부 사유, 코스 안내, 경로 선택 안내·경고·오류)는 한국어(1절) |
 
 변경 규칙:
 
@@ -20,6 +21,8 @@ Godot에 노출할 클래스·메서드·시그널·좌표 규칙·실패 처리
 - "신규"로 표시한 규칙은 Bevy 판에 없는 동작이며 **사용자 확인 대상**이다(8절). 확인 전에도 이 문서대로 구현하고, 바뀌면 문서부터 고친다.
 
 ## 1. 공통 규칙
+
+- (v1.2) Godot에 보내는 사람이 읽는 문구는 `sim-godot`(`korean.rs`)가 한국어로 바꿔 보낸다: `command_rejected`의 `reason`, `course_notices()`·코스 사전 `notices`, `SimRoutePicker.status_lines()`·`route().error`·`route().warnings`. `sim-core` 원문은 Bevy 판(한글 글꼴 없음)과 시험이 함께 쓰므로 영어로 둔다. 모르는 문장은 그대로, 오류 상세(노드 번호 등)는 원문 그대로 붙는다. OSM 출처 표기 문장은 바꾸지 않는다. 명령·기어·입력 장치 이름 같은 **값**은 바꾸지 않는다(화면 표시는 Godot이 바꾼다).
 
 | 항목 | 규칙 |
 | --- | --- |
@@ -42,7 +45,7 @@ Godot 쪽은 이 노드의 **자식**으로 차체 메시·실내·카메라를 
 
 | 이름 | 형 | 기본값 | 설명 |
 | --- | --- | --- | --- |
-| `course` | `String` | `"training"` | `"training"`, `"calibration"`. `_ready`에서 **한 번만** 읽는다. 바꾸려면 노드를 새로 만든다 |
+| `course` | `String` | `"training"` | `"training"`, `"calibration"`, (v1.2) `"map:<파일>"`. `_ready`에서 **한 번만** 읽는다. 바꾸려면 노드를 새로 만든다 |
 | `config_dir` | `String` | `""` | 비우면 `res://../config`. 테스트에서 다른 설정 폴더를 쓸 때만 지정. `_ready`에서 한 번만 읽는다 |
 | `read_input` | `bool` | `true` | `false`면 Godot 입력을 읽지 않고 `set_manual_input`/`send_command`만 쓴다(헤드리스 시험용). 실행 중 바꿀 수 있다(5-1 2단계) |
 
@@ -152,6 +155,20 @@ Rect = { "center": Vector3, "size": Vector2(폭 x, 길이 z), "heading_rad": flo
 - `Rect.heading_rad`: Node3D와 같은 +Y yaw. `size`는 **전체** 폭(로컬 X)·길이(로컬 -Z).
 - 잘못된 형상은 Rust가 코스 실패로 처리하고 Godot이 고치지 않는다.
 - 삼각형 감기 방향(앞면)은 Godot 메시 조립 쪽이 정한다(Godot 기본 앞면은 카메라에서 보아 시계 방향). 지면 메시는 `cull_mode = disabled`도 허용.
+  (v1.2) `cull_mode = disabled`여도 뒷면은 법선이 뒤집혀 조명이 어두워지므로, 지면 삼각형은 위에서 볼 때 앞면이 되게 감는다.
+
+### 3-1. (v1.2) 지도 코스 `map:<파일>`
+
+- 코스 이름이 `map:`으로 시작하면 나머지를 지도 코스 파일 경로로 읽는다. 상대 경로는 **저장소 루트** 기준이고 `res://`·`user://`·절대 경로도 받는다.
+- 파일 형식과 형상 계산은 Bevy `--course map:<파일>`과 같은 `sim_core::world::map::load_map_course`다. 최상위에 `format`이 있으면 경로 파일
+  (경로 선택 화면이 저장한 `route-v1`, 굽은 길·교차로·연석), 없으면 단일 통로 선택 파일이다. 그래서 경로·교차로 검사 결과가 Bevy 판과 같다.
+- 실패 사유는 `"지도 코스를 열 수 없습니다: <Rust 사유>"`(파일 없음·TOML 오류·형상 오류), 빈 경로는 `"지도 코스 파일 경로가 비어 있습니다..."`. 다른 실패 규칙은 6절과 같다.
+- 지도 코스의 `notices`에는 OSM 출처 표기와 "가상 교육 코스(실측 아님)", 임시 폭 안내가 들어 있다. Godot은 주행 화면에 항상 보인다.
+- 코스 범위는 수백 m~1.5 km다. 바닥·카메라 먼 거리는 Godot 쪽이 코스 범위에 맞춘다.
+
+`SimCourse.course_files() -> Array[{label: String, course: String, saved: bool}]`: 메뉴용 지도 코스 목록.
+저장소 코스(`assets/maps/<지역>/*.toml`, 폴더·이름 순) 다음에 경로 선택 화면이 저장한 경로(`cache/routes/*.toml`, 최근 저장 순).
+`course`는 그대로 `SimVehicle.course`에 넣는 `map:<저장소 루트 기준 경로>`다. 파일 내용은 열 때 검사하므로 목록에 있어도 실패할 수 있다.
 
 ## 4. `SimBridge` (기존, 정적 함수)
 
@@ -220,6 +237,7 @@ Rect = { "center": Vector3, "size": Vector2(폭 x, 길이 z), "heading_rad": flo
 ### 5-3. 기대값과 비교
 
 - `SimReplay.run(course: String, entries: Array, config_dir: String = "") -> Dictionary` (Rust 정적 함수, 구현: 미 Claude):
+  - (v1.2) `course`는 `SimVehicle.course`와 같은 이름(`map:<파일>` 포함)을 받는다.
   Godot 노드 없이 5-1의 3~7단계를 같은 순서로 돌린 결과. `{ "ok", "error", "samples": [ Sample, ... ] }`(실패면 `samples` 빈 배열).
   - `SimVehicle`과 **같은 설정 로더와 같은 초기 상태**(시동 OFF, P, 비상 정지 없음, 코스 시작 자세, 틱 0)에서 시작한다. `config_dir`가 같으면 같은 파라미터다.
   - `Sample = { "tick": int, "position": Vector3, "heading_rad": float, "speed_mps": float, "gear": String, "rejected": PackedStringArray }`.
@@ -313,6 +331,8 @@ Bevy 판 `src/picker/`(4-5·4-5b)의 계산·캐시·받기 부분은 Bevy와 �
 | `paused_until_s()` | `int` | 403·429로 멈춘 경우 다시 받을 유닉스 시각, 멈추지 않았으면 0. 화면에 "지도 서버 요청 일시 중지" 표시용 |
 | `report_bad(x, y, z)` | 없음 | Godot이 PNG를 읽지 못했을 때. Rust가 그 타일 캐시를 지우고 실패로 센다(Bevy 판과 같음) |
 | `forget_displayed(x, y, z)` | 없음 | Godot이 텍스처를 버렸을 때. **전달 완료 기록만** 지운다. 디스크 캐시와 실패 횟수는 그대로 둔다 |
+| (v1.2) `country_outline()` | `PackedVector2Array` | 대한민국 **근사** 경계(지도 좌표, 닫는 점 중복 없음, 22점). 표시용이며 실제 국경이 아니다. 지도 화면이 경계 밖을 가린다 |
+| (v1.2) `country_bounds()` | `Rect2` | `country_outline`을 감싸는 지도 좌표 범위. 지도 카메라 이동·최소 배율 한계와 타일 요청 범위로 쓴다 |
 
 - 같은 타일 요청은 하나로 합치고, **이미 보낸 결과는 다시 보내지 않는다**(Bevy `TileFetcher`와 같음). 그래서 `request_visible`을 매 프레임 불러도 같은 PNG를 매 프레임 디코딩하지 않는다.
 - `forget_displayed`로 기록을 지운 타일은 다음 `request_visible`이 그 칸을 덮을 때 다시 전달한다. 디스크 캐시에 있으면 네트워크 없이 캐시에서 보낸다.
@@ -328,12 +348,13 @@ Bevy 판 `src/picker/`(4-5·4-5b)의 계산·캐시·받기 부분은 Bevy와 �
 
 메인 메뉴 → 지도 화면(전국 보기 → 확대 → "이 지역 도로 받기" → 점 찍기 → 경로·길이·경고 확인 → 저장) → 메뉴.
 "선택한 경로로 주행"은 이번 범위에서 제외(여수 경로 주행 제외 지시). 조작은 Bevy 판(4-5 모듈 주석)을 기준으로 하되 개선은 사용자 확인 후 정한다.
+(v1.2) 저장 경로 주행은 메인 메뉴의 코스 목록(`SimCourse.course_files()`)에서 고른다. 메인 메뉴 → 코스 선택(개발 코스·지도 코스·저장 경로) → 주행 → Esc로 메뉴.
 
 ## 8. 아직 정하지 않은 것
 
 - **사용자 확인 대상(신규 규칙):** 창 포커스 상실 시 주행 입력 0(5-1 2단계), 저장 이름 검사와 덮어쓰기 금지(7-2).
 - **지도 화면 "개선"의 구체 항목**(사용자 확인 필요): 예) 조작감(끌기·휠 확대), 도로·경로 표시 모양, 경고 표시, 지역 받기 진행 표시, 화면 배치.
-- 저장한 경로로 주행 시작을 언제 다시 범위에 넣을지.
+- ~~저장한 경로로 주행 시작을 언제 다시 범위에 넣을지.~~ (v1.2) 메인 메뉴 코스 목록으로 넣음.
 - 게임패드 축 이름 매핑(Bevy `GamepadAxis` → Godot `JoyAxis`)과 데드존 처리. **Rust가 `Input` 싱글턴을 직접 읽어** Bevy 판과 같은 규칙을 쓴다(Claude 내부 구현, 공개 API 변경 없음).
 - 키 이름 변환표(Bevy `KeyCode` 이름 → Godot `Key`). Claude가 `sim-godot`에 둔다(공개 API 변경 없음).
 - Geofabrik 스냅샷 자료원 선택(이번 범위 밖). 네트워크 받기는 사용자 요청 때만 한다.

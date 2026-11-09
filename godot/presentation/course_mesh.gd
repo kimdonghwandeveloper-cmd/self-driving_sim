@@ -1,6 +1,11 @@
 extends Node3D
 ## Rust 코스 Dictionary를 표시용 메시로 조립한다. 물리 충돌체는 생성하지 않는다.
+## 노면·연석은 절차 생성 잡음 무늬를 월드 좌표로 입혀(UV 없음) 아스팔트·콘크리트 질감을 낸다. 외부 애셋은 쓰지 않는다.
 
+## 노면 무늬 한 장이 덮는 길이(m).
+const ASPHALT_TILE_M := 6.0
+## 연석·벽 무늬 한 장이 덮는 길이(m).
+const CONCRETE_TILE_M := 2.0
 const COLORS = {
 	"road": Color("626a6d"), "edge_line": Color("f4e6ad"),
 	"stop_line": Color("f5f4e8"), "curb": Color("c4c6bf"),
@@ -14,40 +19,48 @@ func build(data: Dictionary) -> void:
 		child.queue_free()
 	if not data.get("ok", false):
 		return
+	var asphalt := textured("road", Color("5b6164"), Color("72787b"), ASPHALT_TILE_M)
+	var concrete := textured("curb", Color("b3b5ae"), Color("d2d3cc"), CONCRETE_TILE_M)
+	var paint := {}
+	for kind in ["edge_line", "stop_line"]:
+		paint[kind] = material(COLORS[kind])
+		paint[kind].roughness = 0.55
 	for rect in data.get("surfaces", []):
-		_box(rect, 0.012, 0.012, COLORS.road)
+		_box(rect, 0.012, 0.012, COLORS.road, asphalt)
 	for strip in data.get("strips", []):
 		var left: PackedVector3Array = strip.left
 		var right: PackedVector3Array = strip.right
 		var vertices := PackedVector3Array()
 		for i in range(mini(left.size(), right.size()) - 1):
 			vertices.append_array(PackedVector3Array([left[i], right[i], left[i + 1], right[i], right[i + 1], left[i + 1]]))
-		_triangles(vertices, 0.016 if strip.kind == "edge_line" else 0.012, COLORS.get(strip.kind, COLORS.road))
+		var is_line: bool = strip.kind == "edge_line"
+		_triangles(vertices, 0.016 if is_line else 0.012, paint.edge_line if is_line else asphalt)
 	for area in data.get("areas", []):
 		var boundary: PackedVector3Array = area.boundary
 		var vertices := PackedVector3Array()
 		for i in range(boundary.size()):
 			vertices.append_array(PackedVector3Array([area.center, boundary[i], boundary[(i + 1) % boundary.size()]]))
-		_triangles(vertices, 0.012, COLORS.road)
+		_triangles(vertices, 0.012, asphalt)
 	for marking in data.get("markings", []):
-		_box(marking.rect, 0.004, 0.016, COLORS.get(marking.kind, COLORS.stop_line))
+		_box(marking.rect, 0.004, 0.016, COLORS.stop_line, paint.get(marking.kind, paint.stop_line))
 	for collider in data.get("colliders", []):
 		var height: float = collider.height_m
-		_box(collider.rect, height, height * 0.5, COLORS.get(collider.kind, COLORS.obstacle))
+		var surface: Material = concrete if collider.kind == "curb" else null
+		_box(collider.rect, height, height * 0.5, COLORS.get(collider.kind, COLORS.obstacle), surface)
 
-## 지면 직사각형을 주어진 전체 높이의 상자로 표시한다.
-func _box(rect: Dictionary, height: float, center_y: float, color: Color) -> void:
+## 지면 직사각형을 주어진 전체 높이의 상자로 표시한다. `surface`가 없으면 `color` 무광 재질을 쓴다.
+func _box(rect: Dictionary, height: float, center_y: float, color: Color, surface: Material = null) -> void:
 	var mesh := BoxMesh.new()
 	mesh.size = Vector3(rect.size.x, height, rect.size.y)
 	var node := MeshInstance3D.new()
 	node.mesh = mesh
-	node.material_override = material(color)
+	node.material_override = surface if surface != null else material(color)
 	node.position = rect.center + Vector3(0, center_y, 0)
 	node.rotation.y = rect.heading_rad
 	add_child(node)
 
 ## 지면 삼각형을 위쪽 법선의 양면 메시로 표시한다.
-func _triangles(vertices: PackedVector3Array, y: float, color: Color) -> void:
+func _triangles(vertices: PackedVector3Array, y: float, surface_material: Material) -> void:
 	if vertices.is_empty():
 		return
 	var surface := SurfaceTool.new()
@@ -57,9 +70,12 @@ func _triangles(vertices: PackedVector3Array, y: float, color: Color) -> void:
 		var a := Vector3(vertices[i].x, y, vertices[i].z)
 		var b := Vector3(vertices[i + 1].x, y, vertices[i + 1].z)
 		var c := Vector3(vertices[i + 2].x, y, vertices[i + 2].z)
-		if (b - a).cross(c - a).length_squared() == 0.0:
+		var normal := (b - a).cross(c - a)
+		if normal.length_squared() == 0.0:
 			continue
-		for point in [a, b, c]:
+		# Godot 앞면은 위에서 볼 때 시계 방향(법선 아래)이다. 앞면이 위를 보게 맞춰야 뒷면 조명(뒤집힌 법선)으로 어두워지지 않는다.
+		var ordered := [a, b, c] if normal.y < 0.0 else [a, c, b]
+		for point in ordered:
 			surface.set_normal(Vector3.UP)
 			surface.add_vertex(point)
 			count += 1
@@ -67,7 +83,7 @@ func _triangles(vertices: PackedVector3Array, y: float, color: Color) -> void:
 		return
 	var node := MeshInstance3D.new()
 	node.mesh = surface.commit()
-	node.material_override = material(color)
+	node.material_override = surface_material
 	add_child(node)
 
 ## 단순 무광 재질을 만든다. 지면은 위·아래 양쪽에서 보이게 한다.
@@ -77,3 +93,47 @@ static func material(color: Color) -> StandardMaterial3D:
 	result.roughness = 0.9
 	result.cull_mode = BaseMaterial3D.CULL_DISABLED
 	return result
+
+## 두 색 사이를 오가는 잡음 무늬 재질을 만든다. 월드 좌표 투영(triplanar)이라 메시에 UV가 없어도 되고,
+## `tile_m`마다 무늬가 반복된다. 같은 `seed_name`이면 같은 무늬다.
+static func textured(seed_name: String, dark: Color, light: Color, tile_m: float) -> StandardMaterial3D:
+	var noise := FastNoiseLite.new()
+	noise.seed = hash(seed_name)
+	noise.noise_type = FastNoiseLite.TYPE_SIMPLEX_SMOOTH
+	noise.frequency = 0.08
+	noise.fractal_octaves = 4
+	var ramp := Gradient.new()
+	ramp.set_color(0, dark)
+	ramp.set_color(1, light)
+	var texture := NoiseTexture2D.new()
+	texture.width = 256
+	texture.height = 256
+	texture.seamless = true
+	texture.noise = noise
+	texture.color_ramp = ramp
+	var result := material(Color.WHITE)
+	result.albedo_texture = texture
+	result.uv1_triplanar = true
+	result.uv1_world_triplanar = true
+	result.uv1_scale = Vector3.ONE / tile_m
+	result.roughness = 0.95
+	return result
+
+## 코스 사전의 노면·띠·면·경계가 차지하는 수평 범위(x, z)를 구한다. 비어 있으면 원점 크기 0.
+static func ground_bounds(data: Dictionary) -> Rect2:
+	var points := PackedVector3Array()
+	for rect in data.get("surfaces", []):
+		points.append(rect.center)
+	for strip in data.get("strips", []):
+		points.append_array(strip.left)
+		points.append_array(strip.right)
+	for area in data.get("areas", []):
+		points.append_array(area.boundary)
+	for collider in data.get("colliders", []):
+		points.append(collider.rect.center)
+	if points.is_empty():
+		return Rect2()
+	var bounds := Rect2(Vector2(points[0].x, points[0].z), Vector2.ZERO)
+	for point in points:
+		bounds = bounds.expand(Vector2(point.x, point.z))
+	return bounds

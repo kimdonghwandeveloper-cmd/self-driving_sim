@@ -421,7 +421,7 @@ impl SimVehicle {
                     .course()
                     .notices
                     .iter()
-                    .map(|notice| GString::from(notice.as_str()))
+                    .map(|notice| GString::from(crate::korean::course_notice(notice).as_str()))
                     .collect()
             })
             .unwrap_or_default()
@@ -495,7 +495,8 @@ impl SimVehicle {
             if result.accepted {
                 base.emit_signal("command_applied", &[command, source]);
             } else {
-                let reason = GString::from(result.reason.as_str()).to_variant();
+                let reason = GString::from(crate::korean::reject_reason(&result.reason).as_str())
+                    .to_variant();
                 base.emit_signal("command_rejected", &[command, source, reason]);
             }
         }

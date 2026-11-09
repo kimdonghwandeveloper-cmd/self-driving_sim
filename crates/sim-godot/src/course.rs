@@ -8,6 +8,9 @@ use glam::Vec2;
 use godot::prelude::*;
 use sim_core::vehicle::GroundRect;
 use sim_core::world::course::{ColliderKind, CourseDef, CourseId, MarkingKind, StripKind};
+use sim_core::world::{course_files, map};
+
+use crate::paths::{repo_root, resolve_user_path};
 
 /// 지면 좌표 (x, z)를 높이 0인 Godot 3차원 좌표로 바꾼다.
 fn ground(point: Vec2) -> Vector3 {
@@ -59,7 +62,7 @@ pub fn course_dict(course: &CourseDef) -> VarDictionary {
     let notices: PackedStringArray = course
         .notices
         .iter()
-        .map(|notice| GString::from(notice.as_str()))
+        .map(|notice| GString::from(crate::korean::course_notice(notice).as_str()))
         .collect();
     let surfaces: VarArray = course
         .surfaces
@@ -147,13 +150,31 @@ pub fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
 
 /// 코스 이름으로 형상을 만들고 계약 검사를 한다. 실패하면 사람이 읽는 한국어 사유를 돌려준다.
 ///
+/// 이름은 개발 코스(`training`·`calibration`) 또는 지도 코스 `map:<파일 경로>`(계약 v1.2, 상대 경로는 저장소 루트 기준)다.
+/// 지도 코스는 Bevy `--course map:<파일>`과 같은 `sim_core::world::map::load_map_course`로 만든다.
 /// 패닉도 잡아서 `"내부 오류: ..."` 사유로 바꾼다(계약 6절).
 pub fn build_course(name: &str) -> Result<CourseDef, String> {
-    let id = CourseId::parse(name).ok_or_else(|| {
-        format!("알 수 없는 코스 이름입니다: \"{name}\" (training, calibration 중 하나)")
-    })?;
-    let course = catch_unwind(AssertUnwindSafe(|| id.build()))
-        .map_err(|payload| format!("내부 오류: {}", panic_message(payload.as_ref())))?;
+    let course = if let Some(path) = name.trim().strip_prefix("map:") {
+        let path = path.trim();
+        if path.is_empty() {
+            return Err(
+                "지도 코스 파일 경로가 비어 있습니다: \"map:<파일>\" 형식으로 지정하세요"
+                    .to_owned(),
+            );
+        }
+        let path = resolve_user_path(path);
+        catch_unwind(AssertUnwindSafe(|| map::load_map_course(&path)))
+            .map_err(|payload| format!("내부 오류: {}", panic_message(payload.as_ref())))?
+            .map_err(|error| format!("지도 코스를 열 수 없습니다: {error}"))?
+    } else {
+        let id = CourseId::parse(name).ok_or_else(|| {
+            format!(
+                "알 수 없는 코스 이름입니다: \"{name}\" (training, calibration, map:<파일> 중 하나)"
+            )
+        })?;
+        catch_unwind(AssertUnwindSafe(|| id.build()))
+            .map_err(|payload| format!("내부 오류: {}", panic_message(payload.as_ref())))?
+    };
     course.validate().map_err(|error| error.to_string())?;
     Ok(course)
 }
@@ -165,12 +186,29 @@ pub struct SimCourse {}
 
 #[godot_api]
 impl SimCourse {
-    /// 코스 이름(`"training"`, `"calibration"`)으로 형상 사전을 만든다. 실패하면 `{ok: false, error}`만 돌려준다.
+    /// 코스 이름(`"training"`, `"calibration"`, `"map:<파일>"`)으로 형상 사전을 만든다. 실패하면 `{ok: false, error}`만 돌려준다.
     #[func]
     fn build(name: GString) -> VarDictionary {
         match build_course(&name.to_string()) {
             Ok(course) => course_dict(&course),
             Err(error) => failure_dict(&error),
         }
+    }
+
+    /// 메뉴에 보일 지도 코스 목록 `[{label, course, saved}]`(계약 v1.2). 저장소 코스(`assets/maps`) 다음에
+    /// 경로 선택 화면이 저장한 경로(`cache/routes`, 최근 순)가 온다. 파일 내용은 열 때 검사한다.
+    #[func]
+    fn course_files() -> VarArray {
+        course_files::list_course_files(&repo_root())
+            .into_iter()
+            .map(|file| {
+                vdict! {
+                    "label" => file.label.as_str(),
+                    "course" => file.course.as_str(),
+                    "saved" => file.saved,
+                }
+                .to_variant()
+            })
+            .collect()
     }
 }

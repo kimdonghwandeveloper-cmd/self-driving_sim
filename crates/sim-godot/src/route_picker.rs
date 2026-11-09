@@ -292,7 +292,9 @@ impl SimRoutePicker {
         };
         match &model.planned {
             None => empty(""),
-            Some(Err(error)) => empty(&sim_core::picker::model::describe_error(error)),
+            Some(Err(error)) => empty(&crate::korean::picker_line(
+                &sim_core::picker::model::describe_error(error),
+            )),
             Some(Ok(planned)) => {
                 let line: PackedVector2Array = model
                     .route_views()
@@ -301,7 +303,7 @@ impl SimRoutePicker {
                     .collect();
                 let warnings: PackedStringArray = region::route_warnings(planned)
                     .iter()
-                    .map(|warning| GString::from(warning.as_str()))
+                    .map(|warning| GString::from(crate::korean::picker_line(warning).as_str()))
                     .collect();
                 vdict! {
                     "ok" => true,
@@ -323,6 +325,7 @@ impl SimRoutePicker {
                 .status_lines()
                 .into_iter()
                 .filter(|line| !line.starts_with("Press Enter"))
+                .map(|line| crate::korean::picker_line(&line))
                 .collect(),
             None => vec!["지역 없음: 지도를 확대하고 \"이 지역 도로 받기\"를 누르세요".to_owned()],
         };

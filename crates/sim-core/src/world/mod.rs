@@ -4,6 +4,7 @@
 //! 화면 메시 생성은 각 엔진 쪽(Bevy 루트 앱, Godot 확장)에서 이 데이터로 한다.
 
 pub mod course;
+pub mod course_files;
 pub mod junction;
 pub mod map;
 pub mod map_fetch;
