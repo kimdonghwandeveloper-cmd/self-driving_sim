@@ -466,13 +466,14 @@ tests/
 
 ### GD-1. `sim-core` 분리
 
-- [ ]  엔진과 무관한 로직(차량 상태·동역학·충돌 판정, 도로 그래프·형상·경로·스냅샷·PBF, 설정 읽기)을 `crates/sim-core`로 옮긴다. Bevy 타입 의존은 걷어 내거나 루트 앱 쪽 얇은 래퍼로 둔다.
+- [x]  엔진과 무관한 로직(차량 상태·동역학·충돌 판정, 도로 그래프·형상·경로·스냅샷·PBF, 설정 읽기)을 `crates/sim-core`로 옮긴다. Bevy 타입 의존은 걷어 내거나 루트 앱 쪽 얇은 래퍼로 둔다.
 - [x]  루트 Bevy 앱은 `sim-core`를 써서 동작이 같아야 한다. 기존 테스트 전부 통과, 재생 결과 불변.
 - **완료 기준:** `sim-core`가 Bevy 없이 빌드·테스트되고, 기존 cargo 검사·Bevy smoke 통과.
 - 진행 기록(2026-11-09, 사용자 승인으로 체크): 병합 eaecde3(GD-1a~1d·1c). 차량 상태·동역학·충돌, 코스·교차로·도로 형상, 입력 합치기·매핑,
   설정 읽기, 지도·OSM 그래프·지역 받기·스냅샷·경로·타일을 `sim-core`로 옮겼다. `sim-core` 단독 clippy·test(Bevy 없음) 통과,
   워크스페이스 test 279개(이동 전과 같은 수에 새 시험 추가)·Bevy smoke 통과.
-  **남은 것:** PBF 모듈(`pbf_extract`·`pbf_compare`·`pbf_audit`)은 아직 루트에 있어 첫 항목은 체크하지 않았다.
+  2026-11-10: PBF 모듈(`pbf_extract`·`pbf_compare`·`pbf_audit`·시험용 `pbf_fixture`)과 `osmpbf` 의존을 `sim-core`로 옮겨 첫 항목도 체크했다.
+  루트는 `crate::world::pbf_*` 경로로 다시 내보내 CLI(`--extract-pbf`·`--audit-extract`·`--compare-overpass`)는 그대로다.
 
 ### GD-2. Godot 주행
 

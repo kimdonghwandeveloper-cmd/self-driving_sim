@@ -5033,7 +5033,6 @@ version = "0.1.0"
 dependencies = [
  "bevy",
  "bevy_rapier3d",
- "osmpbf",
  "serde",
  "serde_json",
  "sha2",
@@ -5138,6 +5137,7 @@ version = "0.1.0"
 dependencies = [
  "bevy_ecs",
  "glam 0.32.1",
+ "osmpbf",
  "png",
  "serde",
  "serde_json",
