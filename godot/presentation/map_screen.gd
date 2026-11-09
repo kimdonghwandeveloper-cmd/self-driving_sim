@@ -19,6 +19,7 @@ var receive := Button.new()
 var save_button := Button.new()
 var route_name := LineEdit.new()
 var overwrite := CheckBox.new()
+var snapshot_dialog := FileDialog.new()
 
 ## 전국 범위를 담을 배율로 시작하고 출처 및 비활성 기능을 표시한다.
 func _ready() -> void:
@@ -146,6 +147,19 @@ func _services(canvas: CanvasLayer) -> void:
 	save_button.text = "?? ??"
 	save_button.pressed.connect(_save_route)
 	controls.add_child(save_button)
+	var navigation := HBoxContainer.new()
+	navigation.position = Vector2(24, 264)
+	canvas.add_child(navigation)
+	for item in [["?? ??", _fit_country], ["?? ??", _fit_region], ["??", _fit_route], ["??? ??", _open_snapshot]]:
+		var button := Button.new()
+		button.text = item[0]
+		button.pressed.connect(item[1])
+		navigation.add_child(button)
+	snapshot_dialog.file_mode = FileDialog.FILE_MODE_OPEN_FILE
+	snapshot_dialog.access = FileDialog.ACCESS_FILESYSTEM
+	snapshot_dialog.filters = PackedStringArray(["*.json ; OSM ???"])
+	snapshot_dialog.file_selected.connect(_load_snapshot)
+	add_child(snapshot_dialog)
 	for button in [cancel, undo, clear]:
 		button.disabled = picker == null
 
@@ -256,3 +270,48 @@ func _exit_tree() -> void:
 	textures.clear()
 	tile_layers.clear()
 	texture_order.clear()
+
+## ?? ??? ?? ??? ???? ????? ????.
+func _fit_country() -> void:
+	camera.position = Vector2.ZERO
+	camera.zoom = Vector2.ONE * 0.001
+
+## ?? ?? ??? ??? ???? ??? ?? ????? ???.
+func _fit_region() -> void:
+	if picker != null:
+		_fit_rect(picker.call("loaded_region"))
+
+## ?? ??? ?? ??? ??? ??? ???.
+func _fit_route() -> void:
+	if route_line.is_empty():
+		return
+	var bounds := Rect2(route_line[0], Vector2.ZERO)
+	for point in route_line:
+		bounds = bounds.expand(point)
+	_fit_rect(bounds.grow(25.0))
+
+## ?? ?? ??? ?? ?? ??? ?? ???? ???.
+func _fit_rect(bounds: Rect2) -> void:
+	if bounds.size.x <= 0.0 or bounds.size.y <= 0.0:
+		return
+	var available := get_viewport_rect().size - Vector2(80, 380)
+	if available.x <= 0.0 or available.y <= 0.0:
+		return
+	var zoom_value := clampf(minf(available.x / bounds.size.x, available.y / bounds.size.y), 0.0005, 8.0)
+	camera.zoom = Vector2.ONE * zoom_value
+	camera.position = bounds.get_center() - Vector2(0, 150.0 / zoom_value)
+
+## ???? ??? ?? ???? ?? ?? ????? ???? ???.
+func _open_snapshot() -> void:
+	if picker != null and active_request == 0:
+		snapshot_dialog.popup_centered_ratio(0.75)
+
+## Rust ?? ??? ???? ?? ??? ??? ??? ???.
+func _load_snapshot(path: String) -> void:
+	if picker == null or active_request != 0:
+		return
+	var result: Dictionary = picker.call("load_snapshot", path)
+	feedback = "???? ?????." if result.get("ok", false) else str(result.error)
+	if result.get("ok", false):
+		_refresh_route()
+		_fit_region()
