@@ -195,12 +195,14 @@ pub fn in_contact(footprint: &Footprint, motion: &Motion, obstacles: &[GroundRec
     hits_any(footprint, motion, obstacles, CONTACT_MARGIN_M)
 }
 
-/// 장애물을 일정 크기 격자 칸에 나눠 둔 색인(4-6). 충돌 경계가 많은 지도 코스에서 한 단계 검사 대상을 줄인다.
+/// 장애물 목록과, 그 목록을 일정 크기 격자 칸에 나눠 둔 색인(4-6). 충돌 경계가 많은 지도 코스에서 한 단계 검사 대상을 줄인다.
 ///
 /// 장애물마다 감싸는 원(중심, 반지름)을 두고, 그 원이 걸치는 칸에 번호를 넣는다. 후보 순서는 원래 목록 순서이고,
 /// 후보에서 빠진 장애물은 그 단계에서 닿거나 접촉 거리 안에 들 수 없으므로 판정 결과는 전체 목록과 같다.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ObstacleGrid {
+    /// 장애물 목록(원래 순서). 장애물 번호는 이 목록 번호다.
+    rects: Vec<GroundRect>,
     /// 격자 원점(가장 작은 x, z 모서리).
     origin: Vec2,
     /// 칸 수(x, z).
@@ -214,8 +216,8 @@ pub struct ObstacleGrid {
 
 impl ObstacleGrid {
     /// 장애물 목록으로 격자를 만든다. 목록이 비면 칸 없는 격자다.
-    pub fn new(obstacles: &[GroundRect]) -> Self {
-        let bounds: Vec<(Vec2, f32)> = obstacles
+    pub fn new(rects: Vec<GroundRect>) -> Self {
+        let bounds: Vec<(Vec2, f32)> = rects
             .iter()
             .map(|rect| (rect.center, rect.half_size.length()))
             .collect();
@@ -225,6 +227,7 @@ impl ObstacleGrid {
             .reduce(Vec2::min)
         else {
             return Self {
+                rects,
                 origin: Vec2::ZERO,
                 cols: 0,
                 rows: 0,
@@ -239,6 +242,7 @@ impl ObstacleGrid {
         let count = ((max - min) / GRID_CELL_M).floor();
         let (cols, rows) = (count.x as usize + 1, count.y as usize + 1);
         let mut grid = Self {
+            rects,
             origin: min,
             cols,
             rows,
@@ -256,6 +260,11 @@ impl ObstacleGrid {
             }
         }
         grid
+    }
+
+    /// 장애물 목록(원래 순서)을 반환한다.
+    pub fn rects(&self) -> &[GroundRect] {
+        &self.rects
     }
 
     /// 중심 `center`, 반지름 `radius` 원을 감싸는 사각형이 걸치는 칸 범위(x, z). 격자 밖이면 `None`.
@@ -501,7 +510,7 @@ pub fn step_with_obstacles(
     )
 }
 
-/// [`step_with_obstacles`]와 같되, `grid`(같은 `obstacles`로 만든 격자)로 닿을 수 있는 장애물만 검사한다(4-6).
+/// [`step_with_obstacles`]와 같되, `grid`의 장애물 중 닿을 수 있는 것만 검사한다(4-6).
 ///
 /// 후보에서 빠진 장애물은 이 단계에서 닿거나 접촉 거리 안에 들 수 없으므로 결과(자세·속도·충돌·접촉 상태,
 /// 장애물 번호)는 전체 목록 검사와 같다. 충돌 경계가 많은 지도 코스에서 한 단계 비용을 줄인다.
@@ -511,10 +520,10 @@ pub fn step_with_grid(
     params: &DynamicsParams,
     dt: f32,
     footprint: &Footprint,
-    obstacles: &[GroundRect],
     grid: &ObstacleGrid,
     contact: &mut ContactState,
 ) -> Option<Impact> {
+    let obstacles = grid.rects();
     step_filtered(
         state,
         motion,
@@ -699,7 +708,7 @@ mod tests {
                 });
             }
         }
-        let grid = ObstacleGrid::new(&obstacles);
+        let grid = ObstacleGrid::new(obstacles.clone());
         let params = DynamicsParams::default();
         let mut full = (
             ready_in(Gear::Drive),
@@ -731,7 +740,6 @@ mod tests {
                 &params,
                 DT,
                 &VEHICLE_FOOTPRINT,
-                &obstacles,
                 &grid,
                 &mut fast.2,
             );
@@ -757,14 +765,14 @@ mod tests {
     /// 빈 목록·격자 밖 위치에서도 격자 후보가 비어 있고 범위를 넘지 않는지 확인한다.
     #[test]
     fn grid_handles_empty_and_outside() {
-        let empty = ObstacleGrid::new(&[]);
+        let empty = ObstacleGrid::new(Vec::new());
         assert!(
             empty
                 .candidates(&VEHICLE_FOOTPRINT, &Motion::default(), 1.0)
                 .is_empty()
         );
         let one = [GroundRect::axis_aligned(Vec2::new(100.0, 100.0), Vec2::ONE)];
-        let grid = ObstacleGrid::new(&one);
+        let grid = ObstacleGrid::new(one.to_vec());
         assert!(
             grid.candidates(&VEHICLE_FOOTPRINT, &Motion::default(), 1.0)
                 .is_empty()
