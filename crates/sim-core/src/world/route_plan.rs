@@ -1045,4 +1045,42 @@ mod tests {
         let error = load_route_course(&file, &dir).unwrap_err();
         assert!(error.contains("node IDs"), "{error}");
     }
+
+    /// 예전에 교차로 연석에 막혔던 여수 경로가 끝까지 가는지 확인한다(4-6).
+    ///
+    /// - 12333444324: 135° 급회전. 안내선 원호 반경이 최소 회전 반경에 가까워 바깥 연석에 닿았다.
+    /// - 5178188925: 100° 회전. 같은 원인.
+    /// - 12669768610: 180°보다 아주 조금 작은 직진 쪽 모서리에 중심을 도는 연석 고리가 생겨 직진 중 막혔다.
+    #[test]
+    fn yeosu_sharp_junctions_are_drivable() {
+        let ways = real_snapshot();
+        let config = RoadGraphConfig::default();
+        let cases: [([[f64; 2]; 2], u64); 3] = [
+            (
+                [[34.754_661, 127.753_155_1], [34.754_151_8, 127.752_092_5]],
+                12_333_444_324,
+            ),
+            (
+                [[34.747_886, 127.746_555_2], [34.750_139_2, 127.747_713_6]],
+                5_178_188_925,
+            ),
+            (
+                [[34.749_896_1, 127.745_697_9], [34.748_973_2, 127.750_058_2]],
+                12_669_768_610,
+            ),
+        ];
+        for (points, junction) in cases {
+            let planned = plan_route_detailed(&ways, None, "snapshot", &points, &config)
+                .unwrap_or_else(|e| panic!("{points:?}: {e}"));
+            assert!(planned.course.junctions.contains(&junction), "{points:?}");
+            for speed in [2.0, 4.0, 6.0] {
+                let result = follow_path(&planned.course.course, &planned.course.guide, speed);
+                assert_eq!(result.impacts, 0, "{points:?} {speed} m/s: {result:?}");
+                assert!(
+                    result.remaining_m < 12.5,
+                    "{points:?} {speed} m/s: {result:?}"
+                );
+            }
+        }
+    }
 }
