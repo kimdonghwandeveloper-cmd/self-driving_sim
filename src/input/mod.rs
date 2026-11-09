@@ -1,6 +1,7 @@
 //! 입력 어댑터. 장치 입력을 차량 조작 입력과 명령 요청으로 변환한다.
 //!
 //! 장치별 입력은 [`merge::DeviceFrames`]에 모은 뒤 프레임마다 한 번 합쳐 내보낸다.
+//! 합치기·명령 변환 규칙은 Godot 판과 함께 쓰도록 `sim_core::input`에 있다.
 
 pub mod gamepad;
 pub mod keyboard;
@@ -13,7 +14,7 @@ use bevy::app::RunFixedMainLoop;
 
 use crate::SimSet;
 use crate::calibration::ResetCourseRequest;
-use crate::vehicle::{Gear, VehicleCommand, VehicleInput};
+use crate::vehicle::VehicleInput;
 
 pub use gamepad::{GamepadBindings, GamepadMapping};
 pub use mapping::{KeyBindings, KeyboardMapping};
@@ -23,13 +24,8 @@ pub use merge::{InputSource, InputStatus};
 #[derive(Resource, Debug, Clone, Copy, Default, PartialEq)]
 pub struct DriverInput(pub VehicleInput);
 
-/// 입력 장치가 컨트롤러에 보내는 단발성 요청.
-#[derive(Message, Debug, Clone, PartialEq, Eq)]
-pub enum ControlRequest {
-    Command(VehicleCommand),
-    /// 서로 다른 기어 키가 동시에 눌려 거부된 요청.
-    GearConflict(Vec<Gear>),
-}
+/// 입력 장치가 컨트롤러에 보내는 단발성 요청. 정의는 엔진 무관 `sim_core::input`에 있다.
+pub use sim_core::input::ControlRequest;
 
 /// 입력 리소스·메시지와 장치 입력·통합 시스템을 등록하는 플러그인.
 pub struct InputPlugin;
