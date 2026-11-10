@@ -5,16 +5,10 @@ edition = "2024"
 rust-version = "1.99.1"
 publish = false
 
-# Phase GD-1: 엔진과 무관한 시뮬레이터 로직. Bevy 앱(루트)과 Godot 확장(crates/sim-godot)이 함께 쓴다.
-[features]
-default = []
-# Bevy 앱에서 쓸 때만 ECS 컴포넌트 derive를 붙인다. Godot 쪽은 이 기능 없이 빌드한다.
-bevy = ["dep:bevy_ecs"]
-# 합성 OSM 시험 자료(`world::osm_graph::fixtures`)를 루트 앱 시험에서도 쓴다.
-test-fixtures = []
+# Phase GD-1: 엔진과 무관한 시뮬레이터 로직. Godot 확장(crates/sim-godot)과 개발 명령(crates/sim-tools)이 함께 쓴다.
 
 [dependencies]
-# bevy_math 0.19.1과 같은 glam이라 Bevy의 Vec2와 같은 타입이다.
+# 지면 좌표 Vec2(sim-godot과 같은 판).
 glam = "=0.32.1"
 serde = { version = "=1.0.229", features = ["derive"] }
 # 설정 파일(config/*.toml) 파싱. 루트 앱과 같은 판.
@@ -24,8 +18,7 @@ ureq = "=3.5.1"
 serde_json = "=1.0.154"
 # 스냅샷·연결 정보 해시.
 sha2 = "=0.11.1"
-# 타일 PNG가 끝까지 디코딩되는지 검사(Bevy 이미지 디코더 대신, 같은 판).
+# 타일 PNG가 끝까지 디코딩되는지 검사.
 png = "=0.18.1"
 # Phase 4-5G Geofabrik PBF 읽기(순수 Rust, 기본 rust-zlib). GD-1에서 루트 앱에서 옮겼다.
 osmpbf = "=0.3.8"
-bevy_ecs = { version = "=0.19.1", optional = true }

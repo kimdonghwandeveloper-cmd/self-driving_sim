@@ -124,9 +124,8 @@ impl Footprint {
     }
 }
 
-/// 장애물로 쓰는 고정 지면 직사각형 컴포넌트. 차량은 이 영역을 통과하지 못한다.
+/// 장애물로 쓰는 고정 지면 직사각형. 차량은 이 영역을 통과하지 못한다.
 #[derive(Debug, Clone, Copy, PartialEq)]
-#[cfg_attr(feature = "bevy", derive(bevy_ecs::component::Component))]
 pub struct Obstacle(pub GroundRect);
 
 /// 한 단계 이동 경로 검사 결과.

@@ -1,6 +1,6 @@
 //! Godot 화면에 보낼 사람이 읽는 문구를 한국어로 바꾼다(GD-4, 계약 v1.2).
 //!
-//! `sim-core` 문구는 Bevy 판(한글 글꼴 없음)과 시험이 함께 쓰므로 영어로 둔다. Godot 경계에서만 알려진 문장을
+//! `sim-core` 문구는 시험과 개발 명령(`sim-tools`)이 함께 쓰므로 영어로 둔다. Godot 경계에서만 알려진 문장을
 //! 한국어로 바꾸고, 모르는 문장은 그대로 보낸다. 오류 상세(노드 번호·파일 경로 등)는 원문을 뒤에 붙여 둔다.
 //! OSM 출처 표기 문장은 라이선스 표기이므로 바꾸지 않는다.
 
@@ -101,7 +101,7 @@ pub fn picker_line(line: &str) -> String {
     line.to_owned()
 }
 
-/// 보정 표시값을 HUD용 한국어 줄로 만든다(2-5, Bevy 판 보정 줄과 같은 내용). 모두 시뮬레이터 임시값이다.
+/// 보정 표시값을 HUD용 한국어 줄로 만든다(2-5, 지운 Bevy 판 보정 줄과 같은 내용). 모두 시뮬레이터 임시값이다.
 pub fn calibration_lines(readout: &CalibrationReadout) -> Vec<String> {
     let turn = match readout.turn_radius_m {
         Some(radius) => format!("{radius:.2} m"),

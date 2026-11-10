@@ -153,9 +153,9 @@ pub fn node_degrees(ways: &[OsmGraphWay], allowed: &BTreeSet<&str>) -> BTreeMap<
     degrees
 }
 
-#[cfg(any(test, feature = "test-fixtures"))]
+#[cfg(test)]
 pub mod fixtures {
-    //! 합성 시험 자료(PLAN 4 선행 자료). 루트 앱 시험도 쓰도록 `test-fixtures` 기능에서도 연다.
+    //! 합성 시험 자료(PLAN 4 선행 자료). 시험에서만 연다.
     //! 지역 미터 좌표로 형상을 정의하고 위경도로 바꿔
     //! 실제 자료와 같은 경로([`parse_overpass_graph`])를 거치게 한다. 실제 도로가 아니다.
 

@@ -14,6 +14,8 @@ Godot에 노출할 클래스·메서드·시그널·좌표 규칙·실패 처리
 | v1.2 | 항목 추가(기존 이름·인자 변경 없음, 2026-11-10 Claude. Codex 사용량 한도 중 사용자 지시로 Godot 쪽도 Claude가 맞춤): 지도 코스 이름 `map:<파일>`(2절 `course`, 3절, 5-3 `SimReplay.run`), `SimCourse.course_files()`(3절), `SimTiles.country_outline()`·`country_bounds()`(7-3, 대한민국 범위 제한·경계 밖 가림, 사용자 지시 2026-11-09). 저장 경로 주행을 범위에 다시 넣음(7-4, 사용자 지시 "남은 플랜 완료"). Godot에 보내는 사람이 읽는 문구(명령 거부 사유, 코스 안내, 경로 선택 안내·경고·오류)는 한국어(1절). 코스 사전 `goal`(3절, 4-6 경로 끝 목표 표시) |
 | v1.3 | 항목 추가(기존 이름·인자 변경 없음, 2026-11-10 Claude, GD-5 Bevy 앱 제거 사용자 결정): `SimVehicle.calibration_lines()`(2절, Bevy 앱에서 옮긴 2-5 보정 측정. 주행 결과에는 영향 없음). Bevy 앱이 없어져 `sim-core` 문구가 영어인 이유는 시험과 개발 명령(`sim-tools`) 공용이다 |
 
+> GD-5(v1.3)에서 Bevy 앱을 지웠다. 본문의 "Bevy 판과 같음"·Bevy 파일 경로는 계약을 정할 때의 기준을 기록한 것이며, 그 규칙은 지금 `sim-core`에 있다.
+
 변경 규칙:
 
 - 이 문서를 먼저 고치고 커밋한 뒤 코드를 바꾼다. 문서와 코드가 다르면 문서가 기준이다.
@@ -23,7 +25,7 @@ Godot에 노출할 클래스·메서드·시그널·좌표 규칙·실패 처리
 
 ## 1. 공통 규칙
 
-- (v1.2) Godot에 보내는 사람이 읽는 문구는 `sim-godot`(`korean.rs`)가 한국어로 바꿔 보낸다: `command_rejected`의 `reason`, `course_notices()`·코스 사전 `notices`, `SimRoutePicker.status_lines()`·`route().error`·`route().warnings`. `sim-core` 원문은 Bevy 판(한글 글꼴 없음)과 시험이 함께 쓰므로 영어로 둔다. 모르는 문장은 그대로, 오류 상세(노드 번호 등)는 원문 그대로 붙는다. OSM 출처 표기 문장은 바꾸지 않는다. 명령·기어·입력 장치 이름 같은 **값**은 바꾸지 않는다(화면 표시는 Godot이 바꾼다).
+- (v1.2) Godot에 보내는 사람이 읽는 문구는 `sim-godot`(`korean.rs`)가 한국어로 바꿔 보낸다: `command_rejected`의 `reason`, `course_notices()`·코스 사전 `notices`, `SimRoutePicker.status_lines()`·`route().error`·`route().warnings`. `sim-core` 원문은 시험과 개발 명령(`sim-tools`)이 함께 쓰므로 영어로 둔다(처음에는 한글 글꼴이 없던 Bevy 판 때문). 모르는 문장은 그대로, 오류 상세(노드 번호 등)는 원문 그대로 붙는다. OSM 출처 표기 문장은 바꾸지 않는다. 명령·기어·입력 장치 이름 같은 **값**은 바꾸지 않는다(화면 표시는 Godot이 바꾼다).
 
 | 항목 | 규칙 |
 | --- | --- |

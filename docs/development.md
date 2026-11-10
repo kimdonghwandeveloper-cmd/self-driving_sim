@@ -1,5 +1,24 @@
 # 개발환경 기록
 
+## 현재 구성 (2026-11-10, GD-5)
+
+Bevy 앱과 그 의존성(Bevy =0.19.1, bevy_rapier3d =0.36.0, 선택 기능 `physics`)은 GD-5(사용자 결정)에서 지웠다.
+루트 `Cargo.toml`은 작업 공간 설정만 두고, 세 crate를 쓴다.
+
+| 항목 | 버전 / 기준 |
+| --- | --- |
+| Rust / Cargo | 1.99.1, edition 2024, x86_64-pc-windows-msvc |
+| Godot | 4.7.2 표준판 |
+| godot-rust | `godot` =0.5.5, 기능 `api-4-7` (`crates/sim-godot`, cdylib) |
+| 엔진 무관 로직 | `crates/sim-core` (glam =0.32.1, ureq =3.5.1, osmpbf =0.3.8 등) |
+| 개발 명령 | `crates/sim-tools` (sim-core만 사용) |
+| 잠금 | rust-toolchain.toml 및 Cargo.lock |
+
+검증 명령은 `cargo fmt`·`clippy`·`test`와 Godot 헤드리스 시험이다(README "개발 명령", "Godot 시험과 첫 import 검사").
+`cargo run -- --smoke-test`는 Bevy 앱과 함께 없어졌다. 아래는 2026-10-22 Phase 1-1 당시(Bevy) 기록이다.
+
+## Phase 1-1 기록 (Bevy, 2026-10-22)
+
 기록일: 2026-10-22 (Asia/Seoul)
 
 ## 고정 버전

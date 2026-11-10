@@ -111,6 +111,7 @@ tests/
   `input/merge.rs`(`safe_stop_only_when_gamepad_was_driving_a_moving_vehicle`), 루트 `src/lib.rs`(`gamepad_starts_engine_and_drives`·
   `gamepad_disconnect_while_driving_clears_input_and_stops`·`reconnected_gamepad_needs_neutral_before_driving`), Godot 판은 `sim-godot` `devices.rs`가 같은 규칙을 쓴다.
   **실제 게임패드로는 아무것도 확인하지 않았다.** 첫 두 항목(장치 식별·축 이벤트, 실제 축 범위·Y축 부호·드리프트)은 실제 장치 확인이라 비워 둔다.
+  (GD-5) 위 근거 중 루트 `src/lib.rs` 시험 3개는 Bevy 앱과 함께 지웠다. 같은 규칙은 `sim-core` `input/merge.rs` 시험과 `sim-godot` `devices.rs`가 쓴다.
 
 ### 1-3. 차량 상태 머신
 
@@ -603,6 +604,16 @@ tests/
 ### GD-5. Bevy 정리
 
 - [ ]  Godot 판이 GD-2~GD-4와 4-6을 만족하면 Bevy 앱 제거 여부를 사용자에게 확인한다. 제거 전까지 Bevy 앱의 검사는 계속 통과해야 한다.
+- 진행 기록(2026-11-10, `feature/remove-bevy`): GD-2~GD-4 사람 확인(사용자 보고 전부 정상) 뒤 사용자가 "Bevy 제거 작업 시작"을 지시했다.
+  사용자 결정: 보정 측정(2-5)은 Godot로 옮긴 뒤 제거, `--capture-views`와 충돌 교육 기록(`TrainingLog`)은 버림, 창 없는 개발 명령은 새 crate `sim-tools`.
+  - 보정 측정: `CalibrationLog`·예상 정지거리·회전반경을 `sim-core` `vehicle/calibration.rs`로 옮기고 `DriveSession`이 매 틱 측정한다.
+    Godot은 `SimVehicle.calibration_lines()`(계약 v1.3)를 `calibration` 코스 HUD 아래 상자에 보인다. 시험: sim-core 10개(옮긴 9개 + 세션 반복 시험), `calibration_test.gd`.
+  - 개발 명령: `--fetch-map`, `--extract-pbf`, `--audit-extract`, `--compare-overpass`를 `cargo run -p sim-tools -- ...`로 옮겼다.
+  - 제거: 루트 `src/`(Bevy 앱, 시험 79개)와 Bevy·bevy_rapier3d 의존성, `sim-core`의 `bevy`·`test-fixtures` 기능. 루트 `Cargo.toml`은 작업 공간 설정만 둔다.
+    지운 시험 중 엔진 무관 규칙(입력 합치기·게임패드·기어·충돌·재생)은 `sim-core`·`sim-godot` 시험과 Godot 헤드리스 시험이 맡는다.
+    Bevy 화면 전용 시험(HUD 문자열, 메뉴 상태, 카메라 엔티티 등)은 대응 시험 없이 사라졌다.
+  - 검사 명령에서 `cargo run -- --smoke-test`를 빼고 Godot 헤드리스 시험으로 바꿨다(AGENTS.md, README, handoff).
+  체크는 병합 승인 때 사용자 확인 후 바꾼다.
 
 ## Phase 5 — 교육 시나리오 및 평가 (3~4주 차)
 

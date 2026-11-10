@@ -632,7 +632,7 @@ impl Drop for InFlightGuard {
 
 /// 백그라운드 받기 작업. 화면 갱신을 막지 않도록 별도 스레드에서 [`obtain_snapshot`]을 실행한다.
 pub struct FetchJob {
-    /// 결과 수신 통로. Bevy 리소스(여러 스레드에서 공유)에 넣을 수 있도록 잠금으로 감싼다.
+    /// 결과 수신 통로. 여러 스레드에서 공유하는 노드에 넣을 수 있도록 잠금으로 감싼다.
     receiver: std::sync::Mutex<Receiver<Result<Obtained, String>>>,
 }
 
