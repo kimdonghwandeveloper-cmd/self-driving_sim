@@ -5156,6 +5156,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "sim-tools"
+version = "0.1.0"
+dependencies = [
+ "sim-core",
+]
+
+[[package]]
 name = "simba"
 version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

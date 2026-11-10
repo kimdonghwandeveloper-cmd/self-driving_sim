@@ -7,7 +7,7 @@ publish = false
 
 [workspace]
 # Phase GD-0·GD-1: 엔진 무관 로직(sim-core)과 Godot 확장(sim-godot).
-members = ["crates/sim-core", "crates/sim-godot"]
+members = ["crates/sim-core", "crates/sim-godot", "crates/sim-tools"]
 # sim-core 테스트도 기존 `cargo test`에 포함한다. sim-godot(cdylib)는 `-p sim-godot`로 따로 빌드한다.
 default-members = [".", "crates/sim-core"]
 

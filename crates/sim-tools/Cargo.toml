@@ -1,0 +1,12 @@
+[package]
+name = "sim-tools"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.99.1"
+publish = false
+
+# GD-5: Bevy 앱 제거 때 루트 실행 파일에서 옮긴 창 없는 개발 명령(지도 받기, PBF 추출·대조).
+# 실행: cargo run --locked -p sim-tools -- --fetch-map <남,서,북,동>
+
+[dependencies]
+sim-core = { path = "../sim-core" }
