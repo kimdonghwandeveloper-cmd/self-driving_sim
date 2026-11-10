@@ -96,15 +96,21 @@ tests/
 
 - [ ]  연결된 게임패드 식별, 스틱 축 및 버튼 이벤트 확인.
 - [ ]  축 값 범위, Y축 부호, 데드존, 스틱 드리프트 테스트.
-- [ ]  게임패드 연결 시 왼쪽 스틱 위=선택 기어 방향 가속(D=전진, R=후진), 아래=D/R 공통 제동 적용.
-- [ ]  게임패드 연결 시 오른쪽 스틱 좌·우=좌·우 조향 적용.
-- [ ]  게임패드 기어 버튼 A=N(중립), B=R(후진), X=D(전진), Y=P(주차) 적용.
-- [ ]  Start=시동 ON/OFF 및 별도 긴급 정지·해제 버튼 임시 매핑(버튼은 추후 지정, 설정 파일에서 변경 가능).
+- [x]  게임패드 연결 시 왼쪽 스틱 위=선택 기어 방향 가속(D=전진, R=후진), 아래=D/R 공통 제동 적용.
+- [x]  게임패드 연결 시 오른쪽 스틱 좌·우=좌·우 조향 적용.
+- [x]  게임패드 기어 버튼 A=N(중립), B=R(후진), X=D(전진), Y=P(주차) 적용.
+- [x]  Start=시동 ON/OFF 및 별도 긴급 정지·해제 버튼 임시 매핑(버튼은 추후 지정, 설정 파일에서 변경 가능).
 - [x]  P/N에서 구동 가속 차단. 시동 Ready에서 N은 언제든, P는 정지 상태에서만, D/R은 정지 상태이거나 현재 움직이는 방향과 같을 때 전환 허용.
 - [x]  기어 버튼은 누르는 순간 한 번만 처리하고, 동시 기어 요청은 거부하며 HUD/로그에 사유 표시.
-- [ ]  게임패드 연결 해제 시 가속 명령 제거 및 안전 정지 처리.
+- [x]  게임패드 연결 해제 시 가속 명령 제거 및 안전 정지 처리.
 - [x]  키보드 폴백 입력 제공(개발 테스트용).
 - **완료 기준:** HUD/로그에서 모든 입력을 확인하고 매핑을 바꿀 수 있음.
+- 점검(2026-11-10, main `6335267`, 코드·자동 시험 대조): 체크한 게임패드 항목은 구현과 가상 장치 자동 시험이 있는 것만이다.
+  근거: `config/input.toml` `[gamepad]`(기본 `layout = "sticks"`, A=N·B=R·X=D·Y=P·Start=시동·RB=비상 정지·Back=해제),
+  `sim-core` `input/gamepad.rs`(`stick_layout_maps_axes`·`brake_overrides_throttle`·`deadzone_removes_center_noise_and_keeps_full_range`·`stick_drift_produces_no_input`),
+  `input/merge.rs`(`safe_stop_only_when_gamepad_was_driving_a_moving_vehicle`), 루트 `src/lib.rs`(`gamepad_starts_engine_and_drives`·
+  `gamepad_disconnect_while_driving_clears_input_and_stops`·`reconnected_gamepad_needs_neutral_before_driving`), Godot 판은 `sim-godot` `devices.rs`가 같은 규칙을 쓴다.
+  **실제 게임패드로는 아무것도 확인하지 않았다.** 첫 두 항목(장치 식별·축 이벤트, 실제 축 범위·Y축 부호·드리프트)은 실제 장치 확인이라 비워 둔다.
 
 ### 1-3. 차량 상태 머신
 
@@ -169,6 +175,7 @@ tests/
 ## Phase 3 — 카메라·Low-Poly 주행 환경 (2~3주 차)
 
 > **완료 항목 반영(2026-11-06, 사용자 요청):** 체크는 확인된 개별 구현·검증 항목만 뜻하며 Phase 3 전체 완료 표시는 아니다. 3-1은 사용자 시야 확인 후 main `1475f80`에 병합되었고, 3-2와 지도 범용 구현은 `feature/phase3-map`의 `84215af`까지 검증했다(fmt·clippy·168 tests 통과, 실행 관련 코드 `687eaf5` smoke 및 합성 지도 캡처 확인). 3-2 이후 코드는 아직 main 미병합이다. 실제 통로·시작/끝·최종 bbox 확정, 이동 중 수동·게임패드 검증은 미완료다.
+> **갱신(2026-11-10):** 3-2·3-3·3-4는 main `176de91`에 병합됐다. 통로·시작/끝·bbox는 같은 날 `docs/map-data.md`에 고정되어 3-3을 체크했다. 이동 중 수동·실제 게임패드 검증은 여전히 미완료이며, 이제 Godot 판에서 한다(GD-2·GD-3).
 
 ### 3-0. Claude 구현 인계: 사진 근거와 작업 계약 (2026-10-30)
 
@@ -286,12 +293,15 @@ tests/
 
 ### 3-3. 여수 엑스포해양공원 OSM 범위 확정
 
-- [ ]  **공원 내부 직선 통로**의 정확한 시작·끝 지점과 데이터 범위 확인.
-- [ ]  OSM에서 통로가 `highway=footway/path/service` 등 어떤 태그로 기록됐는지 확인.
+- [x]  **공원 내부 직선 통로**의 정확한 시작·끝 지점과 데이터 범위 확인.
+- [x]  OSM에서 통로가 `highway=footway/path/service` 등 어떤 태그로 기록됐는지 확인.
 - [x]  통로의 법적 통행 가능 여부와 별개로 **가상 교육 코스**임을 명시.
-- [ ]  우선 작은 구역만 선택(예: 최대 500×300m **개발상 임시 상한**, 실측 아님).
+- [x]  우선 작은 구역만 선택(예: 최대 500×300m **개발상 임시 상한**, 실측 아님).
 - [x]  OSM 라이선스(ODbL) 및 출처 표기 방안 문서화.
 - **완료 기준:** 선택 구역 데이터 파일과 좌표 범위가 고정됨.
+- 점검(2026-11-10, 문서 대조): `docs/map-data.md` "상태" 절(2026-11-06, Codex 제안을 사용자가 전달)에 way 532526349(`highway=service`, 약 292 m),
+  시작·끝 좌표, bbox 약 177×233 m(상한 이내)가 기록되어 있고 `assets/maps/yeosu-expo/course.toml`·원본 응답 파일로 고정됐다.
+  남은 가정: 공원 경계 way 529495025를 "여수 엑스포해양공원"으로 본 것은 이름·위치에 따른 가정이라 사용자 확인이 필요하다. 실제 폭·경사·운행 가능 여부는 확인하지 않았다.
 
 ### 3-4. OSM → Bevy 3D 도로 변환
 
@@ -304,12 +314,16 @@ tests/
 - [x]  초기에는 경사·고도 데이터를 사용하지 않고 `y=0` 평면으로 구현.
 - [ ]  주변 건물은 필요 시 간단한 박스/기존 GLB 에셋으로 표시.
 - **완료 기준:** 해당 통로의 형태를 참고한 주행 가능한 3D 구역에서 차량 이동.
+- 점검(2026-11-10): 주변 건물은 Bevy·Godot 판 모두 미구현이다("필요 시" 항목이라 비워 둔다). 실제 통로 코스(`course.toml`)는 Bevy `--course map:`과
+  Godot 메뉴 지도 코스로 열리며 자동 시험이 있으나, 이 코스를 사람이 직접 주행한 기록은 없다.
 
 ### 3-5. 지도 실패 대비 대체 경로
 
 - [ ]  3주 차 중반까지 OSM 변환이 안정적이지 않으면, OSM 중심선을 수동 정리한 정적 코스 데이터로 대체.
 - [x]  지도 파이프라인 완성보다 **훈련 가능한 코스**를 우선.
 - **완료 기준:** 지도 처리 지연이 교육 시나리오 구현을 막지 않음.
+- 점검(2026-11-10): 첫 항목은 조건부 대안이다. OSM 변환이 동작해(3-4·Phase 4) 정적 코스로 대체하지 않았으므로 **해당 없음**으로 비워 둔다.
+  지도 코스를 열지 못하면 개발 코스로 대체하는 동작은 Bevy·Godot 판 모두 있다(4-6).
 
 ## Phase 4 — 경로 지정 OSM 코스 생성 (2026-11-06 추가)
 
@@ -401,6 +415,9 @@ tests/
 - [ ]  타일을 받지 못하면 회색 칸으로 두고 도로 받기·경로 계산·저장·주행은 그대로 동작한다.
 - **완료 기준:** 타일 좌표·캐시·좌표 왕복 시험, 사람이 전국 → 지역 확대 → 도로 받기 → 경로 → 주행을 확인. 창 크기·DPI별 정렬은 사람 확인으로 기록한다.
 - **점검(2026-11-07, main ee7a0c9):** 4-5a·4-5b는 main에 병합되었고 자동 시험(258개)은 통과했다. Codex 지적 P2 3건 수정본(396b558)의 재검증은 사용자 지시로 철회했고, 사람의 화면 확인도 하지 않아 두 절의 항목은 비워 둔다.
+- **점검(2026-11-10, main 6335267):** 4-5·4-5a·4-5b의 같은 기능이 Godot 판에도 있다(GD-4: 메뉴·Esc 복귀, 지도 화면의 전국 타일·지역 받기·받은 지역 테두리·맞춤 보기 세 가지·점 편집·경로 저장).
+  Godot 자동 시험(`menu_flow_test.gd`·`route_save_test.gd`)은 통과했지만 Bevy·Godot 어느 쪽도 사람이 확인하지 않아 위 항목은 그대로 비워 둔다.
+  사람 확인은 Godot 판(GD-4)에서 하고, 결과를 이 절에도 함께 기록한다. 실제 네트워크 타일·도로 받기는 아직 한 번도 확인하지 않았다.
 
 ### 4-5G. Geofabrik 전국 도로 원자료 (2026-11-07 추가)
 
@@ -424,6 +441,9 @@ tests/
   - 시험: 사람이 기대값을 적은 작은 PBF 정답 fixture(제안서 §7.3 사례), 실제 여수 추출의 독립 보존 규칙 대조(§7.4), 같은 입력 두 번 추출의 바이트 일치(§7.1), 기존 여수 Overpass 스냅샷과의 차이 분류(§7.2), 메타 v1/v2 읽기, 코스 생성·시험 주행 회귀.
   - 측정: 최대 메모리, 단계별 시간, 지역 스냅샷 크기.
   - 실제 PBF가 필요한 항목(§7.2·§7.4·측정)은 사용자가 파일을 주거나 받기를 요청한 뒤에 한다.
+  - 점검(2026-11-10): 코드는 `4f45b66`(merge `ee7a0c9`)에서 들어왔고 GD-1에서 `sim-core`(`pbf_extract`·`pbf_audit`·`pbf_compare`·`road_snapshot`)로 옮겼다.
+    CLI `--extract-pbf`·`--audit-extract`·`--compare-overpass`와 시험용 정답 fixture 시험이 있다. 실제 여수 PBF 추출·보존 규칙 대조·Overpass 차이 분류·메모리/시간 측정은
+    하지 않아 체크하지 않는다(사용자가 PBF 파일을 주거나 받기를 요청해야 한다).
 - [ ]  **G-2 전국 인덱스:** 격자 → way ID / way ID → 도로·노드 구조와 way 전체 복제 구조의 크기·조회 시간을 비교해 정하고, 인덱스 추출 = 전체 읽기 추출(바이트)을 확인한다.
 - [ ]  **G-3 받기·갱신:** `.part` 받기, 제공 체크섬·전송 완료·파싱·머리부 검사, 세대 관리와 실패 시 기존 세대 보존. 자동 갱신 없음. 시험은 네트워크 없는 전송으로 한다.
 - [ ]  **G-4 화면 연동:** 경로 선택 화면에 출처 표시·선택, 진행 표시, 거부 이유, Overpass 대체 경로. 자동 시험과 사람이 직접 한 확인을 따로 기록한다.
@@ -565,6 +585,9 @@ tests/
   `route_save_test.gd`(오프라인 스냅샷 → 점 2개 → 저장 → 코스 목록 → 저장 경로 차량 준비, 덮어쓰기 거부) 통과.
   메뉴 목록의 지도 코스 5개(저장소 3, Bevy로 저장한 경로 2)가 모두 열리는 것도 임시 스크립트로 확인했다.
   **남은 것:** 실제 네트워크 지역 받기·타일 받기는 사용자 요청 때만 하므로 확인하지 않았다. 사람이 창에서 메뉴·HUD를 써 보는 확인.
+  2026-11-10(main `6335267`): Codex `feature/gd2-godot`(미검증, 병합 안 함·삭제)에만 있던 기능을 다시 구현했다. 지도 화면의 "받아 둔 지역 열기"(캐시만 사용)·
+  스냅샷 폴더 열기·받아 둔 지역/열린 지역 테두리·받기 기준 십자선, 주행 HUD의 이동 전진/후진/정지·전방이 아닌 시점 안내.
+  자동 확인은 `route_save_test.gd`(폴더로 연 스냅샷 범위 = 파일로 연 범위)뿐이다. 캐시 지역 선택 상자·테두리 표시·HUD 문구는 사람 확인이 필요하다.
 
 ### GD-5. Bevy 정리
 
@@ -610,13 +633,21 @@ tests/
 
 ### 6-1. 기능·안전 회귀 테스트
 
-- [ ]  D/R 모두 아래 스틱 입력은 브레이크로 동작.
-- [ ]  주행 중 P 진입 및 진행 방향과 반대인 D/R 전환 차단; N 전환 및 같은 진행 방향의 N→D/R 허용.
-- [ ]  시동 OFF/비상 정지 상태에서 가속 차단.
-- [ ]  게임패드 연결 해제 시 안전 정지.
-- [ ]  저속 충돌 시 관통 방지.
-- [ ]  카메라 방향 전환 시 차량 운동 영향 없음.
+- [x]  D/R 모두 아래 스틱 입력은 브레이크로 동작.
+- [x]  주행 중 P 진입 및 진행 방향과 반대인 D/R 전환 차단; N 전환 및 같은 진행 방향의 N→D/R 허용.
+- [x]  시동 OFF/비상 정지 상태에서 가속 차단.
+- [x]  게임패드 연결 해제 시 안전 정지.
+- [x]  저속 충돌 시 관통 방지.
+- [x]  카메라 방향 전환 시 차량 운동 영향 없음.
 - **완료 기준:** 필수 테스트 통과, 치명적 오류 0건.
+- 점검(2026-11-10, 자동 시험 대조): 위 여섯 항목은 각각 회귀 시험이 있고, `271c5ee`(main `6335267`에 병합)를 test 워크트리에서 `cargo.exe test --locked --all-features`로 돌려 모두 통과했다.
+  - 제동: `sim-core` `vehicle/dynamics.rs` `brake_stops_without_reversing`(D·R 둘 다), `input/gamepad.rs`·`input/commands.rs` `brake_overrides_throttle`
+  - 기어: `vehicle/state.rs` `opposite_direction_and_park_rejected_while_moving`·`neutral_allowed_while_moving`·`same_direction_gear_allowed_while_moving`·`invariants_hold_for_all_short_command_sequences`
+  - 가속 차단: `vehicle/state.rs` `engine_off_blocks_gear_change_and_throttle`·`emergency_stop_blocks_throttle_gear_and_engine`, `vehicle/dynamics.rs` `park_and_engine_off_do_not_move`
+  - 게임패드 해제: 루트 `src/lib.rs` `gamepad_disconnect_while_driving_clears_input_and_stops`, `input/merge.rs` `safe_stop_only_when_gamepad_was_driving_a_moving_vehicle`
+  - 관통: `vehicle/collision.rs` `thin_wall_is_not_tunneled_at_top_speed`·`turning_into_pillar_does_not_penetrate`(수치 근사이며 절대 보장이 아님, `docs/handoff.md` 참고)
+  - 시점: 루트 `src/lib.rs` `view_switching_does_not_affect_vehicle`
+  자동 시험 기준 체크이며, 실제 게임패드와 사람 주행으로는 확인하지 않았다. 6-2 이후는 그대로 남는다.
 
 ### 6-2. 성능·사용성
 
