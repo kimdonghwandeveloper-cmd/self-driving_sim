@@ -10,6 +10,7 @@ use std::collections::VecDeque;
 
 use crate::config::VehicleConfig;
 use crate::input::ControlRequest;
+use crate::vehicle::calibration::{CalibrationLog, CalibrationReadout};
 use crate::vehicle::collision::{ContactState, Impact, VEHICLE_FOOTPRINT};
 use crate::vehicle::collision::{ObstacleGrid, step_with_grid};
 use crate::vehicle::dynamics::{DynamicsParams, Motion};
@@ -144,6 +145,8 @@ pub struct DriveSession {
     queue: VecDeque<DriveCommand>,
     manual: VehicleInput,
     tick: u64,
+    /// 제동·가속 보정 시험 측정(2-5). 주행 결과에는 영향을 주지 않는다.
+    calibration: CalibrationLog,
 }
 
 impl DriveSession {
@@ -151,16 +154,20 @@ impl DriveSession {
     pub fn new(course: CourseDef, config: &VehicleConfig) -> Self {
         let obstacles = ObstacleGrid::new(course.collision_rects());
         let motion = course.start;
+        let state = VehicleState::new(config.state_machine.stop_threshold_mps);
+        let mut calibration = CalibrationLog::default();
+        calibration.restart_from(&state, &motion);
         Self {
             course,
             obstacles,
             params: config.dynamics.clone(),
-            state: VehicleState::new(config.state_machine.stop_threshold_mps),
+            state,
             motion,
             contact: ContactState::default(),
             queue: VecDeque::new(),
             manual: VehicleInput::default(),
             tick: 0,
+            calibration,
         }
     }
 
@@ -182,6 +189,16 @@ impl DriveSession {
     /// 장애물 접촉 상태를 반환한다.
     pub fn contact(&self) -> &ContactState {
         &self.contact
+    }
+
+    /// 보정 측정 기록을 반환한다.
+    pub fn calibration(&self) -> &CalibrationLog {
+        &self.calibration
+    }
+
+    /// 현재 상태로 보정 표시값(회전반경·예상 정지거리·시험 결과)을 만든다.
+    pub fn calibration_readout(&self) -> CalibrationReadout {
+        CalibrationReadout::new(&self.state, &self.motion, &self.params, &self.calibration)
     }
 
     /// 처리를 마친 틱 수를 반환한다.
@@ -272,6 +289,13 @@ impl DriveSession {
             &self.obstacles,
             &mut self.contact,
         );
+        self.calibration.observe(
+            &self.state,
+            &self.motion,
+            &self.params,
+            self.contact.blocked,
+            DT,
+        );
         self.tick += 1;
         report.tick = self.tick;
 
@@ -310,8 +334,8 @@ impl DriveSession {
         }
     }
 
-    /// 정지 상태면 자세·속도·조향각·접촉을 코스 시작값으로 되돌린다(Bevy `reset_to_start`와 같은 조건).
-    /// 기어·시동·비상 정지·수동 입력·대기열은 그대로 둔다.
+    /// 정지 상태면 자세·속도·조향각·접촉을 코스 시작값으로 되돌리고 진행 중인 보정 시험을 버린다.
+    /// 끝난 보정 결과·기어·시동·비상 정지·수동 입력·대기열은 그대로 둔다.
     fn reset_to_start(&mut self) -> Result<(), String> {
         if !self.state.is_stopped() {
             return Err(RESET_NOT_STOPPED.to_owned());
@@ -319,6 +343,7 @@ impl DriveSession {
         self.state.set_speed_mps(0.0);
         self.motion = self.course.start;
         self.contact = ContactState::default();
+        self.calibration.restart_from(&self.state, &self.motion);
         Ok(())
     }
 }
@@ -452,6 +477,46 @@ mod tests {
             (session.motion().x_m, session.motion().z_m),
             (start.x_m, start.z_m)
         );
+    }
+
+    /// 보정 코스에서 가속·제동 시험이 틱마다 측정되고, 복귀 뒤에도 끝난 결과는 남아 같은 출발점에서
+    /// 다시 시험할 수 있는지 확인한다(Bevy `brake_trial_repeats_from_start_pose`를 옮김).
+    #[test]
+    fn calibration_trials_repeat_from_start_pose() {
+        let mut session =
+            DriveSession::new(CourseId::Calibration.build(), &VehicleConfig::default());
+        session
+            .enqueue(DriveCommand::Vehicle(VehicleCommand::ToggleEngine))
+            .unwrap();
+        session
+            .enqueue(DriveCommand::Vehicle(VehicleCommand::RequestGear(
+                Gear::Drive,
+            )))
+            .unwrap();
+        let brake = VehicleInput {
+            brake: 1.0,
+            ..VehicleInput::default()
+        };
+        for round in 1..=2 {
+            session.set_manual_input(throttle(1.0));
+            for _ in 0..64 * 3 {
+                session.tick(&DeviceTick::default());
+            }
+            session.set_manual_input(brake);
+            for _ in 0..64 * 5 {
+                session.tick(&DeviceTick::default());
+            }
+            assert!(session.state().is_stopped());
+            let readout = session.calibration_readout();
+            assert_eq!(readout.trials, (round, round), "round {round}");
+            let stop = readout.last_stop.expect("brake trial should finish");
+            assert!(stop.distance_m > 0.0 && !stop.emergency, "{stop:?}");
+
+            session.enqueue(DriveCommand::ResetCourse).unwrap();
+            assert!(session.tick(&DeviceTick::default()).course_reset);
+            assert_eq!(session.calibration().active(), None);
+            assert_eq!(session.calibration().last_stop(), Some(stop));
+        }
     }
 
     /// 장치 입력이 있으면 수동 입력 대신 쓰고, 장치 기어 충돌은 `gear_conflict`로 거부되는지 확인한다.

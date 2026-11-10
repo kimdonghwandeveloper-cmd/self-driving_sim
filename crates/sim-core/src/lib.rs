@@ -1,7 +1,7 @@
 //! 엔진과 무관한 시뮬레이터 로직(Phase GD-1).
 //!
-//! Bevy 앱과 Godot 확장이 같은 계산을 쓰도록 렌더링·ECS에 기대지 않는 코드만 둔다.
-//! `bevy` 기능을 켜면 Bevy 앱에서 쓰는 컴포넌트 derive가 붙는다.
+//! Godot 확장(`sim-godot`)과 개발 명령(`sim-tools`)이 같은 계산을 쓰도록 렌더링에 기대지 않는 코드만 둔다.
+//! (GD-5에서 Bevy 앱을 지웠다.)
 
 pub mod camera;
 pub mod config;

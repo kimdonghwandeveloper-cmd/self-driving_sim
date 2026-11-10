@@ -1,7 +1,6 @@
 //! 경로 선택의 지역 범위·캐시 목록·모델 열기·저장 이름 규칙(엔진 무관, Phase GD-2d).
 //!
-//! Bevy 경로 선택 화면과 Godot `SimRoutePicker`가 같이 쓴다. 경로는 호출하는 쪽이 정한다
-//! (Bevy는 실행 폴더 기준 상대 경로, Godot은 저장소 루트 기준 절대 경로).
+//! Godot `SimRoutePicker`가 쓴다. 경로는 호출하는 쪽이 정한다(Godot은 저장소 루트 기준 절대 경로).
 
 use std::path::{Path, PathBuf};
 

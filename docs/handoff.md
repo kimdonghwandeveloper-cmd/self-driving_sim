@@ -20,14 +20,15 @@ PLAN의 체크는 구현과 자동 시험이 확인된 항목만 뜻하고, 사�
 
 - 자율주행 셔틀 안전관리자 조작 절차 훈련용 시뮬레이터. 실차와 같은 조작감·제동거리·안전성을 검증하거나 인증하는 도구가 아니다.
 - 구조(2026-11-08 사용자 결정, PLAN Phase G): 엔진과 무관한 로직은 `crates/sim-core`, 화면은 Godot 4.7(`godot/`)이며
-  `crates/sim-godot`(godot-rust 0.5.5, cdylib)로 연결한다. 기존 Bevy 앱(루트 `src/`)은 비교용으로 남아 있고 검사는 계속 통과해야 한다.
-  Bevy 앱 제거 여부는 GD-5에서 사용자에게 확인한다.
+  `crates/sim-godot`(godot-rust 0.5.5, cdylib)로 연결한다. 창 없는 개발 명령(지도 받기, PBF 추출·대조)은 `crates/sim-tools`다.
+  Bevy 앱(루트 `src/`)은 GD-5(2026-11-10 사용자 결정)에서 지웠다. 보정 측정(2-5)은 그 전에 `sim-core`·Godot 보정 코스로 옮겼고,
+  `--capture-views`와 충돌 교육 기록(TrainingLog)은 사용자 결정으로 옮기지 않았다(교육 기록은 Phase 5에서 다시 설계).
 - 구현됨: 키보드·Xbox 유형 게임패드 입력, 시동·기어·비상 정지 상태 머신, 중속 운동 모델(2-6), 충돌, 입석 1인칭 네 시점,
   개발 코스, 여수 OSM 코스, 굽은 길·교차로·경로 탐색·지도 받기·캐시, 경로 선택 지도(전국 타일), 메인 메뉴, 경로 끝 목표 표시.
 - 미구현: 교육 시나리오·평가·JSON 결과 저장(Phase 5), 경사 도로(4-7), 통합 검수·배포(Phase 6 중 6-2 이후),
   Geofabrik 전국 원자료의 실제 PBF 검증(G-1 일부)과 G-2~G-4.
 - 사람 확인(2026-11-10, 사용자 보고 "정상 작동됨 전부"): GD-2~GD-4 안내 절차(게임패드·네트워크 지역 받기 포함)를 Godot 판에서 확인했다.
-  이 보고로 바꿀 PLAN 체크(1-2 실제 장치 두 항목, 4-5·4-5b, 4-6 네 번째)는 사용자 승인 후 정한다. Bevy 판은 사람이 확인하지 않았다.
+  이 보고로 바꿀 PLAN 체크(1-2 실제 장치 두 항목, 4-5·4-5b, 4-6 네 번째)는 사용자 승인 후 정한다.
 
 ## 작성 시점 Git 상태 (2026-11-10)
 
@@ -54,12 +55,12 @@ develop 워크트리의 `godot/project.godot`·`.glb.import` 변경은 Godot 에
 cargo.exe fmt --all -- --check
 cargo.exe clippy --locked --all-targets --all-features -- -D warnings
 cargo.exe test --locked --all-features
-cargo.exe run --locked -- --smoke-test
 ```
 
 Godot 시험(워크트리 최상위, 명령 전체는 `README.md` "Godot 연결과 첫 import 검사"):
 `cargo.exe build --locked -p sim-godot` → `--headless --path godot --import --frame-delay 1000` →
-`godot/tests/`의 `smoke_test`·`presentation_smoke`·`drive_replay_test`·`map_course_test`·`menu_flow_test`·`route_save_test`·`goal_reset_test`.
+`godot/tests/`의 `smoke_test`·`presentation_smoke`·`drive_replay_test`·`map_course_test`·`menu_flow_test`·`route_save_test`·`goal_reset_test`·`calibration_test`.
+화면/실행 변경의 실행 검사는 이 Godot 시험이다(Bevy `--smoke-test`는 GD-5에서 없어짐).
 
 - `godot/sim_godot.gdextension`은 **같은 워크트리의** `target/debug/sim_godot.dll`을 읽는다. 워크트리마다 `target/`이 따로라서,
   Godot으로 열 워크트리에서 먼저 `cargo.exe build -p sim-godot`를 해야 한다. 없으면 `GDExtension dynamic library not found`가 나고
@@ -77,12 +78,8 @@ Godot 시험(워크트리 최상위, 명령 전체는 `README.md` "Godot 연결�
 - D/R은 정지 판정 시 또는 현재 진행 방향과 같을 때 허용.
   전진 중 N→D 허용, 전진 중 D→R·N→R 거부.
 - 정지 판정은 설정 임계값을 사용한다. 시동 OFF·비상 정지에서는 구동 가속과 기어 변경 차단.
-- Bevy 판: 키보드 읽기와 명령 처리는 `RunFixedMainLoop`의 `BeforeFixedMainLoop`,
-  운동 계산은 `FixedUpdate`, 화면 표시는 `Update`다.
-- Godot 판: `SimVehicle`이 `_physics_process`(64틱/초)에서 장치를 읽고 `sim-core` 주행 세션을 한 틱 진행한다.
+- `SimVehicle`이 `_physics_process`(64틱/초)에서 장치를 읽고 `sim-core` 주행 세션을 한 틱 진행한다.
   GDScript는 읽기 함수와 신호로 표시만 하고 주행·명령 규칙을 따로 구현하지 않는다(`docs/design/godot-interface.md`).
-- Bevy 판 키보드 통합 테스트는 `KeyboardInput` 메시지 경로를 쓴다.
-  `ButtonInput`을 직접 press하면 PreUpdate에서 just_pressed가 지워져 비상 정지 테스트가 거짓 통과할 수 있다.
 
 ### 충돌과 감속
 
@@ -102,10 +99,7 @@ Godot 시험(워크트리 최상위, 명령 전체는 `README.md` "Godot 연결�
 
 - 초기 겹침 장애물의 구간 경로 검사 보강.
 - 기어 입력에서 고정 크기 목록을 Vec으로 만드는 임시 할당 정리.
-- 테스트에서만 호출하는 `hud_text()`, 정지 임계값 getter의 공개 범위 정리.
-  테스트 사용처가 있으므로 “사용되지 않는 코드”로 단정해 삭제하지 않는다.
-- `TrainingLog::events()`는 기록 조회 API이고, Rapier 선택 의존성은 호환성 검사용이다.
-  현재 실행 경로에서 쓰지 않는다는 이유만으로 불필요한 잔재로 처리하지 않는다.
+- (GD-5에서 해소) Bevy `hud_text()`·`TrainingLog`·Rapier 선택 의존성은 Bevy 앱과 함께 지웠다.
 
 보류 항목을 사용자 요청 없이 전부 신규 작업으로 시작하지 않는다.
 

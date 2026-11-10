@@ -18,12 +18,18 @@ const SIDE_VIEW_NOTICE := "현재 시선은 차량 전방과 다릅니다"
 const MOVING_THRESHOLD_MPS := 0.01
 ## 지도 코스(`map:`)를 열지 못했을 때 대신 여는 개발 코스와 안내 문구(Bevy `--course map:` 대체와 같음, 4-6).
 const FALLBACK_COURSE := "training"
+## 보정 측정(2-5)을 보여 주는 코스와 그 상자 제목.
+const CALIBRATION_COURSE := "calibration"
+const CALIBRATION_TITLE := "보정 측정 · 시뮬레이터 임시값이며 실차 성능이 아닙니다"
 const FALLBACK_NOTICE := "지도 코스를 열지 못해 개발 코스(training)로 대체했습니다.\n%s"
 var vehicle: Node3D
 var rig: Node3D
 var hud := Label.new()
 var warnings_label := Label.new()
 var notice := Label.new()
+## 보정 코스에서만 보이는 측정 상자와 글자.
+var calibration_box: PanelContainer
+var calibration_label := Label.new()
 var is_preview := false
 var failure := ""
 ## 지도 코스 대신 개발 코스를 열었을 때의 안내. 대체하지 않았으면 빈 문자열.
@@ -75,6 +81,7 @@ func start(course_name: String, force_preview: bool = false) -> void:
 	warnings_label.text = "\n".join(warnings)
 	dismiss.visible = not warnings_label.text.is_empty()
 	notice.text = "\n".join(vehicle.call("course_notices"))
+	calibration_box.visible = not is_preview and str(vehicle.get("course")) == CALIBRATION_COURSE
 	if is_preview:
 		notice.text += "\n정지 미리보기 · 1 전방 / 2 후방 / 3 좌측 / 4 우측 / C 외부"
 
@@ -155,6 +162,10 @@ func _ui() -> void:
 	var hud_box := _backdrop()
 	panel.add_child(hud_box)
 	hud_box.add_child(hud)
+	calibration_box = _backdrop()
+	calibration_box.hide()
+	panel.add_child(calibration_box)
+	calibration_box.add_child(calibration_label)
 	panel.add_child(warnings_label)
 	var notice_box := _backdrop()
 	notice_box.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_RIGHT)
@@ -164,7 +175,7 @@ func _ui() -> void:
 	notice_box.offset_bottom = -12
 	overlay.add_child(notice_box)
 	notice_box.add_child(notice)
-	for label in [hud, notice, warnings_label]:
+	for label in [hud, notice, warnings_label, calibration_label]:
 		label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		label.add_theme_color_override("font_color", Color.WHITE)
 		label.add_theme_color_override("font_shadow_color", Color.BLACK)
@@ -174,6 +185,7 @@ func _ui() -> void:
 	warnings_label.custom_minimum_size.x = 640
 	hud.add_theme_font_size_override("font_size", 22)
 	notice.add_theme_font_size_override("font_size", 14)
+	calibration_label.add_theme_font_size_override("font_size", 16)
 	notice.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	dismiss.text = "설정 경고 닫기"
 	dismiss.pressed.connect(_dismiss_warnings)
@@ -203,6 +215,8 @@ func _process(_delta: float) -> void:
 
 	if Time.get_ticks_msec() < command_notice_until:
 		hud.text += "\n" + command_notice
+	if calibration_box.visible:
+		calibration_label.text = CALIBRATION_TITLE + "\n" + "\n".join(vehicle.call("calibration_lines"))
 
 ## 부호 있는 속도(m/s)를 이동 방향 이름으로 바꾼다. 정지 판정 문턱은 표시용이다.
 static func _movement(speed_mps: float) -> String:
@@ -234,6 +248,7 @@ func _fail(message: String) -> void:
 	notice.text = "상단 메뉴로 돌아가세요."
 	warnings_label.hide()
 	dismiss.hide()
+	calibration_box.hide()
 ## 반투명 어두운 배경 상자를 만든다(HUD·안내 글자가 하늘·노면 위에서도 읽히게).
 func _backdrop() -> PanelContainer:
 	var box := PanelContainer.new()

@@ -366,6 +366,19 @@ impl SimVehicle {
         })
     }
 
+    /// 보정 측정 줄(한국어, 계약 v1.3): 회전반경·예상 정지거리·진행 중 시험·마지막 제동·가속 시험.
+    /// 준비 전에는 빈 배열이다. 화면은 보정 코스에서만 표시한다.
+    #[func]
+    fn calibration_lines(&self) -> PackedStringArray {
+        let Some(session) = &self.session else {
+            return PackedStringArray::new();
+        };
+        crate::korean::calibration_lines(&session.calibration_readout())
+            .iter()
+            .map(GString::from)
+            .collect()
+    }
+
     /// 장애물·연석과 접촉한 상태인지.
     #[func]
     fn in_contact(&self) -> bool {

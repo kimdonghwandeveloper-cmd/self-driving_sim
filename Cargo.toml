@@ -1,37 +1,10 @@
-[package]
-name = "self-driving_sim"
-version = "0.1.0"
-edition = "2024"
-rust-version = "1.99.1"
-publish = false
-
+# GD-5(2026-11-10 사용자 결정): Bevy 앱을 지우고 루트는 작업 공간 설정만 둔다.
+# - crates/sim-core: 엔진과 무관한 로직(차량·충돌·코스·지도·경로·설정).
+# - crates/sim-godot: Godot 확장(cdylib). `cargo build -p sim-godot` 뒤 godot/에서 연다.
+# - crates/sim-tools: 창 없는 개발 명령(지도 받기, PBF 추출·대조).
 [workspace]
-# Phase GD-0·GD-1: 엔진 무관 로직(sim-core)과 Godot 확장(sim-godot).
-members = ["crates/sim-core", "crates/sim-godot"]
-# sim-core 테스트도 기존 `cargo test`에 포함한다. sim-godot(cdylib)는 `-p sim-godot`로 따로 빌드한다.
-default-members = [".", "crates/sim-core"]
-
-[features]
-default = []
-# Compatibility check only. Collisions currently use the built-in ground check in crates/sim-core/src/vehicle/collision.rs.
-physics = ["dep:bevy_rapier3d"]
-
-[dependencies]
-# Phase GD-1: 엔진과 무관한 로직. Bevy 컴포넌트 derive를 쓰려고 bevy 기능을 켠다.
-sim-core = { path = "crates/sim-core", features = ["bevy"] }
-bevy = { version = "=0.19.1", default-features = false, features = ["3d", "ui"] }
-bevy_rapier3d = { version = "=0.36.0", optional = true, default-features = false, features = ["dim3"] }
-serde = { version = "=1.0.229", features = ["derive"] }
-serde_json = "=1.0.154"
-# Phase 4-5G 지역 스냅샷·연결 정보·PBF 파일 식별 해시(SHA-256, 순수 Rust).
-sha2 = "=0.11.1"
-toml = "=1.1.8"
-# Phase 4-4 지도 받기(Overpass). 기본 기능: rustls + ring 암호 + webpki 루트 인증서 + gzip. aws-lc-rs(cmake/NASM 필요)는 쓰지 않는다.
-ureq = "=3.5.1"
-
-[dev-dependencies]
-# 루트 시험이 sim-core 합성 OSM 자료를 쓴다.
-sim-core = { path = "crates/sim-core", features = ["bevy", "test-fixtures"] }
+resolver = "3"
+members = ["crates/sim-core", "crates/sim-godot", "crates/sim-tools"]
 
 [profile.dev]
 opt-level = 1
@@ -40,5 +13,5 @@ debug = "line-tables-only"
 
 [profile.dev.package."*"]
 opt-level = 3
-# 외부 의존성(Bevy 등)은 디버그 정보를 만들지 않는다. rustc·링커 최대 메모리가 가장 크게 줄어든다.
+# 외부 의존성은 디버그 정보를 만들지 않는다. rustc·링커 최대 메모리가 가장 크게 줄어든다.
 debug = false

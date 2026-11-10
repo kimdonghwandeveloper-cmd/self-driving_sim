@@ -1,57 +1,16 @@
-//! 차량 파라미터 보정 도구(Phase 2-5).
+//! 차량 파라미터 보정 측정(Phase 2-5). Bevy 앱 제거 때 루트 `src/calibration.rs`에서 엔진 무관 부분만 옮겼다.
 //!
 //! 회전반경·제동거리 예상값을 계산하고, 같은 코스에서 반복하는 제동·가속 시험을 고정 주기마다 측정한다.
-//! 시작 위치 복귀 요청을 처리해 같은 출발점에서 시험을 되풀이할 수 있게 한다.
+//! 시작 위치 복귀는 [`crate::session::DriveSession`]이 처리하고 [`CalibrationLog::restart_from`]을 부른다.
 //! 모든 값은 **시뮬레이터 임시값**으로 계산한 결과이며 실차 성능을 나타내지 않는다.
 
-use bevy::prelude::*;
-
-use crate::SimSet;
-use crate::vehicle::controller::{
-    ControlFeedback, Feedback, Vehicle, VehicleContact, VehicleDynamics, VehicleMotion, step_motion,
-};
-use crate::vehicle::{DynamicsParams, EngineState, Gear, Motion, VehicleState};
-use crate::world::ActiveCourse;
+use super::dynamics::{DynamicsParams, Motion, min_turn_radius_m};
+use super::state::{EngineState, Gear, VehicleState};
 
 /// 이 조향각(rad)보다 작으면 직진으로 보고 회전반경을 표시하지 않는다.
 const STRAIGHT_STEER_RAD: f32 = 1.0e-4;
 /// 가속 시험에서 최고 속도에 도달했다고 보는 오차(m/s).
 const SPEED_LIMIT_EPS_MPS: f32 = 1.0e-4;
-
-/// 입력 장치가 보내는 시작 위치 복귀 요청. 정지 상태에서만 처리한다.
-#[derive(Message, Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ResetCourseRequest;
-
-/// 시작 위치 복귀가 실제로 적용되었음을 알리는 메시지. 카메라 시점 초기화 등에 쓴다.
-#[derive(Message, Debug, Clone, Copy, PartialEq, Eq)]
-pub struct CourseResetDone;
-
-/// 보정 측정 리소스와 시스템을 등록하는 플러그인.
-pub struct CalibrationPlugin;
-
-impl Plugin for CalibrationPlugin {
-    /// 측정 기록 리소스, 복귀 요청 메시지, 복귀 처리·측정 시스템을 앱에 등록한다.
-    ///
-    /// 복귀 요청은 명령 처리 직후(고정 주기 루프 직전), 측정은 운동 계산 직후 고정 주기마다 돈다.
-    fn build(&self, app: &mut App) {
-        app.init_resource::<CalibrationLog>()
-            .init_resource::<ActiveCourse>()
-            .add_message::<ResetCourseRequest>()
-            .add_message::<CourseResetDone>()
-            .add_systems(
-                bevy::app::RunFixedMainLoop,
-                apply_course_reset
-                    .in_set(SimSet::Control)
-                    .after(crate::vehicle::controller::apply_controls),
-            )
-            .add_systems(
-                FixedUpdate,
-                record_trials
-                    .after(step_motion)
-                    .run_if(crate::driving_active),
-            );
-    }
-}
 
 /// 최대 제동으로 멈춘 시험 결과.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -114,7 +73,7 @@ pub enum ActiveTrial {
 }
 
 /// 제동·가속 시험 측정 기록. 마지막 결과를 남겨 같은 코스의 반복 시험을 비교한다.
-#[derive(Resource, Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct CalibrationLog {
     /// 진행 중인 제동 시험.
     brake: Option<Trial>,
@@ -325,9 +284,6 @@ pub fn turn_radius_m(wheelbase_m: f32, steer_angle_rad: f32) -> Option<f32> {
     Some(wheelbase_m / steer_angle_rad.abs().tan())
 }
 
-/// 최소 회전 반경 계산은 지도 코스 생성과 함께 쓰도록 `sim_core::vehicle::dynamics`에 있다.
-pub use sim_core::vehicle::dynamics::min_turn_radius_m;
-
 /// 지금 속도에서 가속 없이 최대 제동했을 때의 예상 정지거리(m)를 v²/(2a)로 계산한다.
 ///
 /// 감속도는 최대 제동 + 관성 감속 + 구름 저항 성분이며, 비상 정지 중이면 비상 감속 성분도 더한다.
@@ -389,81 +345,6 @@ impl CalibrationReadout {
     }
 }
 
-/// 정지 상태이면 차량을 코스 시작 자세 `start`로 되돌린다. 움직이는 중이면 거부한다.
-///
-/// 시동·기어·비상 정지 상태는 바꾸지 않고, 장애물 접촉 기록과 진행 중인 시험만 초기화한다.
-pub fn reset_to_start(
-    state: &mut VehicleState,
-    motion: &mut Motion,
-    start: &Motion,
-    contact: &mut VehicleContact,
-    log: &mut CalibrationLog,
-) -> Feedback {
-    if !state.is_stopped() {
-        return Feedback {
-            accepted: false,
-            message: "reset to start: vehicle must be stopped".to_owned(),
-        };
-    }
-    state.set_speed_mps(0.0);
-    *motion = *start;
-    *contact = VehicleContact::default();
-    log.restart_from(state, motion);
-    Feedback {
-        accepted: true,
-        message: "reset to start: vehicle returned to start pose".to_owned(),
-    }
-}
-
-/// 받은 시작 위치 복귀 요청을 처리하고 결과를 HUD 피드백과 로그에 남긴다. 적용되면 [`CourseResetDone`]을 보낸다.
-/// 복귀 자세는 현재 코스([`ActiveCourse`])의 시작 자세다.
-#[allow(clippy::too_many_arguments)]
-pub fn apply_course_reset(
-    mut requests: MessageReader<ResetCourseRequest>,
-    mut done: MessageWriter<CourseResetDone>,
-    mut vehicle: ResMut<Vehicle>,
-    mut motion: ResMut<VehicleMotion>,
-    mut contact: ResMut<VehicleContact>,
-    mut log: ResMut<CalibrationLog>,
-    mut feedback: ResMut<ControlFeedback>,
-    course: Res<ActiveCourse>,
-) {
-    for _ in requests.read() {
-        let result = reset_to_start(
-            &mut vehicle.0,
-            &mut motion.0,
-            &course.0.start,
-            &mut contact,
-            &mut log,
-        );
-        if result.accepted {
-            info!("control: {}", result.message);
-            done.write(CourseResetDone);
-        } else {
-            warn!("control rejected: {}", result.message);
-        }
-        feedback.last = Some(result);
-    }
-}
-
-/// 고정 단계마다 운동 계산 결과로 제동·가속 시험을 측정한다.
-pub fn record_trials(
-    time: Res<Time>,
-    vehicle: Res<Vehicle>,
-    motion: Res<VehicleMotion>,
-    params: Res<VehicleDynamics>,
-    contact: Res<VehicleContact>,
-    mut log: ResMut<CalibrationLog>,
-) {
-    log.observe(
-        &vehicle.0,
-        &motion.0,
-        &params.0,
-        contact.0.blocked,
-        time.delta_secs(),
-    );
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -472,6 +353,7 @@ mod tests {
     use crate::vehicle::{
         ContactState, GroundRect, VEHICLE_FOOTPRINT, VehicleCommand, VehicleInput,
     };
+    use glam::Vec2;
 
     /// 테스트용 고정 시간 간격(s).
     const DT: f32 = 1.0 / 64.0;
@@ -757,35 +639,5 @@ mod tests {
             (fast - params.max_forward_speed_mps.powi(2) / 6.0).abs() < 0.01,
             "{fast}"
         );
-    }
-
-    /// 움직이는 중에는 복귀를 거부하고, 정지 상태에서는 시작 자세로 되돌리는지 확인한다.
-    #[test]
-    fn reset_requires_stop_and_restores_start_pose() {
-        let mut state = ready_in_drive();
-        let mut motion = Motion::default();
-        let mut log = CalibrationLog::default();
-        let mut contact = VehicleContact::default();
-        drive(&mut state, &mut motion, &mut log, input(1.0, 0.0), 64);
-        let moving = motion;
-        // 원점이 아닌 시작 자세도 그대로 복원하는지 보기 위한 임의 자세.
-        let start = Motion {
-            x_m: 2.0,
-            z_m: 1.5,
-            heading_rad: 0.4,
-            ..Motion::default()
-        };
-        let result = reset_to_start(&mut state, &mut motion, &start, &mut contact, &mut log);
-        assert!(!result.accepted);
-        assert_eq!(motion, moving);
-
-        drive(&mut state, &mut motion, &mut log, input(0.0, 1.0), 64);
-        contact.0.touching = true;
-        let result = reset_to_start(&mut state, &mut motion, &start, &mut contact, &mut log);
-        assert!(result.accepted, "{result:?}");
-        assert_eq!(motion, start);
-        assert_eq!(contact, VehicleContact::default());
-        assert_eq!(state.gear(), Gear::Drive);
-        assert!(log.last_stop().is_some(), "finished results are kept");
     }
 }

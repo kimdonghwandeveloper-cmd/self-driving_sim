@@ -1,6 +1,6 @@
 //! 장치 입력을 차량 명령 요청과 연속 입력으로 바꾸는 엔진 무관 규칙(Phase GD-1).
 //!
-//! Bevy 판과 Godot 판이 같은 규칙을 쓰도록 장치 읽기·키 매핑을 뺀 순수 함수만 둔다.
+//! 엔진이 바뀌어도 같은 규칙을 쓰도록 장치 읽기·키 매핑을 뺀 순수 함수만 둔다.
 //! 장치 읽기는 각 앱이 [`merge::DeviceFrame`]을 채워 넘긴다.
 //!
 //! - 조향·가속: [`merge::InputSource`]로 선택한 장치 하나의 값을 쓴다. 다른 장치를 조작해도 지금 장치의
@@ -26,7 +26,6 @@ pub use merge::{
 
 /// 입력 장치가 컨트롤러에 보내는 단발성 요청.
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[cfg_attr(feature = "bevy", derive(bevy_ecs::message::Message))]
 pub enum ControlRequest {
     Command(VehicleCommand),
     /// 서로 다른 기어 키가 동시에 눌려 거부된 요청.

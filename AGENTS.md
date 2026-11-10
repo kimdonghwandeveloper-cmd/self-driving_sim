@@ -23,7 +23,7 @@
    - `cargo.exe fmt --all -- --check`
    - `cargo.exe clippy --locked --all-targets --all-features -- -D warnings`
    - `cargo.exe test --locked --all-features`
-   - 화면/실행 관련 변경이면 `cargo.exe run --locked -- --smoke-test`
+   - 화면/실행 관련 변경이면 `cargo.exe build --locked -p sim-godot` 후 Godot 헤드리스 시험(`godot/tests/`, 명령은 README "Godot 시험과 첫 import 검사")
    - 테스트 워크트리에서는 코드를 수정하지 않는다. 실패하면 develop 워크트리에서 고친 뒤 다시 테스트한다.
 3. **병합:** 테스트 결과를 보고하고 **사용자 승인을 받은 뒤에만** 메인 리포지토리에서 병합한다.
    - `git merge --no-ff feature/<기능명>`
