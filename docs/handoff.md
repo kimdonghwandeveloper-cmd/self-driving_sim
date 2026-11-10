@@ -1,63 +1,53 @@
 # 새 에이전트 환경 인수인계
 
-기록일: 2026-10-29 (Asia/Seoul). 이 문서는 대화·에이전트 메모리가 없는 새 환경을 위한 상태 기록이다.
+기록일: 2026-11-10 (Asia/Seoul). 처음 작성 2026-10-29, 이번에 현재 상태로 다시 썼다.
+이 문서는 대화·에이전트 메모리가 없는 새 환경을 위한 상태 기록이다.
 아래 커밋과 워크트리는 작성 시점의 스냅샷이다. 작업 전에 실제 Git 상태를 다시 확인한다.
 
 ## 먼저 읽고 확인할 것
 
 1. `AGENTS.md`: 개발·검증·병합 규칙. 이 문서는 해당 규칙을 대체하지 않는다.
-2. 이 문서, `PLAN.md`, `README.md`.
-3. `docs/vehicle-assumptions.md`, `docs/development.md`.
-4. `git status --short`, `git worktree list`, `git log --all --oneline`로 실제 상태 확인.
+2. 이 문서, `PLAN.md`(특히 Phase G와 각 절의 "점검"·"진행 기록"), `README.md`.
+3. `docs/design/godot-interface.md`(Rust↔Godot 계약), `godot/IMPLEMENTATION.md`, `docs/map-data.md`,
+   `docs/vehicle-assumptions.md`, `docs/development.md`.
+4. `git status --short`, `git worktree list`, `git branch --no-merged main`으로 실제 상태 확인.
 
 기존 PLAN 체크와 과거 테스트 보고만으로 새 변경의 완료를 단정하지 않는다.
+PLAN의 체크는 구현과 자동 시험이 확인된 항목만 뜻하고, 사람 확인이 남은 것은 각 절의 "남은 것"에 따로 적는다.
 사용자는 코드 검토와 수동 주행을 구분하며, 수동 주행은 직접 수행하겠다고 했다.
 
 ## 프로젝트 목적과 현재 범위
 
-- Rust/Bevy 기반 자율주행 셔틀 안전관리자 조작 절차 훈련용 시뮬레이터.
-- 실차와 같은 조작감·제동거리·안전성을 검증하거나 인증하는 도구가 아니다.
-- 현재 키보드 폴백, Xbox 유형 게임패드 입력, 시동·기어·비상 정지 상태 머신, 저속 Bicycle 운동 모델,
-  개발용 3인칭 장면·HUD, 고정 장애물 충돌 처리, 메모리 내 충돌 교육 기록이 구현돼 있다.
-- 입석 1인칭 카메라, OSM 지도, 교육 시나리오, JSON 결과 저장은 미구현이다.
-- PLAN은 여수 엑스포해양공원 내부 직선 통로의 작은 OSM 기반 코스를 계획한다.
-  Phase 3-3~3-5는 미체크이며, 자동 변환이 지연되면 OSM 중심선을 정적 코스로 정리하는 대안이 있다.
+- 자율주행 셔틀 안전관리자 조작 절차 훈련용 시뮬레이터. 실차와 같은 조작감·제동거리·안전성을 검증하거나 인증하는 도구가 아니다.
+- 구조(2026-11-08 사용자 결정, PLAN Phase G): 엔진과 무관한 로직은 `crates/sim-core`, 화면은 Godot 4.7(`godot/`)이며
+  `crates/sim-godot`(godot-rust 0.5.5, cdylib)로 연결한다. 기존 Bevy 앱(루트 `src/`)은 비교용으로 남아 있고 검사는 계속 통과해야 한다.
+  Bevy 앱 제거 여부는 GD-5에서 사용자에게 확인한다.
+- 구현됨: 키보드·Xbox 유형 게임패드 입력, 시동·기어·비상 정지 상태 머신, 중속 운동 모델(2-6), 충돌, 입석 1인칭 네 시점,
+  개발 코스, 여수 OSM 코스, 굽은 길·교차로·경로 탐색·지도 받기·캐시, 경로 선택 지도(전국 타일), 메인 메뉴, 경로 끝 목표 표시.
+- 미구현: 교육 시나리오·평가·JSON 결과 저장(Phase 5), 경사 도로(4-7), 통합 검수·배포(Phase 6 중 6-2 이후),
+  Geofabrik 전국 원자료의 실제 PBF 검증(G-1 일부)과 G-2~G-4.
+- 사람 확인이 남은 것: GD-2~GD-4·4-6의 직접 주행·메뉴·지도 화면 확인, 실제 게임패드 확인, 실제 네트워크 타일·도로 받기.
 
-## 작성 시점 Git 상태
+## 작성 시점 Git 상태 (2026-11-10)
 
 | 위치 / 브랜치 | 커밋 | 상태 |
 | --- | --- | --- |
-| main 워크트리 / `main` | `c45e98b` | 충돌 수정 병합 완료 |
-| `develop` 브랜치 | `c45e98b` | main과 동기화된 기준점 |
-| develop 워크트리 / `feature/steering-return` | `3cad67b` | 새 조향 기능·문서 변경 커밋 존재 |
-| test 워크트리 / detached HEAD | `3cad67b` | 해당 커밋을 체크아웃한 상태 |
+| main 워크트리 / `main` | `6335267` | Godot 지도 화면 보완 병합까지 반영. `origin`에는 push하지 않았다 |
+| develop 워크트리 / `develop` | `6335267` | main과 같음. 이 문서는 여기서 만든 `docs/plan-status-2026-11-10`에서 작성 |
+| test 워크트리 / detached HEAD | `271c5ee` | 마지막 검증 커밋 |
+| plan-audit 워크트리 / `docs/plan-status-audit` | `c7a49fa` | 10-29 상태표. 낡아서 병합하지 않기로 함(사용자 동의 2026-11-10) |
+| verification 워크트리 / `feature/verification-signals` | `0139b62` | Codex↔Claude 검증 요청 도구. 병합 여부 미정, 보관 중 |
+| review·verification-test 워크트리 | detached | 과거 검토용. 정리 여부 미확인 |
 
-기존 Windows 경로는 `C:\Users\kimdo\RustroverProjects\self-driving_sim`이며,
-WSL에서는 `/mnt/c/Users/kimdo/RustroverProjects/self-driving_sim`로 관찰됐다.
+경로: main은 `C:\Users\kimdo\RustroverProjects\self-driving_sim`, 형제 워크트리는 `../self-driving_sim-<이름>`이다.
 환경에 따라 대소문자·마운트 경로가 달라질 수 있으므로 경로를 그대로 가정하지 않는다.
-형제 워크트리는 `../self-driving_sim-develop`, `../self-driving_sim-test`다.
+main에는 사용자의 `.idea/self-driving_sim.iml` 미커밋 변경과 추적하지 않는 `Car_photo/phase3-visual-guide-v1.png`가 있다. 건드리지 않는다.
+develop 워크트리의 `godot/project.godot`·`.glb.import` 변경은 Godot 에디터가 만든 것(섹션 순서 등)이라 커밋하지 않는다.
 
-main에는 기존 `.idea/self-driving_sim.iml` 미커밋 변경이 있다. 사용자 변경이므로 건드리지 않는다.
-작성 시점 develop 워크트리는 미커밋 변경이 없었다. push·브랜치 삭제는 요청되지 않았다.
-이 문서는 별도 임시 워크트리의 `docs/environment-handoff`에서 작성하며 main 병합 전이다.
+정리된 브랜치(2026-11-10, 사용자 확인): `feature/map-ui-port`(병합 후 삭제), `feature/gd2-godot`(Codex 미검증 작업,
+필요 기능만 다시 구현하고 병합 없이 삭제, 마지막 커밋 `dcc2fee`), Codex 워크트리 `self-driving_sim-codex`도 제거했다.
 
-### main에 반영된 주요 커밋
-
-- `233368f`: PLAN의 기어 규칙을 채택된 일반 자동변속 기준과 일치시킨 병합.
-- `0427606`: 프레임레이트 통합 테스트, 관성 감속 0 허용, 초기 겹침 처리,
-  장애물 버퍼 재사용, 충돌 누적 카운터, 설정 로더 공통화의 병합.
-- `c45e98b`: `feature/collision-sweep-fixes`의 `1be8005`를 병합.
-  회전 중 샘플 사이 충돌 검사, 장애물별 재충돌 기록, 감속 성분 문서·테스트,
-  출발 겹침 및 SAT 반복 계산 정리를 포함한다.
-
-### 검증 근거 구분
-
-- 사용자 전달 결과: `1be8005`를 test 워크트리 detached HEAD에서 아래 네 명령으로 검증했다.
-  fmt 통과, clippy 경고 없음, 테스트 85개 통과, smoke 정상 종료.
-- 작성 에이전트는 `1be8005`의 코드와 회귀 테스트를 읽고 병합을 막을 추가 문제를 발견하지 못했다.
-  Cargo 검사·앱 실행을 직접 재실행한 결과는 아니다.
-- `3cad67b`는 체크아웃·커밋 존재를 확인했을 뿐, 이 인수인계에 전달된 검증 결과는 없다.
-  테스트 워크트리에 있다는 사실만으로 검증 통과나 리뷰 완료로 처리하지 않는다.
+### 검증 명령과 Godot 확장 빌드
 
 ```text
 cargo.exe fmt --all -- --check
@@ -66,26 +56,17 @@ cargo.exe test --locked --all-features
 cargo.exe run --locked -- --smoke-test
 ```
 
+Godot 시험(워크트리 최상위, 명령 전체는 `README.md` "Godot 연결과 첫 import 검사"):
+`cargo.exe build --locked -p sim-godot` → `--headless --path godot --import --frame-delay 1000` →
+`godot/tests/`의 `smoke_test`·`presentation_smoke`·`drive_replay_test`·`map_course_test`·`menu_flow_test`·`route_save_test`·`goal_reset_test`.
+
+- `godot/sim_godot.gdextension`은 **같은 워크트리의** `target/debug/sim_godot.dll`을 읽는다. 워크트리마다 `target/`이 따로라서,
+  Godot으로 열 워크트리에서 먼저 `cargo.exe build -p sim-godot`를 해야 한다. 없으면 `GDExtension dynamic library not found`가 나고
+  조작·지도 화면이 모두 멈춘다(2026-11-10 develop 워크트리에서 실제로 발생). 빌드 후 에디터를 다시 시작한다.
+- `goal_reset_test`의 `ERROR: ... 없는-코스.toml` 한 줄은 의도된 실패 경로라 정상이다.
+- Godot import는 `autonomous_shuttle_topology_v4.glb.import`를 바꿀 수 있다. 코드 변경이 아니므로 커밋하지 않는다.
+
 툴체인과 의존성 버전은 `rust-toolchain.toml`, `Cargo.toml`, `Cargo.lock`을 기준으로 확인한다.
-기존 환경은 Windows Rust 실행 파일을 WSL에서 호출했다. 새 환경의 도구 설치·실행 가능 여부는 별도 확인한다.
-
-## 다음에 확인할 작업: 조향 복귀 브랜치
-
-`feature/steering-return`에는 다음 커밋이 이미 존재한다. 미구현으로 오인해 다시 만들지 않는다.
-
-- `95a4689`: 조향 중립 복귀 방식 `auto`/`hold`, 별도 복귀 속도 설정 추가.
-- `3cad67b`: 충돌 정확도를 절대 보장이 아닌 근사로 표현하는 README·소스 주석 변경.
-
-대화에서 제안한 동작은 다음과 같다. 실차 동작이 확인된 사양은 아니다.
-
-- `steer_return = "auto"`가 기본이며 중립에서 `steer_return_rate_deg_s`로 0도로 복귀.
-- `steer_return = "hold"`는 중립에서 현재 바퀴 각도를 유지.
-- 입력 중에는 두 방식 모두 기존처럼 입력 위치가 목표 조향각이다.
-  따라서 hold의 반대 입력은 중앙 복귀 전용 명령이 아니라 반대쪽 목표 각도로 움직이는 입력이다.
-
-새 에이전트는 해당 브랜치 diff·테스트·검증 보고를 먼저 확인하고,
-사용자의 최신 지시와 승인 범위를 확인한 뒤 다음 작업을 진행한다.
-이 문서는 조향 브랜치의 리뷰 완료 또는 main 병합 승인이 아니다.
 
 ## 유지해야 할 구현 규칙과 한계
 
@@ -95,9 +76,11 @@ cargo.exe run --locked -- --smoke-test
 - D/R은 정지 판정 시 또는 현재 진행 방향과 같을 때 허용.
   전진 중 N→D 허용, 전진 중 D→R·N→R 거부.
 - 정지 판정은 설정 임계값을 사용한다. 시동 OFF·비상 정지에서는 구동 가속과 기어 변경 차단.
-- 키보드 읽기와 명령 처리는 `RunFixedMainLoop`의 `BeforeFixedMainLoop`,
+- Bevy 판: 키보드 읽기와 명령 처리는 `RunFixedMainLoop`의 `BeforeFixedMainLoop`,
   운동 계산은 `FixedUpdate`, 화면 표시는 `Update`다.
-- 키보드 통합 테스트는 `KeyboardInput` 메시지 경로를 쓴다.
+- Godot 판: `SimVehicle`이 `_physics_process`(64틱/초)에서 장치를 읽고 `sim-core` 주행 세션을 한 틱 진행한다.
+  GDScript는 읽기 함수와 신호로 표시만 하고 주행·명령 규칙을 따로 구현하지 않는다(`docs/design/godot-interface.md`).
+- Bevy 판 키보드 통합 테스트는 `KeyboardInput` 메시지 경로를 쓴다.
   `ButtonInput`을 직접 press하면 PreUpdate에서 just_pressed가 지워져 비상 정지 테스트가 거짓 통과할 수 있다.
 
 ### 충돌과 감속
@@ -140,6 +123,7 @@ cargo.exe run --locked -- --smoke-test
 ## 새 환경에 전달할 시작 지시문
 
 > AGENTS.md, docs/handoff.md, PLAN.md, README.md를 읽고 실제 Git 상태와 워크트리를 확인하세요.
-> 인수인계 스냅샷과 실제 상태가 다르면 먼저 보고하세요. feature/steering-return에는 이미 구현 커밋이
-> 있으므로 diff와 검증 근거부터 확인하세요. 기존 체크나 test 체크아웃만으로 완료를 단정하지 말고,
+> 인수인계 스냅샷과 실제 상태가 다르면 먼저 보고하세요. Godot으로 열 워크트리에서는 먼저
+> cargo.exe build -p sim-godot를 하세요. 기존 체크나 test 체크아웃만으로 완료를 단정하지 말고,
+> 사람 확인이 남은 항목(PLAN 각 절의 "남은 것")을 완료로 처리하지 마세요.
 > main 병합·push·브랜치 삭제를 새로 승인받은 것으로 해석하지 마세요.
