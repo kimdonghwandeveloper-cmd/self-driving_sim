@@ -4,6 +4,9 @@
 //! 한국어로 바꾸고, 모르는 문장은 그대로 보낸다. 오류 상세(노드 번호·파일 경로 등)는 원문을 뒤에 붙여 둔다.
 //! OSM 출처 표기 문장은 라이선스 표기이므로 바꾸지 않는다.
 
+use std::path::PathBuf;
+
+use sim_core::scenario::result::ScenarioResult;
 use sim_core::scenario::run::{Outcome, Phase};
 use sim_core::vehicle::calibration::{ActiveTrial, CalibrationReadout};
 
@@ -171,6 +174,61 @@ pub fn scenario_phase(phase: Phase) -> &'static str {
     }
 }
 
+/// 끝난 시나리오 결과를 HUD 시나리오 상자에 보일 한국어 요약 줄로 만든다(5-5).
+/// `saved`는 결과 파일을 저장한 경로 또는 저장 실패 사유다. 점수 줄 다음에는 항상 임시 기준 안내를 붙인다.
+pub fn scenario_result_lines(
+    result: &ScenarioResult,
+    saved: &Result<PathBuf, String>,
+) -> Vec<String> {
+    let summary = &result.summary;
+    let mut lines = vec![format!(
+        "기록 · 기어 변경 오류 {}회 · 과도한 입력(과속·급제동·급조향) {}회 · 충돌 {}회(보행자 {}회) · 비상 정지 {}회",
+        summary.gear_errors,
+        summary.harsh_inputs,
+        summary.collisions,
+        summary.hazard_collisions,
+        summary.emergency_stops
+    )];
+    if !summary.stop_errors_m.is_empty() {
+        let errors: Vec<String> = summary
+            .stop_errors_m
+            .iter()
+            .map(|error| format!("{error:.2} m"))
+            .collect();
+        lines.push(format!("정지 위치 오차 {}", errors.join(", ")));
+    }
+    if !summary.reaction_s.is_empty() {
+        let reactions: Vec<String> = summary
+            .reaction_s
+            .iter()
+            .map(|reaction| format!("{reaction:.2} s"))
+            .collect();
+        let missed = if summary.missed_reactions > 0 {
+            format!(" (제동 없음 {}회)", summary.missed_reactions)
+        } else {
+            String::new()
+        };
+        lines.push(format!("제동 반응 시간 {}{missed}", reactions.join(", ")));
+    }
+    let score = &result.score;
+    lines.push(format!(
+        "임시 점수 {:.0} / 기준 {:.0} · {}",
+        score.value,
+        score.pass_score,
+        if score.passed {
+            "임시 합격"
+        } else {
+            "임시 불합격"
+        }
+    ));
+    lines.push(score.notice.clone());
+    lines.push(match saved {
+        Ok(path) => format!("결과 파일: {}", path.display()),
+        Err(error) => error.clone(),
+    });
+    lines
+}
+
 /// `text`가 `prefix`로 시작하고 `suffix`로 끝나면 그 사이를 돌려준다.
 fn between<'a>(text: &'a str, prefix: &str, suffix: &str) -> Option<&'a str> {
     text.strip_prefix(prefix)?.strip_suffix(suffix)
@@ -331,6 +389,51 @@ mod tests {
             picker_line("지역 도로를 열었습니다"),
             "지역 도로를 열었습니다"
         );
+    }
+
+    /// 결과 요약 줄에 기록 횟수·정지 오차·반응 시간·임시 점수·임시 기준 안내·파일 경로(또는 저장 실패 사유)가 들어가는지 확인한다.
+    #[test]
+    fn scenario_result_lines_include_records_and_notice() {
+        use sim_core::scenario::result::{ProvisionalScore, SCORE_NOTICE, Summary};
+        let result = ScenarioResult {
+            format: String::new(),
+            session_id: String::new(),
+            scenario_path: String::new(),
+            scenario_title: String::new(),
+            scenario_text: String::new(),
+            course: String::new(),
+            started_at: String::new(),
+            ended_at: String::new(),
+            outcome: "success".to_owned(),
+            completed: true,
+            elapsed_s: 10.0,
+            ticks: 640,
+            steps: Vec::new(),
+            summary: Summary {
+                gear_errors: 1,
+                stop_errors_m: vec![0.42],
+                reaction_s: vec![0.75],
+                ..Summary::default()
+            },
+            score: ProvisionalScore {
+                value: 90.8,
+                pass_score: 70.0,
+                passed: true,
+                deductions: Vec::new(),
+                notice: SCORE_NOTICE.to_owned(),
+            },
+            records: Vec::new(),
+            input_track: Vec::new(),
+        };
+        let lines = scenario_result_lines(&result, &Ok(PathBuf::from("logs/a.json")));
+        assert!(lines[0].contains("기어 변경 오류 1회"), "{lines:?}");
+        assert_eq!(lines[1], "정지 위치 오차 0.42 m");
+        assert_eq!(lines[2], "제동 반응 시간 0.75 s");
+        assert_eq!(lines[3], "임시 점수 91 / 기준 70 · 임시 합격");
+        assert_eq!(lines[4], SCORE_NOTICE);
+        assert_eq!(lines[5], "결과 파일: logs/a.json");
+        let failed = scenario_result_lines(&result, &Err("저장 실패".to_owned()));
+        assert_eq!(failed.last().unwrap(), "저장 실패");
     }
 
     /// 시나리오 단계·끝난 방식이 모두 한국어로 바뀌는지 확인한다.

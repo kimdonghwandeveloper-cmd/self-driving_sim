@@ -14,7 +14,8 @@ use sim_core::config::{
     CAMERA_CONFIG_PATH, ConfigError, VEHICLE_CONFIG_PATH, VehicleConfig, parse_operator_view,
     parse_vehicle_config, read_config,
 };
-use sim_core::scenario::load_scenario;
+use sim_core::scenario::parse_scenario;
+use sim_core::scenario::result::{RESULT_DIR, ScenarioResult, save_result};
 use sim_core::scenario::run::{Control, Phase, ScenarioRun, ScenarioUpdate};
 use sim_core::session::{DriveCommand, DriveSession, QueueFull, TickReport};
 use sim_core::vehicle::state::{Gear, VehicleInput};
@@ -124,17 +125,25 @@ fn config_warning(path: &Path, error: &ConfigError) -> String {
     format!("설정 파일 {} {error}; 기본값을 씁니다", path.display())
 }
 
-/// 시나리오 파일을 읽고 그 코스를 만들어 실행 상태와 시작 조건을 맞춘 주행 세션을 돌려준다.
-/// 실패하면 사람이 읽는 한국어 사유를 돌려준다(패닉도 사유로 바꾼다).
+/// 시나리오 파일을 읽고 그 코스를 만들어 실행 상태와 시작 조건을 맞춘 주행 세션, 파일 내용(결과 파일의 재현용)을
+/// 돌려준다. 실패하면 사람이 읽는 한국어 사유를 돌려준다(패닉도 사유로 바꾼다).
 fn start_scenario(
     path: &str,
     config: &VehicleConfig,
-) -> Result<(ScenarioRun, DriveSession), String> {
-    let def = load_scenario(&resolve_user_path(path)).map_err(|error| error.to_string())?;
+) -> Result<(ScenarioRun, DriveSession, String), String> {
+    let full_path = resolve_user_path(path);
+    let text = std::fs::read_to_string(&full_path).map_err(|error| {
+        format!(
+            "시나리오 오류: {}를 읽을 수 없습니다: {error}",
+            full_path.display()
+        )
+    })?;
+    let def = parse_scenario(&text).map_err(|error| error.to_string())?;
     let course = build_course(&def.course)?;
-    catch_unwind(AssertUnwindSafe(|| ScenarioRun::new(def, course, config)))
+    let (run, session) = catch_unwind(AssertUnwindSafe(|| ScenarioRun::new(def, course, config)))
         .map_err(|payload| format!("내부 오류: {}", panic_message(payload.as_ref())))?
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string())?;
+    Ok((run, session, text))
 }
 
 /// 차량 한 대. Rust가 입력·상태 머신·운동 모델·충돌을 처리하고 매 물리 틱 끝에 자기 자세를 갱신한다.
@@ -156,10 +165,19 @@ pub struct SimVehicle {
     /// 코스를 쓴다. 상대 경로는 저장소 루트 기준. `_ready`에서 한 번만 읽는다.
     #[export]
     scenario: GString,
+    /// 시나리오 결과 파일 폴더(계약 v1.5, 5-5). 비우면 저장소 루트의 `logs/scenarios`. 상대 경로는 저장소 루트 기준.
+    /// 시나리오가 끝날 때 읽는다.
+    #[export]
+    result_dir: GString,
     /// 주행 세션. 코스 실패·패닉이면 `None`.
     session: Option<DriveSession>,
     /// 시나리오 실행 상태. 시나리오가 없으면 `None`.
     run: Option<ScenarioRun>,
+    /// 시나리오 파일 내용(결과 파일의 재현용).
+    scenario_text: String,
+    /// 마지막으로 끝난 시나리오의 결과 요약 줄(한국어)과 저장한 파일 경로(실패면 빈 문자열). 재시작하면 비운다.
+    result_lines: Vec<String>,
+    result_path: String,
     last_error: String,
     warnings: Vec<String>,
     /// 키보드·게임패드 상태. `_ready`에서 만든다.
@@ -192,9 +210,10 @@ impl INode3D for SimVehicle {
         let scenario = self.scenario.to_string();
         if !scenario.trim().is_empty() {
             match start_scenario(scenario.trim(), &config) {
-                Ok((run, session)) => {
+                Ok((run, session, text)) => {
                     self.run = Some(run);
                     self.session = Some(session);
+                    self.scenario_text = text;
                     self.sync_transform();
                 }
                 Err(error) => self.fail(error),
@@ -357,7 +376,12 @@ impl SimVehicle {
             return false;
         }
         let phase = run.phase();
+        if matches!(phase, Phase::Finished(_)) {
+            self.save_result();
+        }
         if control == Control::Restart {
+            self.result_lines.clear();
+            self.result_path.clear();
             let view_before = self.view;
             self.view = ViewDirection::Front;
             self.sync_transform();
@@ -375,7 +399,8 @@ impl SimVehicle {
     /// 시나리오 HUD 값(계약 v1.4). 시나리오가 없으면 `{active: false}`만 돌려준다.
     /// `active`, `title`, `briefing`, `phase`(계약 이름), `phase_text`(한국어), `outcome`(끝났을 때만, 아니면 빈 문자열),
     /// `step_index`(지금 단계 번호, 다 끝냈으면 단계 수), `step_count`, `guide`(지금 단계 안내, 다 끝냈으면 빈 문자열),
-    /// `elapsed_s`, `time_limit_s`(없으면 -1), `collisions`, `max_collisions`(없으면 -1), `message`(없으면 빈 문자열).
+    /// `elapsed_s`, `time_limit_s`(없으면 -1), `collisions`, `max_collisions`(없으면 -1), `message`(없으면 빈 문자열),
+    /// (v1.5) `result_lines`(끝난 뒤 결과 요약 줄, 그 전에는 빈 배열), `result_path`(저장한 결과 파일, 없거나 실패면 빈 문자열).
     #[func]
     fn scenario_status(&self) -> VarDictionary {
         let Some(run) = &self.run else {
@@ -387,6 +412,7 @@ impl SimVehicle {
             Phase::Finished(outcome) => outcome.name(),
             _ => "",
         };
+        let result_lines: PackedStringArray = self.result_lines.iter().map(GString::from).collect();
         vdict! {
             "active" => true,
             "title" => def.title.as_str(),
@@ -402,7 +428,30 @@ impl SimVehicle {
             "collisions" => i64::from(run.collisions()),
             "max_collisions" => def.end.max_collisions.map_or(-1, i64::from),
             "message" => run.message().unwrap_or(""),
+            "result_lines" => &result_lines,
+            "result_path" => self.result_path.as_str(),
         }
+    }
+
+    /// (v1.5) 지금 보이는 보행자 대체 객체 `[{id, position: Vector3(x, 0, z), heading_rad, size: Vector3(폭, 높이, 앞뒤)}]`.
+    /// 시나리오가 없거나 등장 전·사라진 뒤면 빈 배열이다. 진행 방향 규칙은 차량과 같다(0이면 -Z).
+    #[func]
+    fn scenario_hazards(&self) -> VarArray {
+        let Some(run) = &self.run else {
+            return VarArray::new();
+        };
+        run.visible_hazards()
+            .into_iter()
+            .map(|hazard| {
+                vdict! {
+                    "id" => hazard.id.as_str(),
+                    "position" => Vector3::new(hazard.center.x, 0.0, hazard.center.y),
+                    "heading_rad" => hazard.heading_rad,
+                    "size" => Vector3::new(hazard.size_m[0], hazard.height_m, hazard.size_m[1]),
+                }
+                .to_variant()
+            })
+            .collect()
     }
 
     /// 코스를 만들고 시작 자세에 놓았으면 `true`.
@@ -688,11 +737,45 @@ impl SimVehicle {
                         &[GString::from(text.as_str()).to_variant()],
                     );
                 }
-                ScenarioUpdate::Finished(outcome) => self.emit_phase(Phase::Finished(*outcome)),
+                ScenarioUpdate::Finished(outcome) => {
+                    self.save_result();
+                    self.emit_phase(Phase::Finished(*outcome));
+                }
             }
         }
         self.base_mut()
             .emit_signal("tick_finished", &[(report.tick as i64).to_variant()]);
+    }
+
+    /// 끝난 시나리오의 결과 파일을 `result_dir`(비우면 `logs/scenarios`)에 저장하고 요약 줄·경로를 남긴다.
+    /// 저장에 실패해도 주행은 계속되며, 요약 줄에 실패 사유를 넣는다.
+    fn save_result(&mut self) {
+        let Some(run) = &self.run else {
+            return;
+        };
+        let Some(result) =
+            ScenarioResult::new(run, &self.scenario.to_string(), &self.scenario_text)
+        else {
+            return;
+        };
+        let dir = self.result_dir.to_string();
+        let dir = if dir.trim().is_empty() {
+            crate::paths::repo_path(RESULT_DIR)
+        } else {
+            resolve_user_path(dir.trim())
+        };
+        let saved = save_result(&dir, &result).map_err(|error| {
+            let message = format!(
+                "결과 파일을 저장하지 못했습니다({}): {error}",
+                dir.display()
+            );
+            godot_warn!("SimVehicle: {message}");
+            message
+        });
+        self.result_path = saved
+            .as_ref()
+            .map_or(String::new(), |path| path.display().to_string());
+        self.result_lines = crate::korean::scenario_result_lines(&result, &saved);
     }
 
     /// `scenario_phase_changed`를 보내고, 끝났으면 이어서 `scenario_finished`를 보낸다.

@@ -8,7 +8,9 @@ Godot 확장(`crates/sim-godot`, godot-rust)으로 연결합니다. 처음에 �
 화면은 입석 조작자 1인칭 시점(전·후·좌·우 전환)입니다. HUD에 속도·기어·시동·비상 정지·입력 장치·접촉·시점·이동 방향과
 거부된 명령의 사유가 한국어로 표시됩니다. 보정 코스(`calibration`)에서는 회전반경·예상 정지거리와 제동·가속 시험 측정이 함께 표시됩니다.
 메인 메뉴에서 개발 코스·지도 코스·저장 경로를 골라 주행하고, 지도 화면에서 지역 도로를 받아 경로를 찍어 저장할 수 있습니다.
-교육 시나리오와 기록 파일 저장(Phase 5)은 아직 구현하지 않았습니다.
+메뉴의 교육 시나리오 A(기본 조작)·B(공간 판단)·C(돌발 상황)를 안내대로 진행하면 기어 오류·과도한 입력·충돌·정지 위치·
+위험 반응 시간이 기록되고, 끝나면 결과 요약과 **임시 기준** 점수가 화면에 나오며 결과 JSON이 `logs/scenarios/`에 저장됩니다(Phase 5).
+점수는 교육 담당자가 승인한 평가 기준이 아니며 공식 합격·불합격 판정에 쓰지 않습니다.
 실제 차량의 성능이나 안전성을 검증하는 도구가 아닙니다.
 
 ### 진행 상황 (2026-11-10, main 기준)
@@ -21,7 +23,8 @@ Godot 확장(`crates/sim-godot`, godot-rust)으로 연결합니다. 처음에 �
 | Phase 4 (굽은 길·교차로·경로 탐색·지도 받기·경로 선택 화면·통합) | 구현과 자동 시험 완료. 4-5·4-5a·4-5b·4-6 일부 체크는 사람 확인 반영 결정 대기, 경사 도로(4-7)는 시작 전 |
 | Phase G (Godot 전환, GD-0~GD-4) | 완료. GD-2~GD-4 사람 확인 2026-11-10. GD-5 Bevy 앱 제거 |
 | 4-5G G-1 Geofabrik 지역 추출 | 코드와 fixture 시험 완료. 실제 한국 PBF 검증·측정 전 |
-| Phase 5~6 | 시작 전(6-1 일부 제외) |
+| Phase 5 (교육 시나리오·기록) | 5-1 완료. 5-2~5-5 구현·자동 시험 완료(2026-11-11), 사람 확인 전 |
+| Phase 6 | 시작 전(6-1 일부 제외) |
 
 ## 개발용 키보드 조작 (임시 매핑)
 
@@ -231,6 +234,13 @@ cargo run --locked -p sim-tools -- --audit-extract <세대 폴더> --pbf <south-
 cargo run --locked -p sim-tools -- --compare-overpass assets/maps/yeosu-expo/graph-2026-11-06.osm.json --extract <세대 폴더> --pbf <south-korea.osm.pbf>
 ```
 
+시나리오 결과 파일(Phase 5-5)은 파일 안의 시나리오 내용과 입력 열을 다시 돌려 같은 결과·기록이 나오는지 확인할 수 있습니다
+(같은 `config/vehicle.toml`이 필요합니다). 같으면 `replay matches`, 다르면 처음 다른 기록을 출력하고 오류로 끝납니다.
+
+```powershell
+cargo run --locked -p sim-tools -- --check-result logs/scenarios/<세션 ID>.json
+```
+
 ## 구성과 기준
 
 - `Cargo.toml`: 작업 공간 설정(루트 패키지 없음)
@@ -243,7 +253,7 @@ cargo run --locked -p sim-tools -- --compare-overpass assets/maps/yeosu-expo/gra
     Geofabrik 추출·감사·비교(`pbf_extract.rs`, `pbf_audit.rs`, `pbf_compare.rs`), 스냅샷 읽기(`road_snapshot.rs`)
   - `picker/`: 경로 선택 모델·지역 캐시·OSM 배경 타일, `config.rs`·`camera.rs`: 설정 파싱과 시점
 - `crates/sim-godot/`: Godot 확장(`SimVehicle`, `SimCourse`, `SimReplay`, `SimRoutePicker`, `SimTiles`, `SimScenario`). 계약은 `docs/design/godot-interface.md`
-- `crates/sim-tools/`: 창 없는 개발 명령(지도 받기, PBF 추출·대조)
+- `crates/sim-tools/`: 창 없는 개발 명령(지도 받기, PBF 추출·대조, 시나리오 결과 재현 확인 `--check-result`)
 - `godot/`: Godot 프로젝트(메뉴·주행·지도 화면 `presentation/`, 헤드리스 시험 `tests/`). 구현 메모는 `godot/IMPLEMENTATION.md`
 - `config/{vehicle,input,camera,road_graph}.toml`: 시뮬레이터 임시 설정값
 - `assets/maps/`: 저장소에 넣은 지도 스냅샷과 지도 코스
@@ -267,6 +277,7 @@ cargo.exe build --locked -p sim-godot
 & '<Godot 콘솔 실행 파일>' --headless --fixed-fps 64 --path godot --script res://tests/goal_reset_test.gd
 & '<Godot 콘솔 실행 파일>' --headless --fixed-fps 64 --path godot --script res://tests/calibration_test.gd
 & '<Godot 콘솔 실행 파일>' --headless --fixed-fps 64 --path godot --script res://tests/scenario_test.gd
+& '<Godot 콘솔 실행 파일>' --headless --fixed-fps 64 --path godot --script res://tests/scenario_record_test.gd
 ```
 
 - `presentation_smoke.gd`는 정지 미리보기 장면·네 시점·지도 화면·메뉴 재진입을 검사합니다. `-- --capture-dir=<폴더>`를 주고 창 모드로 돌리면
@@ -281,6 +292,9 @@ cargo.exe build --locked -p sim-godot
 - `calibration_test.gd`는 보정 코스의 측정 상자, 가속·제동 시험 1회차 결과, 리셋 후 결과 유지와 training에서의 상자 숨김을 확인합니다(2-5).
 - `scenario_test.gd`는 메뉴에서 예시 시나리오를 열어 시작 전 정지, F5 시작, 단계 4개·메시지 2개, F6 일시정지(차량·시간 멈춤), 성공,
   F7 재시작, F8 종료와 없는 시나리오 파일의 실패 화면을 확인합니다(5-1). 출력의 `ERROR: ... 없는-시나리오.toml` 한 줄은 의도된 실패 경로입니다.
+- `scenario_record_test.gd`는 메뉴의 시나리오 A·B·C, B의 원뿔 두 개(충돌 경계), C의 보행자 대체 객체 등장 자리·이동·표시 노드,
+  제동 반응 기록, F8로 끝낸 뒤 결과 JSON(사건 기록·입력 열·임시 점수 안내)과 끝 안내의 기록 요약, F7 뒤 요약 비움을 확인합니다(5-2~5-5).
+  결과 파일은 `user://scenario-record-test`에 쓰고 끝에 지웁니다.
 
 프레임 시간은 실제 창에서 잽니다(헤드리스 아님, 측정만 하고 실패로 끝내지 않음).
 
