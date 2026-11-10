@@ -1,0 +1,47 @@
+# 시나리오 틀(Phase 5-1) 예시. 교육 담당자가 확인한 시나리오가 아니며, 5-2 시나리오 A도 아니다.
+# 형식 설명은 docs/scenarios.md. 값은 모두 훈련용 임시값이다.
+# 좌표는 코스 지면 (x, z) m(training: 시작 후륜축이 원점, 전방 -Z, 정지선 z = -20)이고 위치 조건은 차체 중심 기준이다.
+# 차체 앞끝이 정지선에 닿으면 차체 중심은 z ≈ -17.9다(후륜축→중심 1.4 m, 차체 길이 4.2 m).
+
+format = 1
+title = "예시 · 정지선 앞 정지"
+briefing = "시동을 켜고 D로 출발해 정지선 앞에 멈춘 뒤 P로 바꿉니다.\n충돌하거나 3분이 지나면 실패입니다."
+course = "training"
+
+[start]
+engine_on = false
+gear = "P"
+
+[[steps]]
+id = "engine"
+guide = "시동을 켜세요(키보드 Enter · 게임패드 Start)."
+done = { kind = "engine_on" }
+
+[[steps]]
+id = "drive"
+guide = "기어를 D로 바꾸세요(키보드 J · 게임패드 X)."
+done = { kind = "gear", gear = "D" }
+
+[[steps]]
+id = "stop-line"
+guide = "앞으로 가서 정지선 바로 앞에 멈추세요."
+done = { kind = "stop_in", position_m = [0.0, -17.9], radius_m = 1.5 }
+
+[[steps]]
+id = "park"
+guide = "기어를 P로 바꾸세요(키보드 I · 게임패드 Y)."
+done = { kind = "gear", gear = "P" }
+
+[[events]]
+id = "approach"
+when = { kind = "travel", distance_m = 8.0 }
+action = { kind = "message", text = "정지선이 가까워집니다. 미리 속도를 줄이세요.", duration_s = 4.0 }
+
+[[events]]
+id = "stopped-at-line"
+when = { kind = "step_done", step = "stop-line" }
+action = { kind = "message", text = "정지선 앞에 멈췄습니다.", duration_s = 3.0 }
+
+[end]
+time_limit_s = 180.0
+max_collisions = 0

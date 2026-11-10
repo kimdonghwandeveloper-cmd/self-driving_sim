@@ -1,11 +1,11 @@
 extends Control
-## 개발 코스·지도 코스(저장소 코스와 저장 경로) 선택, 지도 화면, 종료를 제공하는 메인 메뉴다.
+## 개발 코스·지도 코스(저장소 코스와 저장 경로)·교육 시나리오 선택, 지도 화면, 종료를 제공하는 메인 메뉴다.
 
 signal drive_requested(course: String)
 signal map_requested
 signal quit_requested
 var courses := OptionButton.new()
-## 선택 항목 번호 순서의 코스 선택 문자열(`training`, `calibration`, `map:<파일>`).
+## 선택 항목 번호 순서의 코스 선택 문자열(`training`, `calibration`, `map:<파일>`, `scenario:<파일>`).
 var course_names := PackedStringArray()
 
 ## 창 크기에 맞춘 중앙 메뉴와 현재 주행 연결 안내를 구성한다.
@@ -42,6 +42,9 @@ func _ready() -> void:
 	if ClassDB.class_exists("SimCourse") and ClassDB.class_has_method("SimCourse", "course_files"):
 		for file in ClassDB.class_call_static("SimCourse", "course_files"):
 			_add_course("지도: " + str(file.label), str(file.course))
+	if ClassDB.class_exists("SimScenario"):
+		for file in ClassDB.class_call_static("SimScenario", "scenario_files"):
+			_add_course("시나리오: " + str(file.label), "scenario:" + str(file.path))
 	courses.fit_to_longest_item = false
 	courses.clip_text = true
 	column.add_child(courses)

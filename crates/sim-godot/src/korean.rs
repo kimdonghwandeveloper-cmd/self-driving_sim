@@ -4,6 +4,7 @@
 //! 한국어로 바꾸고, 모르는 문장은 그대로 보낸다. 오류 상세(노드 번호·파일 경로 등)는 원문을 뒤에 붙여 둔다.
 //! OSM 출처 표기 문장은 라이선스 표기이므로 바꾸지 않는다.
 
+use sim_core::scenario::run::{Outcome, Phase};
 use sim_core::vehicle::calibration::{ActiveTrial, CalibrationReadout};
 
 /// 상태 머신·장치 명령 거부 사유를 한국어로 바꾼다.
@@ -155,6 +156,19 @@ pub fn calibration_lines(readout: &CalibrationReadout) -> Vec<String> {
         format!("마지막 제동 시험: {last_stop}"),
         format!("마지막 가속 시험: {last_accel}"),
     ]
+}
+
+/// 시나리오 실행 단계(끝났으면 끝난 방식)를 HUD용 한국어로 바꾼다(5-1).
+pub fn scenario_phase(phase: Phase) -> &'static str {
+    match phase {
+        Phase::Briefing => "시작 전",
+        Phase::Running => "진행 중",
+        Phase::Paused => "일시정지",
+        Phase::Finished(Outcome::Success) => "성공",
+        Phase::Finished(Outcome::TimeLimit) => "실패 · 시간 초과",
+        Phase::Finished(Outcome::Collisions) => "실패 · 허용 충돌 횟수 초과",
+        Phase::Finished(Outcome::Aborted) => "중단",
+    }
 }
 
 /// `text`가 `prefix`로 시작하고 `suffix`로 끝나면 그 사이를 돌려준다.
@@ -316,6 +330,18 @@ mod tests {
         assert_eq!(
             picker_line("지역 도로를 열었습니다"),
             "지역 도로를 열었습니다"
+        );
+    }
+
+    /// 시나리오 단계·끝난 방식이 모두 한국어로 바뀌는지 확인한다.
+    #[test]
+    fn scenario_phase_translates() {
+        assert_eq!(scenario_phase(Phase::Briefing), "시작 전");
+        assert_eq!(scenario_phase(Phase::Paused), "일시정지");
+        assert_eq!(scenario_phase(Phase::Finished(Outcome::Success)), "성공");
+        assert_eq!(
+            scenario_phase(Phase::Finished(Outcome::TimeLimit)),
+            "실패 · 시간 초과"
         );
     }
 }

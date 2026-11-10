@@ -25,7 +25,9 @@ PLAN의 체크는 구현과 자동 시험이 확인된 항목만 뜻하고, 사�
   `--capture-views`와 충돌 교육 기록(TrainingLog)은 사용자 결정으로 옮기지 않았다(교육 기록은 Phase 5에서 다시 설계).
 - 구현됨: 키보드·Xbox 유형 게임패드 입력, 시동·기어·비상 정지 상태 머신, 중속 운동 모델(2-6), 충돌, 입석 1인칭 네 시점,
   개발 코스, 여수 OSM 코스, 굽은 길·교차로·경로 탐색·지도 받기·캐시, 경로 선택 지도(전국 타일), 메인 메뉴, 경로 끝 목표 표시.
-- 미구현: 교육 시나리오·평가·JSON 결과 저장(Phase 5), 경사 도로(4-7), 통합 검수·배포(Phase 6 중 6-2 이후),
+- 시나리오 틀(5-1, `feature/scenario-framework`): 시나리오 파일(`assets/scenarios/*.toml`, 형식 `docs/scenarios.md`)·시작 전 안내·
+  F5~F8 시작·일시정지·재시작·종료·HUD 안내. 예시 파일 하나만 있고 사람 확인 전이다.
+- 미구현: 시나리오 A~C(5-2~5-4)·기록·평가·JSON 결과 저장(5-5), 경사 도로(4-7), 통합 검수·배포(Phase 6 중 6-2 이후),
   Geofabrik 전국 원자료의 실제 PBF 검증(G-1 일부)과 G-2~G-4.
 - 사람 확인(2026-11-10, 사용자 보고 "정상 작동됨 전부"): GD-2~GD-4 안내 절차(게임패드·네트워크 지역 받기 포함)를 Godot 판에서 확인했다.
   이 보고로 바꿀 PLAN 체크(1-2 실제 장치 두 항목, 4-5·4-5b, 4-6 네 번째)는 사용자 승인 후 정한다.
@@ -59,13 +61,13 @@ cargo.exe test --locked --all-features
 
 Godot 시험(워크트리 최상위, 명령 전체는 `README.md` "Godot 연결과 첫 import 검사"):
 `cargo.exe build --locked -p sim-godot` → `--headless --path godot --import --frame-delay 1000` →
-`godot/tests/`의 `smoke_test`·`presentation_smoke`·`drive_replay_test`·`map_course_test`·`menu_flow_test`·`route_save_test`·`goal_reset_test`·`calibration_test`.
+`godot/tests/`의 `smoke_test`·`presentation_smoke`·`drive_replay_test`·`map_course_test`·`menu_flow_test`·`route_save_test`·`goal_reset_test`·`calibration_test`·`scenario_test`.
 화면/실행 변경의 실행 검사는 이 Godot 시험이다(Bevy `--smoke-test`는 GD-5에서 없어짐).
 
 - `godot/sim_godot.gdextension`은 **같은 워크트리의** `target/debug/sim_godot.dll`을 읽는다. 워크트리마다 `target/`이 따로라서,
   Godot으로 열 워크트리에서 먼저 `cargo.exe build -p sim-godot`를 해야 한다. 없으면 `GDExtension dynamic library not found`가 나고
   조작·지도 화면이 모두 멈춘다(2026-11-10 develop 워크트리에서 실제로 발생). 빌드 후 에디터를 다시 시작한다.
-- `goal_reset_test`의 `ERROR: ... 없는-코스.toml` 한 줄은 의도된 실패 경로라 정상이다.
+- `goal_reset_test`의 `ERROR: ... 없는-코스.toml`, `scenario_test`의 `ERROR: ... 없는-시나리오.toml` 한 줄은 의도된 실패 경로라 정상이다.
 - Godot import는 `autonomous_shuttle_topology_v4.glb.import`를 바꿀 수 있다. 코드 변경이 아니므로 커밋하지 않는다.
 
 툴체인과 의존성 버전은 `rust-toolchain.toml`, `Cargo.toml`, `Cargo.lock`을 기준으로 확인한다.
