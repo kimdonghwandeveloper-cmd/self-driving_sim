@@ -24,6 +24,10 @@ func course_data() -> Dictionary:
 func speed_kmh() -> float:
 	return 0.0
 
+## 표시용 부호 있는 속도(m/s)도 정지값이다.
+func speed_mps() -> float:
+	return 0.0
+
 ## 표시용 기어는 주차다.
 func gear() -> String:
 	return "P"

@@ -28,6 +28,9 @@ func _init() -> void:
 	if not opened.ok:
 		_finish()
 		return
+	var region: Rect2 = picker.call("loaded_region")
+	_check(region.has_area(), "스냅샷을 열었는데 열린 지역 범위가 비어 있음")
+	_check_snapshot_folder(region)
 	var ends := _longest_usable_segment(picker)
 	# 교차로 노드 위는 시작점으로 거부되므로 선분 안쪽(1/4, 3/4)에 찍는다.
 	picker.call("add_point", ends[0].lerp(ends[1], 0.25))
@@ -66,6 +69,23 @@ func _on_ready() -> void:
 	_finish()
 
 
+## 스냅샷을 임시 세대 폴더(graph.osm.json)로 복사해 폴더 경로로 열고, 파일로 연 것과 같은 범위인지 본다. 폴더는 끝에 지운다.
+func _check_snapshot_folder(expected: Rect2) -> void:
+	var folder := "user://route-save-test-%d" % OS.get_process_id()
+	var folder_path := ProjectSettings.globalize_path(folder)
+	var source := ProjectSettings.globalize_path("res://").path_join("../" + SNAPSHOT).simplify_path()
+	_check(DirAccess.make_dir_recursive_absolute(folder_path) == OK, "임시 스냅샷 폴더를 만들지 못함: " + folder_path)
+	_check(DirAccess.copy_absolute(source, folder_path.path_join("graph.osm.json")) == OK, "스냅샷을 임시 폴더로 복사하지 못함: " + source)
+	var picker: Object = ClassDB.instantiate("SimRoutePicker")
+	picker.set("network", false)
+	var opened: Dictionary = picker.call("load_snapshot", folder)
+	_check(opened.ok, "스냅샷 폴더 열기 실패: " + str(opened.error))
+	var region: Rect2 = picker.call("loaded_region")
+	_check(region.is_equal_approx(expected), "폴더로 연 범위가 파일로 연 범위와 다름: %s / %s" % [region, expected])
+	DirAccess.remove_absolute(folder_path.path_join("graph.osm.json"))
+	_check(DirAccess.remove_absolute(folder_path) == OK, "임시 스냅샷 폴더를 지우지 못함: " + folder_path)
+
+
 ## 주행 가능한 도로 선분 중 가장 긴 것의 양 끝(지도 좌표)을 돌려준다.
 func _longest_usable_segment(picker: Object) -> Array[Vector2]:
 	var segments: PackedVector2Array = picker.call("road_segments")
@@ -91,7 +111,7 @@ func _finish() -> void:
 	if not saved_path.is_empty() and FileAccess.file_exists(saved_path):
 		_check(DirAccess.remove_absolute(saved_path) == OK, "시험 파일을 지우지 못함: " + saved_path)
 	if failures.is_empty():
-		print("ROUTE SAVE OK: 스냅샷 → 점 2개 → 저장 → 코스 목록 → 저장 경로 차량 준비")
+		print("ROUTE SAVE OK: 스냅샷(파일·폴더) → 점 2개 → 저장 → 코스 목록 → 저장 경로 차량 준비")
 		quit(0)
 	else:
 		for message in failures:
