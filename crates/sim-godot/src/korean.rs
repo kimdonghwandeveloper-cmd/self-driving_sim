@@ -4,6 +4,8 @@
 //! 한국어로 바꾸고, 모르는 문장은 그대로 보낸다. 오류 상세(노드 번호·파일 경로 등)는 원문을 뒤에 붙여 둔다.
 //! OSM 출처 표기 문장은 라이선스 표기이므로 바꾸지 않는다.
 
+use sim_core::vehicle::calibration::{ActiveTrial, CalibrationReadout};
+
 /// 상태 머신·장치 명령 거부 사유를 한국어로 바꾼다.
 pub fn reject_reason(reason: &str) -> String {
     let fixed = match reason {
@@ -99,6 +101,62 @@ pub fn picker_line(line: &str) -> String {
     line.to_owned()
 }
 
+/// 보정 표시값을 HUD용 한국어 줄로 만든다(2-5, Bevy 판 보정 줄과 같은 내용). 모두 시뮬레이터 임시값이다.
+pub fn calibration_lines(readout: &CalibrationReadout) -> Vec<String> {
+    let turn = match readout.turn_radius_m {
+        Some(radius) => format!("{radius:.2} m"),
+        None => "직진".to_owned(),
+    };
+    let active = match readout.active {
+        Some(ActiveTrial::Braking { distance_m, time_s }) => {
+            format!("제동 {distance_m:.2} m / {time_s:.2} 초")
+        }
+        Some(ActiveTrial::Accelerating { distance_m, time_s }) => {
+            format!("가속 {distance_m:.2} m / {time_s:.2} 초")
+        }
+        None => "-".to_owned(),
+    };
+    let (stops, accels) = readout.trials;
+    let last_stop = match readout.last_stop {
+        Some(stop) => format!(
+            "{stops}회차 {:.2} m/s에서 {:.2} m, {:.2} 초 ({})",
+            stop.from_speed_mps,
+            stop.distance_m,
+            stop.time_s,
+            if stop.emergency {
+                "비상 정지"
+            } else {
+                "제동"
+            }
+        ),
+        None => "-".to_owned(),
+    };
+    let last_accel = match readout.last_accel {
+        Some(accel) => format!(
+            "{accels}회차 0 → {:.2} m/s, {:.2} 초, {:.2} m ({})",
+            accel.to_speed_mps,
+            accel.time_s,
+            accel.distance_m,
+            if accel.reached_limit {
+                "최고 속도"
+            } else {
+                "가속 뗌"
+            }
+        ),
+        None => "-".to_owned(),
+    };
+    vec![
+        format!(
+            "회전반경(후륜축): {turn}    최대 조향 최소 반경(저속): {:.2} m",
+            readout.min_turn_radius_m
+        ),
+        format!("최대 제동 예상 정지거리: {:.2} m", readout.brake_estimate_m),
+        format!("진행 중 시험: {active}"),
+        format!("마지막 제동 시험: {last_stop}"),
+        format!("마지막 가속 시험: {last_accel}"),
+    ]
+}
+
 /// `text`가 `prefix`로 시작하고 `suffix`로 끝나면 그 사이를 돌려준다.
 fn between<'a>(text: &'a str, prefix: &str, suffix: &str) -> Option<&'a str> {
     text.strip_prefix(prefix)?.strip_suffix(suffix)
@@ -114,6 +172,52 @@ fn split_once_between<'a>(text: &'a str, middle: &str, suffix: &str) -> Option<(
 mod tests {
     use super::*;
     use sim_core::world::map::OSM_ATTRIBUTION;
+
+    /// 보정 줄이 직진·진행 중 시험 없음과 끝난 결과(회차·비상 정지·최고 속도)를 한국어로 쓰는지 확인한다.
+    #[test]
+    fn calibration_lines_translate() {
+        use sim_core::vehicle::calibration::{AccelResult, StopResult};
+        let empty = calibration_lines(&CalibrationReadout::default());
+        assert_eq!(empty.len(), 5);
+        assert!(empty[0].starts_with("회전반경(후륜축): 직진"), "{empty:?}");
+        assert_eq!(empty[2], "진행 중 시험: -");
+        let lines = calibration_lines(&CalibrationReadout {
+            turn_radius_m: Some(9.5),
+            min_turn_radius_m: 4.85,
+            brake_estimate_m: 1.25,
+            active: Some(ActiveTrial::Braking {
+                distance_m: 0.5,
+                time_s: 0.25,
+            }),
+            last_stop: Some(StopResult {
+                from_speed_mps: 2.0,
+                distance_m: 0.6,
+                time_s: 0.6,
+                emergency: true,
+            }),
+            last_accel: Some(AccelResult {
+                to_speed_mps: 5.0,
+                distance_m: 12.5,
+                time_s: 5.0,
+                reached_limit: true,
+            }),
+            trials: (3, 2),
+        });
+        assert_eq!(
+            lines[0],
+            "회전반경(후륜축): 9.50 m    최대 조향 최소 반경(저속): 4.85 m"
+        );
+        assert_eq!(lines[1], "최대 제동 예상 정지거리: 1.25 m");
+        assert_eq!(lines[2], "진행 중 시험: 제동 0.50 m / 0.25 초");
+        assert_eq!(
+            lines[3],
+            "마지막 제동 시험: 3회차 2.00 m/s에서 0.60 m, 0.60 초 (비상 정지)"
+        );
+        assert_eq!(
+            lines[4],
+            "마지막 가속 시험: 2회차 0 → 5.00 m/s, 5.00 초, 12.50 m (최고 속도)"
+        );
+    }
 
     /// 상태 머신 거부 사유와 장치 기어 충돌을 바꾸고, 모르는 사유는 그대로 두는지 확인한다.
     #[test]

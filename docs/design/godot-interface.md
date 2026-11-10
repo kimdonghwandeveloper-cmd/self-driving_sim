@@ -1,4 +1,4 @@
-# Godot ↔ Rust 인터페이스 계약 (v1.2)
+# Godot ↔ Rust 인터페이스 계약 (v1.3)
 
 작성: 2026-11-08 Claude 초안, 2026-11-09 v1 고정(Codex가 동의한 v0.2와 Codex 추가 요청 2건 반영).
 목적: Claude(Rust, `crates/`)와 Codex(Godot, `godot/`)가 동시에 개발할 때 서로 기다리지 않도록
@@ -12,6 +12,7 @@ Godot에 노출할 클래스·메서드·시그널·좌표 규칙·실패 처리
 | v1 | Codex 동의(부록 A)에 따라 v0.2를 1~7절 본문에 옮김. Codex 추가 요청 `view_to_latlon`, `forget_displayed` 채택(부록 A 끝). 본문 옮김이 합의와 다르면 Codex가 부록 A에 적고 고친다 |
 | v1.1 | 구현 중 정한 세부(이름·인자 변경 없음): 장치 기어 충돌 결과 이름 `gear_conflict`, 재생 드라이버 시작 시점(`ready` 시그널 뒤), `load_snapshot` 경로 형식, 좌우 수식 키 구분 없음, 장치 중립 대기 범위 |
 | v1.2 | 항목 추가(기존 이름·인자 변경 없음, 2026-11-10 Claude. Codex 사용량 한도 중 사용자 지시로 Godot 쪽도 Claude가 맞춤): 지도 코스 이름 `map:<파일>`(2절 `course`, 3절, 5-3 `SimReplay.run`), `SimCourse.course_files()`(3절), `SimTiles.country_outline()`·`country_bounds()`(7-3, 대한민국 범위 제한·경계 밖 가림, 사용자 지시 2026-11-09). 저장 경로 주행을 범위에 다시 넣음(7-4, 사용자 지시 "남은 플랜 완료"). Godot에 보내는 사람이 읽는 문구(명령 거부 사유, 코스 안내, 경로 선택 안내·경고·오류)는 한국어(1절). 코스 사전 `goal`(3절, 4-6 경로 끝 목표 표시) |
+| v1.3 | 항목 추가(기존 이름·인자 변경 없음, 2026-11-10 Claude, GD-5 Bevy 앱 제거 사용자 결정): `SimVehicle.calibration_lines()`(2절, Bevy 앱에서 옮긴 2-5 보정 측정. 주행 결과에는 영향 없음). Bevy 앱이 없어져 `sim-core` 문구가 영어인 이유는 시험과 개발 명령(`sim-tools`) 공용이다 |
 
 변경 규칙:
 
@@ -70,6 +71,7 @@ Godot 쪽은 이 노드의 **자식**으로 차체 메시·실내·카메라를 
 | `emergency_active()` | `bool` | 비상 정지 중 |
 | `steer_angle_deg()` | `float` | 현재 바퀴 조향각(오른쪽 양수) |
 | `in_contact()` | `bool` | 장애물·연석과 접촉해 정지한 상태 |
+| (v1.3) `calibration_lines()` | `PackedStringArray` | 보정 측정 한국어 5줄: 회전반경(후륜축)·최대 조향 최소 반경, 최대 제동 예상 정지거리, 진행 중 시험, 마지막 제동·가속 시험(회차 포함). 모두 시뮬레이터 임시값. 시험은 매 틱 측정하고 `reset_course` 성공 시 진행 중 시험만 버린다. 준비 전에는 빈 배열. 주행 화면은 `calibration` 코스에서만 표시한다 |
 | `view()` | `String` | `"front"`, `"rear"`, `"left"`, `"right"` (입석 시점 방향) |
 | `debug_camera()` | `bool` | 외부 디버그 카메라 켜짐 |
 | `input_source()` | `String` | `"keyboard"`, `"gamepad"`, `"manual"`, `"none"`. Bevy `merge.rs` 규칙이 고른 장치가 바뀔 때 바뀐다(`read_input = false`면 `"manual"`) |
