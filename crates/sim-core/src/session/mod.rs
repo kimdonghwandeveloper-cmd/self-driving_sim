@@ -240,6 +240,19 @@ impl DriveSession {
         self.manual
     }
 
+    /// 첫 틱 전에 상태 머신 명령을 바로 적용한다(시나리오 시작 조건, 5-1). 틱 결과·시그널은 만들지 않는다.
+    /// 첫 틱 뒤에 부르거나 명령이 거부되면 오류 문구를 돌려주고 상태는 그대로 둔다.
+    pub fn apply_before_start(&mut self, command: VehicleCommand) -> Result<(), String> {
+        if self.tick > 0 {
+            return Err("session already started".to_owned());
+        }
+        self.state
+            .apply(command)
+            .map_err(|error| error.to_string())?;
+        self.calibration.restart_from(&self.state, &self.motion);
+        Ok(())
+    }
+
     /// 고정 간격 한 틱을 처리한다(계약 5-1 3~7단계).
     ///
     /// 대기열 명령을 들어온 순서대로, 그다음 장치 명령·장치 복귀 요청을 처리한다. 각 명령은 틱 시작

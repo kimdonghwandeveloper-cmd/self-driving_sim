@@ -7,6 +7,7 @@ pub mod camera;
 pub mod config;
 pub mod input;
 pub mod picker;
+pub mod scenario;
 pub mod session;
 pub mod vehicle;
 pub mod world;
