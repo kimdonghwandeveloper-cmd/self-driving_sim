@@ -623,6 +623,16 @@ tests/
 - [ ]  시나리오 설정을 파일로 분리하고 HUD에 안내 표시.
 - [ ]  시작/일시정지/재시작/종료 동작 제공.
 - **완료 기준:** 코드 변경 없이 시나리오 파라미터를 변경 가능.
+- 진행 기록(2026-11-10, `feature/scenario-framework`, 체크는 사용자 확인 후): 세 항목을 구현했다.
+  - 데이터 구조: `sim-core` `scenario/`(`ScenarioDef` 시작 조건·단계(목표)·이벤트·실패 조건, `ScenarioRun` 실행 상태).
+    조건 10종(시동·기어·정지·속도·이동 거리·위치 도달·위치 정지·목표 정지·경과 시간·단계 완료), 이벤트 동작은 메시지 하나(5-4에서 늘림).
+    시간은 진행 중 틱 수 × 1/64 s라 일시정지·화면 프레임과 무관하다.
+  - 파일·HUD: `assets/scenarios/*.toml`(형식 `docs/scenarios.md`, 모르는 키·잘못된 값은 사유와 함께 거부). 메뉴 목록 끝 `시나리오: <제목>`,
+    주행 화면 시나리오 상자에 제목·단계·안내·경과 시간·충돌 수·메시지·조작 안내. 예시 `sample-stop-line.toml`(training 정지선 앞 정지, 틀 확인용이며 5-2 아님).
+  - 조작: F5 시작·계속, F6 일시정지, F7 재시작, F8 종료(버튼도 있음, 게임패드 버튼은 아직 없음). 시작 전·일시정지·끝에는 차량 틱이 돌지 않는다.
+  - Godot 계약 v1.4(`SimVehicle.scenario`·`scenario_control`·`scenario_status`·시그널 4개, `SimScenario.scenario_files`).
+  - 자동 확인: `sim-core` 시험 13개(파일 값만 바꿔 시간 제한이 바뀌는 `time_limit_comes_from_file` 포함), `godot/tests/scenario_test.gd`.
+    **남은 것:** 사람이 메뉴에서 예시 시나리오를 열어 안내대로 끝내 보고 파일 값을 고쳐 다시 열어 보는 확인.
 
 ### 5-2. 시나리오 A: 기본 조작
 

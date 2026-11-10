@@ -242,11 +242,12 @@ cargo run --locked -p sim-tools -- --compare-overpass assets/maps/yeosu-expo/gra
     도로 그래프(`osm_graph.rs`), 경로(`route.rs`, `route_plan.rs`), Overpass 받기(`map_fetch.rs`),
     Geofabrik 추출·감사·비교(`pbf_extract.rs`, `pbf_audit.rs`, `pbf_compare.rs`), 스냅샷 읽기(`road_snapshot.rs`)
   - `picker/`: 경로 선택 모델·지역 캐시·OSM 배경 타일, `config.rs`·`camera.rs`: 설정 파싱과 시점
-- `crates/sim-godot/`: Godot 확장(`SimVehicle`, `SimCourse`, `SimReplay`, `SimRoutePicker`, `SimTiles`). 계약은 `docs/design/godot-interface.md`
+- `crates/sim-godot/`: Godot 확장(`SimVehicle`, `SimCourse`, `SimReplay`, `SimRoutePicker`, `SimTiles`, `SimScenario`). 계약은 `docs/design/godot-interface.md`
 - `crates/sim-tools/`: 창 없는 개발 명령(지도 받기, PBF 추출·대조)
 - `godot/`: Godot 프로젝트(메뉴·주행·지도 화면 `presentation/`, 헤드리스 시험 `tests/`). 구현 메모는 `godot/IMPLEMENTATION.md`
 - `config/{vehicle,input,camera,road_graph}.toml`: 시뮬레이터 임시 설정값
 - `assets/maps/`: 저장소에 넣은 지도 스냅샷과 지도 코스
+- `assets/scenarios/`: 교육 시나리오 파일(5-1, 메뉴 목록 끝에 나옴). 형식은 [docs/scenarios.md](docs/scenarios.md)
 - [docs/development.md](docs/development.md): 선정 버전, 개발 PC, 검증 결과
 - [docs/vehicle-assumptions.md](docs/vehicle-assumptions.md): 실차 사양 가정과 미확인 위험(사륜 조향·특수 구동 등)
 
@@ -265,6 +266,7 @@ cargo.exe build --locked -p sim-godot
 & '<Godot 콘솔 실행 파일>' --headless --fixed-fps 64 --path godot --script res://tests/route_save_test.gd
 & '<Godot 콘솔 실행 파일>' --headless --fixed-fps 64 --path godot --script res://tests/goal_reset_test.gd
 & '<Godot 콘솔 실행 파일>' --headless --fixed-fps 64 --path godot --script res://tests/calibration_test.gd
+& '<Godot 콘솔 실행 파일>' --headless --fixed-fps 64 --path godot --script res://tests/scenario_test.gd
 ```
 
 - `presentation_smoke.gd`는 정지 미리보기 장면·네 시점·지도 화면·메뉴 재진입을 검사합니다. `-- --capture-dir=<폴더>`를 주고 창 모드로 돌리면
@@ -277,6 +279,8 @@ cargo.exe build --locked -p sim-godot
 - `goal_reset_test.gd`는 지도 코스의 경로 끝 목표 표시, 주행 후 리셋 시 경로 시작 자세 복원, 없는 지도 파일을 열 때
   개발 코스(training) 대체를 확인합니다(4-6). 출력의 `ERROR: ... 없는-코스.toml` 한 줄은 의도된 실패 경로입니다.
 - `calibration_test.gd`는 보정 코스의 측정 상자, 가속·제동 시험 1회차 결과, 리셋 후 결과 유지와 training에서의 상자 숨김을 확인합니다(2-5).
+- `scenario_test.gd`는 메뉴에서 예시 시나리오를 열어 시작 전 정지, F5 시작, 단계 4개·메시지 2개, F6 일시정지(차량·시간 멈춤), 성공,
+  F7 재시작, F8 종료와 없는 시나리오 파일의 실패 화면을 확인합니다(5-1). 출력의 `ERROR: ... 없는-시나리오.toml` 한 줄은 의도된 실패 경로입니다.
 
 프레임 시간은 실제 창에서 잽니다(헤드리스 아님, 측정만 하고 실패로 끝내지 않음).
 

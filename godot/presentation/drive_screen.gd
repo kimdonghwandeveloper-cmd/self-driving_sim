@@ -22,6 +22,19 @@ const FALLBACK_COURSE := "training"
 const CALIBRATION_COURSE := "calibration"
 const CALIBRATION_TITLE := "보정 측정 · 시뮬레이터 임시값이며 실차 성능이 아닙니다"
 const FALLBACK_NOTICE := "지도 코스를 열지 못해 개발 코스(training)로 대체했습니다.\n%s"
+## 시나리오 선택 문자열 머리(`scenario:<저장소 루트 기준 파일>`, 5-1).
+const SCENARIO_PREFIX := "scenario:"
+## 시나리오 조작 키(주행 입력 설정 `config/input.toml`과 겹치지 않는 기능 키)와 화면 동작 이름.
+const SCENARIO_KEYS := {KEY_F5: "go", KEY_F6: "pause", KEY_F7: "restart", KEY_F8: "end"}
+## 단계별 조작 안내.
+const SCENARIO_HELP := {
+	"briefing": "F5 시작 · F8 종료",
+	"running": "F6 일시정지 · F7 재시작 · F8 종료",
+	"paused": "F5 계속 · F7 재시작 · F8 종료",
+	"finished": "F7 다시 하기 · Esc 메뉴",
+}
+## 시나리오 메시지 글자색.
+const SCENARIO_MESSAGE_COLOR := Color("ffd27a")
 var vehicle: Node3D
 var rig: Node3D
 var hud := Label.new()
@@ -30,6 +43,11 @@ var notice := Label.new()
 ## 보정 코스에서만 보이는 측정 상자와 글자.
 var calibration_box: PanelContainer
 var calibration_label := Label.new()
+## 시나리오 주행일 때만 보이는 안내 상자·글자·메시지와 조작 버튼(동작 이름 → 버튼).
+var scenario_box: PanelContainer
+var scenario_label := Label.new()
+var scenario_message := Label.new()
+var scenario_buttons := {}
 var is_preview := false
 var failure := ""
 ## 지도 코스 대신 개발 코스를 열었을 때의 안내. 대체하지 않았으면 빈 문자열.
@@ -82,13 +100,18 @@ func start(course_name: String, force_preview: bool = false) -> void:
 	dismiss.visible = not warnings_label.text.is_empty()
 	notice.text = "\n".join(vehicle.call("course_notices"))
 	calibration_box.visible = not is_preview and str(vehicle.get("course")) == CALIBRATION_COURSE
+	scenario_box.visible = _has_scenario()
 	if is_preview:
 		notice.text += "\n정지 미리보기 · 1 전방 / 2 후방 / 3 좌측 / 4 우측 / C 외부"
 
 ## `course_name` 코스의 Rust 차량(또는 정지 미리보기) 노드를 만들어 장면에 넣는다. 준비 결과는 `is_ready`로 본다.
+## `scenario:<파일>`이면 차량의 `scenario` 속성에 파일을 넣고 코스는 시나리오 파일이 정한다.
 func _make_vehicle(course_name: String) -> Node3D:
 	var node: Node3D = Preview.new() if is_preview else ClassDB.instantiate("SimVehicle")
-	node.set("course", course_name)
+	if course_name.begins_with(SCENARIO_PREFIX):
+		node.set("scenario", course_name.substr(SCENARIO_PREFIX.length()))
+	else:
+		node.set("course", course_name)
 	add_child(node)
 	return node
 
@@ -162,6 +185,24 @@ func _ui() -> void:
 	var hud_box := _backdrop()
 	panel.add_child(hud_box)
 	hud_box.add_child(hud)
+	scenario_box = _backdrop()
+	scenario_box.hide()
+	panel.add_child(scenario_box)
+	var scenario_column := VBoxContainer.new()
+	scenario_column.add_theme_constant_override("separation", 6)
+	scenario_box.add_child(scenario_column)
+	scenario_column.add_child(scenario_label)
+	scenario_column.add_child(scenario_message)
+	var scenario_row := HBoxContainer.new()
+	scenario_column.add_child(scenario_row)
+	for entry in [["go", "시작·계속 (F5)"], ["pause", "일시정지 (F6)"], ["restart", "재시작 (F7)"], ["end", "종료 (F8)"]]:
+		var button := Button.new()
+		button.text = entry[1]
+		# 버튼이 포커스를 가지면 Enter·Space(시동·비상 정지 키)가 버튼을 누르게 되므로 포커스를 받지 않는다.
+		button.focus_mode = Control.FOCUS_NONE
+		button.pressed.connect(_scenario_action.bind(entry[0]))
+		scenario_row.add_child(button)
+		scenario_buttons[entry[0]] = button
 	calibration_box = _backdrop()
 	calibration_box.hide()
 	panel.add_child(calibration_box)
@@ -175,7 +216,7 @@ func _ui() -> void:
 	notice_box.offset_bottom = -12
 	overlay.add_child(notice_box)
 	notice_box.add_child(notice)
-	for label in [hud, notice, warnings_label, calibration_label]:
+	for label in [hud, notice, warnings_label, calibration_label, scenario_label, scenario_message]:
 		label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		label.add_theme_color_override("font_color", Color.WHITE)
 		label.add_theme_color_override("font_shadow_color", Color.BLACK)
@@ -186,6 +227,12 @@ func _ui() -> void:
 	hud.add_theme_font_size_override("font_size", 22)
 	notice.add_theme_font_size_override("font_size", 14)
 	calibration_label.add_theme_font_size_override("font_size", 16)
+	scenario_label.add_theme_font_size_override("font_size", 18)
+	scenario_message.add_theme_font_size_override("font_size", 20)
+	scenario_message.add_theme_color_override("font_color", SCENARIO_MESSAGE_COLOR)
+	for label in [scenario_label, scenario_message]:
+		label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		label.custom_minimum_size.x = 560
 	notice.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	dismiss.text = "설정 경고 닫기"
 	dismiss.pressed.connect(_dismiss_warnings)
@@ -217,6 +264,52 @@ func _process(_delta: float) -> void:
 		hud.text += "\n" + command_notice
 	if calibration_box.visible:
 		calibration_label.text = CALIBRATION_TITLE + "\n" + "\n".join(vehicle.call("calibration_lines"))
+	if scenario_box.visible:
+		_update_scenario(vehicle.call("scenario_status"))
+
+## 시나리오 상태 사전(`SimVehicle.scenario_status`)으로 안내 상자 글자·메시지·버튼 사용 가능 여부를 갱신한다.
+func _update_scenario(status: Dictionary) -> void:
+	var phase := str(status.get("phase", ""))
+	var lines := PackedStringArray()
+	lines.append("시나리오 · %s    [%s]" % [status.get("title", ""), status.get("phase_text", "")])
+	if phase == "briefing" and not str(status.get("briefing", "")).is_empty():
+		lines.append(str(status.briefing))
+	var step_count := int(status.get("step_count", 0))
+	var step_index := int(status.get("step_index", 0))
+	if step_index < step_count:
+		lines.append("단계 %d/%d · %s" % [step_index + 1, step_count, status.get("guide", "")])
+	else:
+		lines.append("단계 %d/%d 완료" % [step_count, step_count])
+	var time_text := "경과 %.1f 초" % float(status.get("elapsed_s", 0.0))
+	if float(status.get("time_limit_s", -1.0)) >= 0.0:
+		time_text += " / 제한 %.0f 초" % float(status.time_limit_s)
+	var collision_text := "충돌 %d회" % int(status.get("collisions", 0))
+	if int(status.get("max_collisions", -1)) >= 0:
+		collision_text += " / 허용 %d회" % int(status.max_collisions)
+	lines.append(time_text + "    " + collision_text)
+	lines.append(SCENARIO_HELP.get(phase, ""))
+	scenario_label.text = "\n".join(lines)
+	scenario_message.text = str(status.get("message", ""))
+	scenario_message.visible = not scenario_message.text.is_empty()
+	scenario_buttons["go"].disabled = phase != "briefing" and phase != "paused"
+	scenario_buttons["pause"].disabled = phase != "running"
+	scenario_buttons["end"].disabled = phase == "finished"
+
+## 시나리오 차량이 준비됐는지 반환한다.
+func _has_scenario() -> bool:
+	if is_preview or not is_instance_valid(vehicle) or not bool(vehicle.call("is_ready")):
+		return false
+	return bool((vehicle.call("scenario_status") as Dictionary).get("active", false))
+
+## 화면 동작 이름(`go`, `pause`, `restart`, `end`)을 시나리오 조작으로 보낸다. `go`는 시작 전이면 시작, 일시정지면 계속이다.
+## 지금 단계에서 받을 수 없는 조작이면 Rust가 거부하고 아무것도 바뀌지 않는다.
+func _scenario_action(action: String) -> void:
+	if not failure.is_empty() or not _has_scenario():
+		return
+	if action == "go":
+		var phase := str((vehicle.call("scenario_status") as Dictionary).get("phase", ""))
+		action = "start" if phase == "briefing" else "resume"
+	vehicle.call("scenario_control", action)
 
 ## 부호 있는 속도(m/s)를 이동 방향 이름으로 바꾼다. 정지 판정 문턱은 표시용이다.
 static func _movement(speed_mps: float) -> String:
@@ -224,9 +317,15 @@ static func _movement(speed_mps: float) -> String:
 		return "정지"
 	return "전진" if speed_mps > 0.0 else "후진"
 
-## 임시 노드에서만 시야 미리보기 키를 받으며 주행 입력은 만들지 않는다.
+## 시나리오 조작 키(F5~F8)와, 임시 노드에서만 시야 미리보기 키를 받는다. 주행 입력은 만들지 않는다.
 func _unhandled_key_input(event: InputEvent) -> void:
-	if not is_preview or not failure.is_empty() or not event is InputEventKey or not event.pressed or event.echo:
+	if not failure.is_empty() or not event is InputEventKey or not event.pressed or event.echo:
+		return
+	if event.physical_keycode in SCENARIO_KEYS and _has_scenario():
+		_scenario_action(SCENARIO_KEYS[event.physical_keycode])
+		get_viewport().set_input_as_handled()
+		return
+	if not is_preview:
 		return
 	var directions := {KEY_1: "front", KEY_2: "rear", KEY_3: "left", KEY_4: "right"}
 	if event.physical_keycode in directions:
@@ -249,6 +348,7 @@ func _fail(message: String) -> void:
 	warnings_label.hide()
 	dismiss.hide()
 	calibration_box.hide()
+	scenario_box.hide()
 ## 반투명 어두운 배경 상자를 만든다(HUD·안내 글자가 하늘·노면 위에서도 읽히게).
 func _backdrop() -> PanelContainer:
 	var box := PanelContainer.new()

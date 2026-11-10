@@ -14,11 +14,14 @@ use sim_core::config::{
     CAMERA_CONFIG_PATH, ConfigError, VEHICLE_CONFIG_PATH, VehicleConfig, parse_operator_view,
     parse_vehicle_config, read_config,
 };
+use sim_core::scenario::load_scenario;
+use sim_core::scenario::run::{Control, Phase, ScenarioRun, ScenarioUpdate};
 use sim_core::session::{DriveCommand, DriveSession, QueueFull, TickReport};
 use sim_core::vehicle::state::{Gear, VehicleInput};
 
 use crate::course::{build_course, course_dict, failure_dict, panic_message};
 use crate::devices::{Devices, load_bindings};
+use crate::paths::resolve_user_path;
 
 /// 기본 설정 폴더(`res://` 기준). 저장소 루트의 `config/`다.
 const DEFAULT_CONFIG_DIR: &str = "res://../config";
@@ -121,6 +124,19 @@ fn config_warning(path: &Path, error: &ConfigError) -> String {
     format!("설정 파일 {} {error}; 기본값을 씁니다", path.display())
 }
 
+/// 시나리오 파일을 읽고 그 코스를 만들어 실행 상태와 시작 조건을 맞춘 주행 세션을 돌려준다.
+/// 실패하면 사람이 읽는 한국어 사유를 돌려준다(패닉도 사유로 바꾼다).
+fn start_scenario(
+    path: &str,
+    config: &VehicleConfig,
+) -> Result<(ScenarioRun, DriveSession), String> {
+    let def = load_scenario(&resolve_user_path(path)).map_err(|error| error.to_string())?;
+    let course = build_course(&def.course)?;
+    catch_unwind(AssertUnwindSafe(|| ScenarioRun::new(def, course, config)))
+        .map_err(|payload| format!("내부 오류: {}", panic_message(payload.as_ref())))?
+        .map_err(|error| error.to_string())
+}
+
 /// 차량 한 대. Rust가 입력·상태 머신·운동 모델·충돌을 처리하고 매 물리 틱 끝에 자기 자세를 갱신한다.
 #[derive(GodotClass)]
 #[class(init, base = Node3D)]
@@ -136,8 +152,14 @@ pub struct SimVehicle {
     #[export]
     #[init(val = true)]
     read_input: bool,
+    /// 시나리오 파일(계약 v1.4, 5-1). 비우면 시나리오 없이 `course`를 주행한다. 있으면 `course` 대신 파일의
+    /// 코스를 쓴다. 상대 경로는 저장소 루트 기준. `_ready`에서 한 번만 읽는다.
+    #[export]
+    scenario: GString,
     /// 주행 세션. 코스 실패·패닉이면 `None`.
     session: Option<DriveSession>,
+    /// 시나리오 실행 상태. 시나리오가 없으면 `None`.
+    run: Option<ScenarioRun>,
     last_error: String,
     warnings: Vec<String>,
     /// 키보드·게임패드 상태. `_ready`에서 만든다.
@@ -167,6 +189,18 @@ impl INode3D for SimVehicle {
             godot_warn!("{warning}");
         }
         self.warnings = warnings;
+        let scenario = self.scenario.to_string();
+        if !scenario.trim().is_empty() {
+            match start_scenario(scenario.trim(), &config) {
+                Ok((run, session)) => {
+                    self.run = Some(run);
+                    self.session = Some(session);
+                    self.sync_transform();
+                }
+                Err(error) => self.fail(error),
+            }
+            return;
+        }
         match build_course(&self.course.to_string()) {
             Ok(course) => {
                 self.session = Some(DriveSession::new(course, &config));
@@ -199,16 +233,29 @@ impl INode3D for SimVehicle {
             devices.reset_history();
         }
         self.last_read_input = Some(read_input);
+        // 시나리오가 진행 중이 아니면(시작 전·일시정지·끝) 틱을 돌리지 않는다. 그동안 누른 키가
+        // 계속할 때 새 입력으로 잡히지 않도록 장치 이력을 비운다.
+        if self.run.as_ref().is_some_and(|run| !run.is_running()) {
+            devices.reset_history();
+            return;
+        }
+        let run = &mut self.run;
         let ticked = catch_unwind(AssertUnwindSafe(|| {
             let read = read_input.then(|| devices.read(session.state().is_stopped()));
             let device = read
                 .as_ref()
                 .map(|read| read.tick.clone())
                 .unwrap_or_default();
-            (session.tick(&device), read)
+            let (report, updates) = match run.as_mut() {
+                Some(run) => run
+                    .tick(session, &device)
+                    .expect("scenario checked running above"),
+                None => (session.tick(&device), Vec::new()),
+            };
+            (report, updates, read)
         }));
         match ticked {
-            Ok((report, read)) => {
+            Ok((report, updates, read)) => {
                 if report.course_reset {
                     self.view = ViewDirection::Front;
                 }
@@ -217,7 +264,7 @@ impl INode3D for SimVehicle {
                     self.debug_camera ^= read.debug_toggle;
                 }
                 self.sync_transform();
-                self.emit_report(&report, view_before, debug_before);
+                self.emit_report(&report, &updates, view_before, debug_before);
             }
             Err(payload) => {
                 self.fail(format!("내부 오류: {}", panic_message(payload.as_ref())));
@@ -281,6 +328,82 @@ impl SimVehicle {
     /// 코스 실패·패닉. 한 번만 보낸다.
     #[signal]
     fn course_failed(error: GString);
+    /// 시나리오 단계를 끝냄(번호는 0부터, `id`는 파일의 단계 이름). 틱 안에서 `tick_finished` 전에 보낸다.
+    #[signal]
+    fn scenario_step_done(index: i64, id: GString);
+    /// 시나리오 메시지 이벤트가 일어남.
+    #[signal]
+    fn scenario_message(text: GString);
+    /// 시나리오 실행 단계가 바뀜(`"briefing"`, `"running"`, `"paused"`, `"finished"`). 조작·끝 판정 때 보낸다.
+    #[signal]
+    fn scenario_phase_changed(phase: GString);
+    /// 시나리오가 끝남(`"success"`, `"time_limit"`, `"collisions"`, `"aborted"`). `scenario_phase_changed` 다음에 보낸다.
+    #[signal]
+    fn scenario_finished(outcome: GString);
+
+    /// 시나리오 조작(`"start"`, `"pause"`, `"resume"`, `"restart"`, `"end"`)을 바로 적용한다.
+    /// 시나리오가 없거나 지금 단계에서 받을 수 없으면 `false`. 재시작은 차량을 시작 조건으로 되돌리고 시점을 전방으로 한다.
+    #[func]
+    fn scenario_control(&mut self, name: GString) -> bool {
+        let name = name.to_string();
+        let Some(control) = Control::parse(&name) else {
+            godot_error!("SimVehicle.scenario_control: 알 수 없는 조작 \"{name}\"");
+            return false;
+        };
+        let (Some(run), Some(session)) = (self.run.as_mut(), self.session.as_mut()) else {
+            return false;
+        };
+        if run.control(control, session).is_err() {
+            return false;
+        }
+        let phase = run.phase();
+        if control == Control::Restart {
+            let view_before = self.view;
+            self.view = ViewDirection::Front;
+            self.sync_transform();
+            if view_before != self.view {
+                self.base_mut().emit_signal(
+                    "view_changed",
+                    &[GString::from(view_name(ViewDirection::Front)).to_variant()],
+                );
+            }
+        }
+        self.emit_phase(phase);
+        true
+    }
+
+    /// 시나리오 HUD 값(계약 v1.4). 시나리오가 없으면 `{active: false}`만 돌려준다.
+    /// `active`, `title`, `briefing`, `phase`(계약 이름), `phase_text`(한국어), `outcome`(끝났을 때만, 아니면 빈 문자열),
+    /// `step_index`(지금 단계 번호, 다 끝냈으면 단계 수), `step_count`, `guide`(지금 단계 안내, 다 끝냈으면 빈 문자열),
+    /// `elapsed_s`, `time_limit_s`(없으면 -1), `collisions`, `max_collisions`(없으면 -1), `message`(없으면 빈 문자열).
+    #[func]
+    fn scenario_status(&self) -> VarDictionary {
+        let Some(run) = &self.run else {
+            return vdict! { "active" => false };
+        };
+        let def = run.def();
+        let phase = run.phase();
+        let outcome = match phase {
+            Phase::Finished(outcome) => outcome.name(),
+            _ => "",
+        };
+        vdict! {
+            "active" => true,
+            "title" => def.title.as_str(),
+            "briefing" => def.briefing.as_str(),
+            "phase" => phase.name(),
+            "phase_text" => crate::korean::scenario_phase(phase),
+            "outcome" => outcome,
+            "step_index" => run.steps_done() as i64,
+            "step_count" => def.steps.len() as i64,
+            "guide" => run.current_step().map_or("", |step| step.guide.as_str()),
+            "elapsed_s" => f64::from(run.elapsed_s()),
+            "time_limit_s" => def.end.time_limit_s.map_or(-1.0, f64::from),
+            "collisions" => i64::from(run.collisions()),
+            "max_collisions" => def.end.max_collisions.map_or(-1, i64::from),
+            "message" => run.message().unwrap_or(""),
+        }
+    }
 
     /// 코스를 만들고 시작 자세에 놓았으면 `true`.
     #[func]
@@ -499,8 +622,17 @@ impl SimVehicle {
     }
 
     /// 틱 결과를 계약 2절 시그널 표 순서로 보낸다. 시점·디버그 카메라는 틱 시작 값과 비교한다.
-    fn emit_report(&mut self, report: &TickReport, view_before: ViewDirection, debug_before: bool) {
+    fn emit_report(
+        &mut self,
+        report: &TickReport,
+        updates: &[ScenarioUpdate],
+        view_before: ViewDirection,
+        debug_before: bool,
+    ) {
         let (view, debug_camera) = (self.view, self.debug_camera);
+        let step_ids: Vec<String> = self.run.as_ref().map_or_else(Vec::new, |run| {
+            run.def().steps.iter().map(|step| step.id.clone()).collect()
+        });
         let mut base = self.base_mut();
         for result in &report.results {
             let command = GString::from(result.command.as_str()).to_variant();
@@ -540,6 +672,41 @@ impl SimVehicle {
         if debug_camera != debug_before {
             base.emit_signal("debug_camera_toggled", &[debug_camera.to_variant()]);
         }
-        base.emit_signal("tick_finished", &[(report.tick as i64).to_variant()]);
+        drop(base);
+        for update in updates {
+            match update {
+                ScenarioUpdate::StepDone(index) => {
+                    let id = step_ids.get(*index).map_or("", String::as_str);
+                    self.base_mut().emit_signal(
+                        "scenario_step_done",
+                        &[(*index as i64).to_variant(), GString::from(id).to_variant()],
+                    );
+                }
+                ScenarioUpdate::Message(text) => {
+                    self.base_mut().emit_signal(
+                        "scenario_message",
+                        &[GString::from(text.as_str()).to_variant()],
+                    );
+                }
+                ScenarioUpdate::Finished(outcome) => self.emit_phase(Phase::Finished(*outcome)),
+            }
+        }
+        self.base_mut()
+            .emit_signal("tick_finished", &[(report.tick as i64).to_variant()]);
+    }
+
+    /// `scenario_phase_changed`를 보내고, 끝났으면 이어서 `scenario_finished`를 보낸다.
+    fn emit_phase(&mut self, phase: Phase) {
+        let mut base = self.base_mut();
+        base.emit_signal(
+            "scenario_phase_changed",
+            &[GString::from(phase.name()).to_variant()],
+        );
+        if let Phase::Finished(outcome) = phase {
+            base.emit_signal(
+                "scenario_finished",
+                &[GString::from(outcome.name()).to_variant()],
+            );
+        }
     }
 }
