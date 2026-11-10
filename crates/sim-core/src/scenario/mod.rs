@@ -71,14 +71,14 @@ impl Default for StartDef {
 
 /// 단계 완료·이벤트 발생 조건. 매 틱 끝 상태로 판정한다.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Condition {
     /// 시동이 켜짐(비상 정지 중 제외).
-    EngineOn,
+    EngineOn {},
     /// 기어가 `gear`임.
     Gear { gear: GearName },
     /// 정지 판정(상태 머신 임계값).
-    Stopped,
+    Stopped {},
     /// 속도 크기가 `kmh` 이상.
     SpeedAtLeast { kmh: f32 },
     /// 시나리오 시작 뒤 움직인 거리(전진·후진 모두, m)가 `distance_m` 이상.
@@ -109,7 +109,7 @@ pub struct StepDef {
 
 /// 이벤트가 하는 일.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Action {
     /// HUD에 `text`를 `duration_s`초 동안(일시정지 제외) 띄운다.
     Message { text: String, duration_s: f32 },
@@ -214,7 +214,7 @@ impl Condition {
             }
         };
         match self {
-            Condition::EngineOn | Condition::Gear { .. } | Condition::Stopped => Ok(()),
+            Condition::EngineOn {} | Condition::Gear { .. } | Condition::Stopped {} => Ok(()),
             Condition::SpeedAtLeast { kmh } => non_negative("kmh", *kmh),
             Condition::Travel { distance_m } => non_negative("distance_m", *distance_m),
             Condition::Elapsed { s } => non_negative("s", *s),
@@ -469,6 +469,16 @@ max_collisions = 0
             ("duration_s = 2.0", "duration_s = 0.0", "duration_s"),
             ("time_limit_s = 60.0", "time_limit_s = 0.0", "time_limit_s"),
             ("max_collisions = 0", "max_collisoins = 0", "파일 형식"),
+            (
+                "done = { kind = \"stopped\" }",
+                "done = { kind = \"stopped\", radius_m = 1.0 }",
+                "파일 형식",
+            ),
+            (
+                "duration_s = 2.0",
+                "duration_s = 2.0, color = 1",
+                "파일 형식",
+            ),
             (
                 "done = { kind = \"stopped\" }",
                 "done = { kind = \"step_done\", step = \"go\" }",

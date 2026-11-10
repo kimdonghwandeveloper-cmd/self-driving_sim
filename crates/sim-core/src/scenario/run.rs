@@ -348,9 +348,9 @@ impl ScenarioRun {
             center.distance(Vec2::from(*position_m)) <= radius_m
         };
         match condition {
-            Condition::EngineOn => state.engine() == EngineState::Ready,
+            Condition::EngineOn {} => state.engine() == EngineState::Ready,
             Condition::Gear { gear } => state.gear() == gear.gear(),
-            Condition::Stopped => state.is_stopped(),
+            Condition::Stopped {} => state.is_stopped(),
             Condition::SpeedAtLeast { kmh } => state.speed_mps().abs() * 3.6 >= *kmh,
             Condition::Travel { distance_m } => self.travel_m >= *distance_m,
             Condition::Reach {
