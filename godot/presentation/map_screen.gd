@@ -21,6 +21,13 @@ var save_button := Button.new()
 var route_name := LineEdit.new()
 var overwrite := CheckBox.new()
 var snapshot_dialog := FileDialog.new()
+## 스냅샷 세대 폴더 선택 창. 고른 폴더는 Rust가 그 안의 graph.osm.json으로 바꿔 연다.
+var snapshot_folder_dialog := FileDialog.new()
+## 디스크 캐시에 받아 둔 지역 범위(지도 좌표)와 그 목록 선택 상자.
+var cached: Array[Rect2] = []
+var cache_choices := OptionButton.new()
+## 지금 열린 지역 범위(지도 좌표). 열린 것이 없으면 크기 0.
+var opened_region := Rect2()
 ## Godot 쪽 지도 텍스처 보관 상한(계약 7-3 권장값).
 const MAX_TEXTURES := 512
 ## 맞춤 보기에서 버튼·안내 영역으로 빼는 화면 크기(px). 최소 배율도 같은 영역 기준이다.
@@ -107,7 +114,7 @@ func _notification(what: int) -> void:
 	if what == NOTIFICATION_APPLICATION_FOCUS_OUT:
 		dragging = false
 
-## 현재 뷰의 회색 칸, 타일, 도로, 경로, 선택 점을 순서대로 표시한다.
+## 현재 뷰의 회색 칸, 타일, 받은 지역 테두리, 받기 기준 십자선, 도로, 경로, 선택 점을 순서대로 표시한다.
 func _draw() -> void:
 	var scale_m := maxf(camera.zoom.x, 0.0005)
 	var span := get_viewport_rect().size / scale_m
@@ -128,6 +135,14 @@ func _draw() -> void:
 		var closed := country_outline.duplicate()
 		closed.append(country_outline[0])
 		draw_polyline(closed, Color("8a96a3"), 1.5 / scale_m, true)
+	for bounds in cached:
+		draw_rect(bounds, Color("657f99"), false, 1.0 / scale_m)
+	if opened_region.has_area():
+		draw_rect(opened_region, Color("79d9b1"), false, 2.0 / scale_m)
+	# "이 지역 도로 받기"가 기준으로 쓰는 화면 가운데(카메라 위치).
+	var center := camera.position
+	draw_line(center - Vector2(10, 0) / scale_m, center + Vector2(10, 0) / scale_m, Color.WHITE, 1.0 / scale_m)
+	draw_line(center - Vector2(0, 10) / scale_m, center + Vector2(0, 10) / scale_m, Color.WHITE, 1.0 / scale_m)
 	for i in range(roads.size() / 2):
 		var allowed := i < usable.size() and usable[i] == 1
 		draw_line(roads[i * 2], roads[i * 2 + 1], Color("cbd5dd") if allowed else Color("737e88"), 2.0 / scale_m, true)
@@ -176,18 +191,26 @@ func _services(canvas: CanvasLayer) -> void:
 	var navigation := HBoxContainer.new()
 	navigation.position = Vector2(24, 108)
 	canvas.add_child(navigation)
-	for item in [["전체 지도", _fit_country], ["선택 지역", _fit_region], ["경로", _fit_route], ["스냅샷 열기", _open_snapshot]]:
+	for item in [["전체 지도", _fit_country], ["선택 지역", _fit_region], ["경로", _fit_route], ["스냅샷 파일 열기", _open_snapshot], ["스냅샷 폴더 열기", _open_snapshot_folder]]:
 		var button := Button.new()
 		button.text = item[0]
 		button.pressed.connect(item[1])
 		navigation.add_child(button)
+	cache_choices.custom_minimum_size.x = 180
+	cache_choices.item_selected.connect(_select_cached_region)
+	navigation.add_child(cache_choices)
 	snapshot_dialog.file_mode = FileDialog.FILE_MODE_OPEN_FILE
 	snapshot_dialog.access = FileDialog.ACCESS_FILESYSTEM
 	snapshot_dialog.filters = PackedStringArray(["*.json ; OSM snapshot"])
 	snapshot_dialog.file_selected.connect(_load_snapshot)
 	add_child(snapshot_dialog)
+	snapshot_folder_dialog.file_mode = FileDialog.FILE_MODE_OPEN_DIR
+	snapshot_folder_dialog.access = FileDialog.ACCESS_FILESYSTEM
+	snapshot_folder_dialog.dir_selected.connect(_load_snapshot)
+	add_child(snapshot_folder_dialog)
 	for button in [cancel, undo, clear]:
 		button.disabled = picker == null
+	_reload_cached_regions()
 
 ## 화면 가운데 위경도로 지역 도로 받기를 요청하고 요청 번호를 기억한다. 받는 중이거나 좌표가 무효면 하지 않는다.
 func _request_region() -> void:
@@ -227,8 +250,9 @@ func _save_route() -> void:
 	var result: Dictionary = picker.call("save", route_name.text, overwrite.button_pressed)
 	feedback = "저장: " + str(result.path) if result.get("ok", false) else str(result.error)
 
-## Rust에서 도로 선분·사용 가능 여부·점·경로선을 받아 그리기 자료를 바꾼다.
+## Rust에서 열린 지역 범위·도로 선분·사용 가능 여부·점·경로선을 받아 그리기 자료를 바꾼다.
 func _refresh_route() -> void:
+	opened_region = picker.call("loaded_region")
 	var result: Dictionary = picker.call("route")
 	display_geometry(picker.call("road_segments"), picker.call("road_usable"), picker.call("points"), result.line)
 
@@ -243,9 +267,11 @@ func _process(_delta: float) -> void:
 				active_request = 0
 				_refresh_route()
 				if event.type == "region_loaded":
+					_reload_cached_regions()
 					_fit_region()
 		var latlon: PackedFloat64Array = picker.call("view_to_latlon", camera.position)
 		receive.disabled = active_request != 0 or latlon.size() != 2
+		cache_choices.disabled = active_request != 0 or cached.is_empty()
 		var result: Dictionary = picker.call("route")
 		save_button.disabled = not bool(result.ok)
 		status.text = "우클릭: 이동 / 휠: 확대 / 클릭: 점 추가 / Shift+클릭: 점 삭제\n" + "\n".join(picker.call("status_lines")) + "\n" + feedback
@@ -343,6 +369,35 @@ func _load_snapshot(path: String) -> void:
 	if result.get("ok", false):
 		_refresh_route()
 		_fit_region()
+
+## 스냅샷 세대 폴더 선택 창을 연다. 받는 중에는 열지 않는다.
+func _open_snapshot_folder() -> void:
+	if picker != null and active_request == 0:
+		snapshot_folder_dialog.popup_centered_ratio(0.75)
+
+## 디스크 캐시의 지역 목록을 다시 읽어 선택 상자를 만든다. 네트워크는 쓰지 않는다.
+func _reload_cached_regions() -> void:
+	cache_choices.clear()
+	cache_choices.add_item("받아 둔 지역 열기")
+	cached.clear()
+	if picker != null:
+		for bounds in picker.call("cached_regions"):
+			cached.append(bounds)
+			cache_choices.add_item("받아 둔 지역 %d" % cached.size())
+	cache_choices.disabled = cached.is_empty()
+
+## 고른 캐시 지역의 가운데로 지역 열기를 요청한다. 가운데가 받은 범위 안이라 Rust가 캐시만으로 연다.
+func _select_cached_region(index: int) -> void:
+	cache_choices.select(0)
+	if picker == null or active_request != 0 or index < 1 or index > cached.size():
+		return
+	var latlon: PackedFloat64Array = picker.call("view_to_latlon", cached[index - 1].get_center())
+	if latlon.size() != 2:
+		return
+	var result: Dictionary = picker.call("request_region", latlon)
+	feedback = str(result.get("error", ""))
+	if result.get("ok", false):
+		active_request = int(result.request_id)
 
 ## 텍스처가 상한을 넘으면 이번 프레임에 보이지 않은 것 중 가장 오래 안 보인 것부터 버리고 Rust에 재전달을 허용한다.
 func _evict_textures() -> void:

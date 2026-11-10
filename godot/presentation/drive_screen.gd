@@ -12,6 +12,10 @@ const INPUT_NAMES := {"keyboard": "키보드", "gamepad": "게임패드", "manua
 const VIEW_NAMES := {"front": "전방", "rear": "후방", "left": "좌측", "right": "우측"}
 ## 외부(디버그) 시점에서 보이는 차체가 임시 모델임을 알리는 문구.
 const EXTERIOR_NOTICE := "외부 시점 · 차체 외관은 임시 모델이며 충돌 판정 차체와 크기가 다릅니다"
+## 1인칭 전방이 아닌 시점일 때 시선과 진행 방향이 다름을 알리는 문구.
+const SIDE_VIEW_NOTICE := "현재 시선은 차량 전방과 다릅니다"
+## HUD 이동 방향을 "정지"로 보일 속도 크기 상한(m/s, 표시용 임시값).
+const MOVING_THRESHOLD_MPS := 0.01
 ## 지도 코스(`map:`)를 열지 못했을 때 대신 여는 개발 코스와 안내 문구(Bevy `--course map:` 대체와 같음, 4-6).
 const FALLBACK_COURSE := "training"
 const FALLBACK_NOTICE := "지도 코스를 열지 못해 개발 코스(training)로 대체했습니다.\n%s"
@@ -190,12 +194,21 @@ func _process(_delta: float) -> void:
 		"작동" if emergency else "해제", INPUT_NAMES.get(source, source),
 		"있음" if vehicle.call("in_contact") else "없음",
 		"외부" if rig.external else VIEW_NAMES.get(rig.current_view, rig.current_view)]
+	hud.text += "    이동 " + _movement(float(vehicle.call("speed_mps")))
 	hud.add_theme_color_override("font_color", Color("ff8a7a") if emergency else Color.WHITE)
 	if rig.external:
 		hud.text += "\n" + EXTERIOR_NOTICE
+	elif rig.current_view != "front":
+		hud.text += "\n" + SIDE_VIEW_NOTICE
 
 	if Time.get_ticks_msec() < command_notice_until:
 		hud.text += "\n" + command_notice
+
+## 부호 있는 속도(m/s)를 이동 방향 이름으로 바꾼다. 정지 판정 문턱은 표시용이다.
+static func _movement(speed_mps: float) -> String:
+	if absf(speed_mps) < MOVING_THRESHOLD_MPS:
+		return "정지"
+	return "전진" if speed_mps > 0.0 else "후진"
 
 ## 임시 노드에서만 시야 미리보기 키를 받으며 주행 입력은 만들지 않는다.
 func _unhandled_key_input(event: InputEvent) -> void:
