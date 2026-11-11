@@ -225,10 +225,16 @@ func _services(canvas: CanvasLayer) -> void:
 	places_button.text = "건물·장소 받기"
 	places_button.pressed.connect(_request_places)
 	navigation.add_child(places_button)
-	place_search.placeholder_text = "장소 이름 검색 (Enter)"
+	place_search.placeholder_text = "장소 이름 검색"
 	place_search.custom_minimum_size.x = 180
-	place_search.text_submitted.connect(_search_places)
+	# 한글 IME는 Enter 때 조합 중인 마지막 글자가 아직 text에 없을 수 있어, 입력할 때마다 찾고 Enter·버튼은 조합 글자까지 합쳐 찾는다.
+	place_search.text_changed.connect(_search_typed)
+	place_search.text_submitted.connect(_search_submitted)
 	navigation.add_child(place_search)
+	var search_button := Button.new()
+	search_button.text = "검색"
+	search_button.pressed.connect(func(): _search_submitted(place_search.text))
+	navigation.add_child(search_button)
 	place_results.custom_minimum_size.x = 220
 	place_results.item_selected.connect(_select_place_result)
 	navigation.add_child(place_results)
@@ -274,6 +280,19 @@ func _search_places(text: String) -> void:
 	var found: Array = picker.call("search_places", text)
 	_fill_place_results(found)
 	feedback = "검색 결과 %d곳" % found.size() if not found.is_empty() else "'%s' 이름의 장소가 없습니다(건물·장소를 받았는지 확인)" % text
+
+## 입력이 바뀔 때마다(한글은 글자 조합이 끝날 때마다) 찾는다. 빈 칸이면 결과 상자만 비운다.
+func _search_typed(text: String) -> void:
+	if text.strip_edges().is_empty():
+		_fill_place_results([])
+		feedback = ""
+	else:
+		_search_places(text)
+
+## Enter·검색 버튼: 아직 조합 중인 한글 글자(IME)를 붙여 찾는다.
+func _search_submitted(text: String) -> void:
+	var composing := DisplayServer.ime_get_text() if place_search.has_focus() else ""
+	_search_places((text + composing).strip_edges())
 
 ## 결과 상자를 안내문 한 줄과 검색 결과(이름 · 종류)로 다시 만든다.
 func _fill_place_results(found: Array) -> void:

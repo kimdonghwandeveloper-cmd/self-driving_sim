@@ -66,6 +66,13 @@ func _run() -> void:
 		_check(status.contains(expected), "안내에 '%s'가 없음: %s" % [expected, status])
 	_check(map.points.size() == 2 and map.route_line.size() > 1, "지도 화면 점·경로선이 갱신되지 않음")
 
+	# 입력할 때마다 찾기(한글 조합이 끝날 때마다 text_changed가 온다)와 빈 칸.
+	map.place_search.text = ""
+	map.place_search.insert_text_at_caret("체육")
+	_check(map.place_results.item_count == 2, "입력 중 검색 결과 상자: %d" % map.place_results.item_count)
+	map._search_typed("")
+	_check(map.place_results.disabled, "빈 칸인데 결과 상자가 남음")
+
 	# 빈 곳 검색과 장소가 없는 곳 클릭.
 	map._search_places("없는 이름")
 	_check(map.place_results.disabled and map.feedback.contains("없습니다"), "빈 검색 결과 안내: " + map.feedback)
