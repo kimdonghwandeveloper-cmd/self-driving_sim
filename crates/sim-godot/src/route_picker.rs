@@ -1,7 +1,10 @@
 //! 경로 선택 `SimRoutePicker`(Godot 인터페이스 계약 v1 7-2).
 //!
 //! 지역 받기(4-4 `FetchJob`)·스냅샷 읽기·점 편집·경로 계산·저장은 Bevy 판과 같은 `sim_core` 코드를 쓴다.
-//! 경로는 모두 저장소 루트 기준이다(`cache/maps`, `cache/routes`, `config/road_graph.toml`).
+//! 경로는 모두 저장소 루트 기준이다(`cache/maps`, `cache/places`, `cache/routes`, `config/road_graph.toml`).
+//!
+//! 건물·장소(PLAN 4-9): "건물·장소 받기"로 열린 지역의 장소 자료를 받고(도로와 같은 받기 규칙, 동시 1개),
+//! 지역을 열 때 캐시에 장소 자료가 있으면 함께 연다. 건물 클릭·이름 검색으로 고른 장소의 진입 지점을 점으로 더한다.
 
 use std::path::{Path, PathBuf};
 
@@ -13,7 +16,8 @@ use sim_core::picker::region::{
 };
 use sim_core::picker::tiles;
 use sim_core::world::map::LatLon;
-use sim_core::world::map_fetch::{self, Bbox, FetchJob, FetchPolicy, FetchSettings};
+use sim_core::world::map_fetch::{self, Bbox, FetchJob, FetchPolicy, FetchSettings, UreqTransport};
+use sim_core::world::places::{self, PLACES, PLACES_CACHE_DIR, PLACES_FILE};
 use sim_core::world::route_plan::ROAD_GRAPH_CONFIG_PATH;
 
 use crate::paths::{repo_path, resolve_user_path};
@@ -59,6 +63,8 @@ pub struct SimRoutePicker {
     /// 지금 열린 지역 범위(지역 받기로 연 경우).
     loaded: Option<Bbox>,
     loading: Option<Loading>,
+    /// 받는 중인 장소 자료 요청.
+    places_loading: Option<Loading>,
     /// 다음 요청 번호(1부터).
     next_request: i64,
     /// 다음 `poll()`에 돌려줄 이벤트.
@@ -76,6 +82,7 @@ impl SimRoutePicker {
         match self.open_model(&path) {
             Ok(()) => {
                 self.loaded = None;
+                self.open_cached_places();
                 result(true, "")
             }
             Err(error) => result(false, &error),
@@ -166,14 +173,147 @@ impl SimRoutePicker {
         }
     }
 
-    /// 받는 중인 요청을 취소한다. 그 요청의 결과는 버린다(이미 보낸 네트워크 요청은 끝까지 간다).
+    /// 받는 중인 요청(지역·장소)을 취소한다. 그 결과는 버린다(이미 보낸 네트워크 요청은 끝까지 간다).
     #[func]
     fn cancel_region(&mut self) {
-        if let Some(loading) = self.loading.take() {
-            self.message = "지역 받기를 취소했습니다".to_owned();
+        for loading in [self.loading.take(), self.places_loading.take()]
+            .into_iter()
+            .flatten()
+        {
+            self.message = "받기를 취소했습니다".to_owned();
             self.events
                 .push(event("failed", &self.message, loading.request_id));
         }
+    }
+
+    /// 열린 지역의 건물·장소 자료 받기를 시작한다(네트워크를 끄면 캐시만). 지역이 없거나 받는 중이면 거부한다.
+    #[func]
+    fn request_places(&mut self) -> VarDictionary {
+        let failure =
+            |error: &str| vdict! { "ok" => false, "error" => error, "request_id" => 0_i64 };
+        if self.loading.is_some() || self.places_loading.is_some() {
+            return failure("already loading");
+        }
+        let Some(bbox) = self.region_bbox() else {
+            return failure("open a region first");
+        };
+        let policy = if self.network {
+            FetchPolicy::Refresh
+        } else {
+            FetchPolicy::CacheOnly
+        };
+        match FetchJob::start_layer_with(
+            &PLACES,
+            repo_path(PLACES_CACHE_DIR),
+            bbox,
+            policy,
+            FetchSettings::default(),
+            Box::new(UreqTransport),
+        ) {
+            Ok(job) => {
+                self.next_request += 1;
+                let request_id = self.next_request;
+                self.message = match policy {
+                    FetchPolicy::CacheOnly => "저장된 건물·장소를 여는 중...".to_owned(),
+                    FetchPolicy::Refresh => "Overpass에서 건물·장소를 받는 중...".to_owned(),
+                };
+                self.events
+                    .push(event("progress", &self.message, request_id));
+                self.places_loading = Some(Loading {
+                    job,
+                    bbox,
+                    request_id,
+                });
+                vdict! { "ok" => true, "error" => "", "request_id" => request_id }
+            }
+            Err(error) => failure(&error),
+        }
+    }
+
+    /// 장소 파일(`places.osm.json` 형식)을 직접 연다(시험·수동 확인용). 지역이 없으면 실패한다.
+    #[func]
+    fn load_places_file(&mut self, path: GString) -> VarDictionary {
+        let Some(model) = self.model.as_mut() else {
+            return result(false, "open a region first");
+        };
+        match places::load_places(&resolve_user_path(&path.to_string())) {
+            Ok(list) => {
+                model.set_places(list);
+                result(true, "")
+            }
+            Err(error) => result(false, &error),
+        }
+    }
+
+    /// 건물·장소 윤곽(지도 좌표). 점 장소는 점 하나짜리 배열이다.
+    #[func]
+    fn place_outlines(&self) -> Array<PackedVector2Array> {
+        self.model
+            .iter()
+            .flat_map(PickerModel::place_views)
+            .map(|outline| {
+                outline
+                    .into_iter()
+                    .map(|p| Vector2::new(p.x, p.y))
+                    .collect::<PackedVector2Array>()
+            })
+            .collect()
+    }
+
+    /// 지도 좌표가 가리키는 장소 번호. 없으면 -1.
+    #[func]
+    fn place_at(&self, view: Vector2) -> i64 {
+        self.model
+            .as_ref()
+            .and_then(|model| model.place_at(glam::Vec2::new(view.x, view.y)))
+            .map_or(-1, |index| index as i64)
+    }
+
+    /// 이름 검색 결과 `[{index, name, kind}]`(최대 20개).
+    #[func]
+    fn search_places(&self, text: GString) -> Array<VarDictionary> {
+        let Some(model) = &self.model else {
+            return Array::new();
+        };
+        places::search(&model.places, &text.to_string())
+            .into_iter()
+            .map(|index| {
+                let place = &model.places[index];
+                vdict! {
+                    "index" => index as i64,
+                    "name" => place.name.as_str(),
+                    "kind" => place.kind.as_str(),
+                }
+            })
+            .collect()
+    }
+
+    /// 장소 `index`의 진입 지점을 점으로 끝에 더한다. `{ok, error}`.
+    #[func]
+    fn add_place(&mut self, index: i64) -> VarDictionary {
+        let Some(model) = self.model.as_mut() else {
+            return result(false, "open a region first");
+        };
+        let Ok(index) = usize::try_from(index) else {
+            return result(false, "invalid place index");
+        };
+        match model.add_place(index) {
+            Ok(()) => result(true, ""),
+            Err(error) => result(
+                false,
+                &crate::korean::picker_line(&sim_core::picker::model::describe_error(&error)),
+            ),
+        }
+    }
+
+    /// 점마다 표시 이름(건물·장소로 고른 점만, 나머지는 빈 문자열).
+    #[func]
+    fn point_labels(&self) -> PackedStringArray {
+        self.model
+            .iter()
+            .flat_map(|model| &model.labels)
+            .map(|label| GString::from(label.as_str()))
+            .collect()
     }
 
     /// 진행 이벤트를 꺼낸다. 매 프레임 부른다. 받기가 끝났으면 지역을 교체하고 점·경로를 비운다.
@@ -188,6 +328,7 @@ impl SimRoutePicker {
             match opened {
                 Ok(warning) => {
                     self.loaded = Some(loading.bbox);
+                    self.open_cached_places();
                     self.message = warning.map_or_else(
                         || "지역 도로를 열었습니다".to_owned(),
                         |w| format!("경고: {w}"),
@@ -197,6 +338,34 @@ impl SimRoutePicker {
                 }
                 Err(error) => {
                     self.message = format!("지역을 열 수 없습니다: {error}");
+                    self.events
+                        .push(event("failed", &self.message, loading.request_id));
+                }
+            }
+        }
+        if let Some(outcome) = self
+            .places_loading
+            .as_ref()
+            .and_then(|l| l.job.try_result())
+        {
+            let loading = self.places_loading.take().expect("checked above");
+            let opened = outcome.and_then(|obtained| {
+                let list = places::load_places(&obtained.cached.dir.join(PLACES_FILE))?;
+                let model = self.model.as_mut().ok_or("the region was closed")?;
+                model.set_places(list);
+                Ok(obtained.warning)
+            });
+            match opened {
+                Ok(warning) => {
+                    self.message = warning.map_or_else(
+                        || "건물·장소를 열었습니다".to_owned(),
+                        |w| format!("경고: {w}"),
+                    );
+                    self.events
+                        .push(event("places_loaded", &self.message, loading.request_id));
+                }
+                Err(error) => {
+                    self.message = format!("건물·장소를 열 수 없습니다: {error}");
                     self.events
                         .push(event("failed", &self.message, loading.request_id));
                 }
@@ -366,6 +535,43 @@ impl SimRoutePicker {
 }
 
 impl SimRoutePicker {
+    /// 장소 자료를 받을 범위: 지역 받기로 연 범위, 아니면 스냅샷 도로 범위. 받기 상한(2 km)을 넘거나 없으면 `None`.
+    fn region_bbox(&self) -> Option<Bbox> {
+        if let Some(bbox) = self.loaded {
+            return Some(bbox);
+        }
+        let model = self.model.as_ref()?;
+        let (mut south, mut west, mut north, mut east) =
+            (90.0_f64, 180.0_f64, -90.0_f64, -180.0_f64);
+        for node in model.ways.iter().flat_map(|way| &way.nodes) {
+            south = south.min(node.pos.lat);
+            north = north.max(node.pos.lat);
+            west = west.min(node.pos.lon);
+            east = east.max(node.pos.lon);
+        }
+        let bbox = Bbox {
+            south,
+            west,
+            north,
+            east,
+        };
+        bbox.validate().ok().map(|()| bbox)
+    }
+
+    /// 열린 지역의 장소 자료가 캐시에 있으면 연다(네트워크 없음). 없거나 읽지 못하면 그대로 둔다.
+    fn open_cached_places(&mut self) {
+        let Some(bbox) = self.region_bbox() else {
+            return;
+        };
+        let root = repo_path(PLACES_CACHE_DIR);
+        if let Ok(Some(cached)) = map_fetch::load_layer_cached(&PLACES, &root, &bbox)
+            && let Ok(list) = places::load_places(&cached.dir.join(PLACES_FILE))
+            && let Some(model) = self.model.as_mut()
+        {
+            model.set_places(list);
+        }
+    }
+
     /// 스냅샷 파일로 모델을 만들어 교체한다. 점·경로는 비워진다.
     fn open_model(&mut self, graph_path: &Path) -> Result<(), String> {
         let config_path: PathBuf = repo_path(ROAD_GRAPH_CONFIG_PATH);

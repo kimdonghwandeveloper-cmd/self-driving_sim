@@ -28,6 +28,15 @@ var cached: Array[Rect2] = []
 var cache_choices := OptionButton.new()
 ## 지금 열린 지역 범위(지도 좌표). 열린 것이 없으면 크기 0.
 var opened_region := Rect2()
+## 건물·장소(PLAN 4-9): 받기 버튼, 이름 검색 칸, 검색 결과 상자, 그릴 윤곽(점 장소는 점 하나).
+var places_button := Button.new()
+var place_search := LineEdit.new()
+var place_results := OptionButton.new()
+var place_outlines: Array = []
+## 검색 결과 상자 항목별 장소 번호(첫 항목은 안내문).
+var result_indices: Array[int] = []
+## 건물 윤곽·점 장소 색.
+const PLACE_COLOR := Color("b48ead")
 ## Godot 쪽 지도 텍스처 보관 상한(계약 7-3 권장값).
 const MAX_TEXTURES := 512
 ## 맞춤 보기에서 버튼·안내 영역으로 빼는 화면 크기(px). 최소 배율도 같은 영역 기준이다.
@@ -91,10 +100,16 @@ func _unhandled_input(event: InputEvent) -> void:
 		if event.button_index == MOUSE_BUTTON_RIGHT:
 			dragging = event.pressed
 		elif event.pressed and event.button_index == MOUSE_BUTTON_LEFT and picker != null:
+			var at := get_global_mouse_position()
 			if event.shift_pressed:
-				picker.call("remove_near", get_global_mouse_position(), 12.0 / camera.zoom.x)
+				picker.call("remove_near", at, 12.0 / camera.zoom.x)
 			else:
-				picker.call("add_point", get_global_mouse_position())
+				# 건물·장소를 누르면 그 진입 지점(가까운 도로 위 점)을, 아니면 누른 자리를 점으로 더한다.
+				var place := int(picker.call("place_at", at))
+				if place >= 0:
+					_add_place(place)
+				else:
+					picker.call("add_point", at)
 			_refresh_route()
 		elif event.pressed and event.button_index in [MOUSE_BUTTON_WHEEL_UP, MOUSE_BUTTON_WHEEL_DOWN]:
 			var before := get_global_mouse_position()
@@ -143,6 +158,14 @@ func _draw() -> void:
 	var center := camera.position
 	draw_line(center - Vector2(10, 0) / scale_m, center + Vector2(10, 0) / scale_m, Color.WHITE, 1.0 / scale_m)
 	draw_line(center - Vector2(0, 10) / scale_m, center + Vector2(0, 10) / scale_m, Color.WHITE, 1.0 / scale_m)
+	for outline in place_outlines:
+		if outline.size() == 1:
+			draw_circle(outline[0], 4.0 / scale_m, PLACE_COLOR)
+		elif outline.size() > 2:
+			var closed: PackedVector2Array = outline.duplicate()
+			closed.append(outline[0])
+			draw_colored_polygon(outline, Color(PLACE_COLOR, 0.18))
+			draw_polyline(closed, PLACE_COLOR, 1.0 / scale_m, true)
 	for i in range(roads.size() / 2):
 		var allowed := i < usable.size() and usable[i] == 1
 		draw_line(roads[i * 2], roads[i * 2 + 1], Color("cbd5dd") if allowed else Color("737e88"), 2.0 / scale_m, true)
@@ -199,6 +222,17 @@ func _services(canvas: CanvasLayer) -> void:
 	cache_choices.custom_minimum_size.x = 180
 	cache_choices.item_selected.connect(_select_cached_region)
 	navigation.add_child(cache_choices)
+	places_button.text = "건물·장소 받기"
+	places_button.pressed.connect(_request_places)
+	navigation.add_child(places_button)
+	place_search.placeholder_text = "장소 이름 검색 (Enter)"
+	place_search.custom_minimum_size.x = 180
+	place_search.text_submitted.connect(_search_places)
+	navigation.add_child(place_search)
+	place_results.custom_minimum_size.x = 220
+	place_results.item_selected.connect(_select_place_result)
+	navigation.add_child(place_results)
+	_fill_place_results([])
 	snapshot_dialog.file_mode = FileDialog.FILE_MODE_OPEN_FILE
 	snapshot_dialog.access = FileDialog.ACCESS_FILESYSTEM
 	snapshot_dialog.filters = PackedStringArray(["*.json ; OSM snapshot"])
@@ -223,6 +257,46 @@ func _request_region() -> void:
 	feedback = str(result.get("error", ""))
 	if result.get("ok", false):
 		active_request = int(result.request_id)
+
+## 열린 지역의 건물·장소 받기를 요청하고 요청 번호를 기억한다. 받는 중이면 하지 않는다.
+func _request_places() -> void:
+	if picker == null or active_request != 0:
+		return
+	var result: Dictionary = picker.call("request_places")
+	feedback = str(result.get("error", ""))
+	if result.get("ok", false):
+		active_request = int(result.request_id)
+
+## 검색어로 장소를 찾아 결과 상자를 채운다.
+func _search_places(text: String) -> void:
+	if picker == null:
+		return
+	var found: Array = picker.call("search_places", text)
+	_fill_place_results(found)
+	feedback = "검색 결과 %d곳" % found.size() if not found.is_empty() else "'%s' 이름의 장소가 없습니다(건물·장소를 받았는지 확인)" % text
+
+## 결과 상자를 안내문 한 줄과 검색 결과(이름 · 종류)로 다시 만든다.
+func _fill_place_results(found: Array) -> void:
+	place_results.clear()
+	result_indices.clear()
+	place_results.add_item("검색 결과에서 점으로 더하기")
+	for item in found:
+		place_results.add_item("%s · %s" % [item.name, item.kind] if str(item.kind) != "" else str(item.name))
+		result_indices.append(int(item.index))
+	place_results.disabled = found.is_empty()
+
+## 고른 검색 결과의 장소를 점으로 더한다.
+func _select_place_result(item: int) -> void:
+	place_results.select(0)
+	if item < 1 or item > result_indices.size():
+		return
+	_add_place(result_indices[item - 1])
+	_refresh_route()
+
+## 장소 번호의 진입 지점을 점으로 더하고, 실패하면 이유를 안내에 남긴다.
+func _add_place(index: int) -> void:
+	var result: Dictionary = picker.call("add_place", index)
+	feedback = "" if result.get("ok", false) else str(result.error)
 
 ## 받는 중인 지역 요청을 취소하고 그 결과를 더 기다리지 않는다.
 func _cancel_region() -> void:
@@ -250,9 +324,10 @@ func _save_route() -> void:
 	var result: Dictionary = picker.call("save", route_name.text, overwrite.button_pressed)
 	feedback = "저장: " + str(result.path) if result.get("ok", false) else str(result.error)
 
-## Rust에서 열린 지역 범위·도로 선분·사용 가능 여부·점·경로선을 받아 그리기 자료를 바꾼다.
+## Rust에서 열린 지역 범위·도로 선분·사용 가능 여부·건물 윤곽·점·경로선을 받아 그리기 자료를 바꾼다.
 func _refresh_route() -> void:
 	opened_region = picker.call("loaded_region")
+	place_outlines = picker.call("place_outlines")
 	var result: Dictionary = picker.call("route")
 	display_geometry(picker.call("road_segments"), picker.call("road_usable"), picker.call("points"), result.line)
 
@@ -263,7 +338,7 @@ func _process(_delta: float) -> void:
 			if active_request == 0 or int(event.request_id) != active_request:
 				continue
 			feedback = str(event.message)
-			if event.type in ["region_loaded", "failed"]:
+			if event.type in ["region_loaded", "places_loaded", "failed"]:
 				active_request = 0
 				_refresh_route()
 				if event.type == "region_loaded":
@@ -271,12 +346,14 @@ func _process(_delta: float) -> void:
 					_fit_region()
 		var latlon: PackedFloat64Array = picker.call("view_to_latlon", camera.position)
 		receive.disabled = active_request != 0 or latlon.size() != 2
+		places_button.disabled = active_request != 0 or not opened_region.has_area()
 		cache_choices.disabled = active_request != 0 or cached.is_empty()
 		var result: Dictionary = picker.call("route")
 		save_button.disabled = not bool(result.ok)
-		status.text = "우클릭: 이동 / 휠: 확대 / 클릭: 점 추가 / Shift+클릭: 점 삭제\n" + "\n".join(picker.call("status_lines")) + "\n" + feedback
+		status.text = "우클릭: 이동 / 휠: 확대 / 클릭: 점 추가(건물을 누르면 그 건물) / Shift+클릭: 점 삭제\n" + "\n".join(picker.call("status_lines")) + "\n" + feedback
 	else:
 		receive.disabled = true
+		places_button.disabled = true
 		save_button.disabled = true
 	if tiles != null:
 		_update_tiles()

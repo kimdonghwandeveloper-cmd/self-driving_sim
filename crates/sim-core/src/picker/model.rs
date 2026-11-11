@@ -2,7 +2,8 @@
 //!
 //! 화면 좌표는 배경 지도 타일과 같은 웹 메르카토르 평면([`tiles::to_view`], x=동쪽, z=남쪽, 메르카토르 m)이다.
 //! 대한민국 위도에서 메르카토르 1 m는 실제 약 0.8 m다. 코스 계산은 위경도로 한다.
-//! 점을 찍거나 지울 때마다 [`route_plan::plan_route_detailed`]로 경로를 다시 계산하고, 길이·폭·경고 문구를 만든다.
+//! 점을 찍거나 지울 때마다 [`route_plan::plan_route_full`]로 경로를 다시 계산하고, 길이·폭·경고 문구를 만든다.
+//! 건물·장소(PLAN 4-9)를 고르면 그 진입 지점([`places::access_point`])을 점으로 더하고 장소 이름을 표시 이름으로 둔다.
 
 use std::path::{Component, Path, PathBuf};
 
@@ -11,6 +12,7 @@ use glam::Vec2;
 use super::tiles;
 use crate::world::map::LatLon;
 use crate::world::osm_graph::{OsmGraphWay, TurnRestriction};
+use crate::world::places::{self, Place};
 use crate::world::road_snapshot::Connectivity;
 use crate::world::route_plan::{self, PlannedRoute, RoadGraphConfig, WidthSource};
 
@@ -47,6 +49,12 @@ pub struct PickerModel {
     pub segments: Vec<RoadSegment>,
     /// 찍은 점 [위도, 경도](시작·경유·끝 순서).
     pub points: Vec<[f64; 2]>,
+    /// 점마다 표시 이름(건물·장소로 고른 점은 장소 이름, 그냥 찍은 점은 빈 문자열). `points`와 길이가 같다.
+    pub labels: Vec<String>,
+    /// 받은 건물·장소(PLAN 4-9). 받지 않았으면 비어 있다.
+    pub places: Vec<Place>,
+    /// 장소 자료를 받았는지(받았는데 장소가 하나도 없을 수 있다).
+    pub places_loaded: bool,
     /// 마지막 계산 결과. 점이 2개 미만이면 `None`.
     pub planned: Option<Result<PlannedRoute, String>>,
 }
@@ -93,8 +101,51 @@ impl PickerModel {
             origin,
             segments,
             points: Vec::new(),
+            labels: Vec::new(),
+            places: Vec::new(),
+            places_loaded: false,
             planned: None,
         })
+    }
+
+    /// 받은 건물·장소를 바꾼다. 이미 찍은 점과 경로는 그대로 둔다.
+    pub fn set_places(&mut self, places: Vec<Place>) {
+        self.places = places;
+        self.places_loaded = true;
+    }
+
+    /// 건물·장소 윤곽의 화면 좌표(점 장소는 점 하나).
+    pub fn place_views(&self) -> Vec<Vec<Vec2>> {
+        self.places
+            .iter()
+            .map(|place| {
+                if place.outline.is_empty() {
+                    vec![self.to_view(place.center)]
+                } else {
+                    place.outline.iter().map(|p| self.to_view(*p)).collect()
+                }
+            })
+            .collect()
+    }
+
+    /// 화면 좌표 `view`가 가리키는 장소 번호([`places::hit_test`]). 없으면 `None`.
+    pub fn place_at(&self, view: Vec2) -> Option<usize> {
+        let [lat, lon] = self.from_view(view);
+        places::hit_test(&self.places, LatLon { lat, lon })
+    }
+
+    /// 장소 `index`의 진입 지점을 점으로 끝에 더하고 경로를 다시 계산한다. 진입 지점이 없으면 오류이고 점은 그대로다.
+    pub fn add_place(&mut self, index: usize) -> Result<(), String> {
+        let place = self
+            .places
+            .get(index)
+            .ok_or_else(|| format!("no place #{index}"))?;
+        let at = places::access_point(place, &self.ways, &self.config)?;
+        let label = place.label();
+        self.points.push([at.lat, at.lon]);
+        self.labels.push(label);
+        self.recompute();
+        Ok(())
     }
 
     /// 경계 연결 정보를 붙인다. 이후 경로 계산은 이 정보로 경계 연결 검사를 한다.
@@ -142,6 +193,7 @@ impl PickerModel {
     /// 화면 좌표 위치에 점을 끝에 더하고 경로를 다시 계산한다.
     pub fn add_point(&mut self, view: Vec2) {
         self.points.push(self.from_view(view));
+        self.labels.push(String::new());
         self.recompute();
     }
 
@@ -158,6 +210,7 @@ impl PickerModel {
             return false;
         };
         self.points.remove(index);
+        self.labels.remove(index);
         self.recompute();
         true
     }
@@ -165,6 +218,7 @@ impl PickerModel {
     /// 마지막 점을 지우고 경로를 다시 계산한다.
     pub fn remove_last(&mut self) {
         if self.points.pop().is_some() {
+            self.labels.pop();
             self.recompute();
         }
     }
@@ -172,17 +226,24 @@ impl PickerModel {
     /// 찍은 점을 [위도, 경도] 목록으로 바꾸고 경로를 다시 계산한다(미리 찍은 점 불러오기용).
     pub fn set_points(&mut self, points: &[[f64; 2]]) {
         self.points = points.to_vec();
+        self.labels = vec![String::new(); points.len()];
         self.recompute();
     }
 
     /// 모든 점을 지운다.
     pub fn clear(&mut self) {
         self.points.clear();
+        self.labels.clear();
         self.planned = None;
     }
 
-    /// 점이 2개 이상이면 경로를 다시 계산한다.
+    /// 점이 2개 이상이면 경로를 다시 계산한다. 이름 있는 점이 있으면 경로 파일에 점 이름을 함께 둔다.
     fn recompute(&mut self) {
+        let labels = if self.labels.iter().any(|label| !label.is_empty()) {
+            self.labels.clone()
+        } else {
+            Vec::new()
+        };
         self.planned = (self.points.len() >= 2).then(|| {
             route_plan::plan_route_full(
                 &self.ways,
@@ -192,6 +253,10 @@ impl PickerModel {
                 &self.points,
                 &self.config,
             )
+            .map(|mut planned| {
+                planned.file.point_labels = labels;
+                planned
+            })
         });
     }
 
@@ -218,6 +283,26 @@ impl PickerModel {
         } else {
             format!("Turn restrictions: {} applied", self.restrictions.len())
         });
+        lines.push(if self.places_loaded {
+            format!(
+                "Places: {} (click a building or search by name)",
+                self.places.len()
+            )
+        } else {
+            "Places: not loaded".to_owned()
+        });
+        let last = self.labels.len().saturating_sub(1);
+        for (index, label) in self.labels.iter().enumerate() {
+            if label.is_empty() {
+                continue;
+            }
+            let role = match index {
+                0 => "Start",
+                i if i == last => "End",
+                _ => "Via",
+            };
+            lines.push(format!("{role}: {label}"));
+        }
         match &self.planned {
             None => lines.push("Click at least 2 points on the roads (start, end)".to_owned()),
             Some(Ok(planned)) => {
@@ -503,5 +588,55 @@ mod tests {
         );
         assert!(relative_path(&a, &b.join("missing.json")).is_err());
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// 4-9: 합성 장소 자료에서 이름 검색으로 출발 건물을, 윤곽 클릭으로 도착 건물을 고르면 진입 지점으로 경로가
+    /// 계산되고, 안내에 출발·도착 이름이 나오며, 저장한 경로 파일에 점 이름이 남고 같은 코스로 다시 열린다.
+    #[test]
+    fn buildings_are_picked_by_search_and_click() {
+        let mut model = yeosu();
+        assert!(
+            model
+                .status_lines()
+                .iter()
+                .any(|l| l == "Places: not loaded")
+        );
+        let path = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."))
+            .join("assets/maps/yeosu-expo/places-synthetic.osm.json");
+        model.set_places(places::load_places(&path).unwrap());
+        let found = places::search(&model.places, "도서관");
+        assert_eq!(found.len(), 1);
+        model.add_place(found[0]).unwrap();
+        let gym = places::search(&model.places, "체육관")[0];
+        let center = model.to_view(model.places[gym].center);
+        let clicked = model.place_at(center).unwrap();
+        assert_eq!(clicked, gym);
+        model.add_place(clicked).unwrap();
+        let lines = model.status_lines();
+        for expected in [
+            "Places: 3 (click a building or search by name)",
+            "Start: 시험 도서관 (합성)",
+            "End: 시험 체육관 (합성)",
+        ] {
+            assert!(lines.iter().any(|l| l == expected), "{lines:?}");
+        }
+        let Some(Ok(planned)) = &model.planned else {
+            panic!("{:?}", model.planned);
+        };
+        assert_eq!(
+            planned.file.point_labels,
+            ["시험 도서관 (합성)", "시험 체육관 (합성)"]
+        );
+        let dir = std::env::temp_dir().join(format!("picker-places-{}", std::process::id()));
+        let saved = model.save(&dir, "places.toml").unwrap();
+        let text = std::fs::read_to_string(&saved).unwrap();
+        assert!(text.contains("point_labels"), "{text}");
+        assert_eq!(map::load_map_course(&saved).unwrap(), planned.course.course);
+        let _ = std::fs::remove_dir_all(&dir);
+        // 점을 지우면 이름도 같이 지워진다.
+        model.remove_last();
+        assert_eq!(model.labels, ["시험 도서관 (합성)"]);
+        model.add_point(center);
+        assert_eq!(model.labels, ["시험 도서관 (합성)", ""]);
     }
 }

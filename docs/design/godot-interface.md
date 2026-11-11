@@ -1,4 +1,4 @@
-# Godot ↔ Rust 인터페이스 계약 (v1.4)
+# Godot ↔ Rust 인터페이스 계약 (v1.5)
 
 작성: 2026-11-08 Claude 초안, 2026-11-09 v1 고정(Codex가 동의한 v0.2와 Codex 추가 요청 2건 반영).
 목적: Claude(Rust, `crates/`)와 Codex(Godot, `godot/`)가 동시에 개발할 때 서로 기다리지 않도록
@@ -14,6 +14,7 @@ Godot에 노출할 클래스·메서드·시그널·좌표 규칙·실패 처리
 | v1.2 | 항목 추가(기존 이름·인자 변경 없음, 2026-11-10 Claude. Codex 사용량 한도 중 사용자 지시로 Godot 쪽도 Claude가 맞춤): 지도 코스 이름 `map:<파일>`(2절 `course`, 3절, 5-3 `SimReplay.run`), `SimCourse.course_files()`(3절), `SimTiles.country_outline()`·`country_bounds()`(7-3, 대한민국 범위 제한·경계 밖 가림, 사용자 지시 2026-11-09). 저장 경로 주행을 범위에 다시 넣음(7-4, 사용자 지시 "남은 플랜 완료"). Godot에 보내는 사람이 읽는 문구(명령 거부 사유, 코스 안내, 경로 선택 안내·경고·오류)는 한국어(1절). 코스 사전 `goal`(3절, 4-6 경로 끝 목표 표시) |
 | v1.3 | 항목 추가(기존 이름·인자 변경 없음, 2026-11-10 Claude, GD-5 Bevy 앱 제거 사용자 결정): `SimVehicle.calibration_lines()`(2절, Bevy 앱에서 옮긴 2-5 보정 측정. 주행 결과에는 영향 없음). Bevy 앱이 없어져 `sim-core` 문구가 영어인 이유는 시험과 개발 명령(`sim-tools`) 공용이다 |
 | v1.4 | 항목 추가(기존 이름·인자 변경 없음, 2026-11-10 Claude, Phase 5-1 시나리오 틀): `SimVehicle.scenario` 속성, `scenario_control()`·`scenario_status()`, 시나리오 시그널 4개(2절 2-1), `SimScenario.scenario_files()`(3-2). 시나리오 파일 형식은 `docs/scenarios.md` |
+| v1.5 | 항목 추가(기존 이름·인자 변경 없음, 2026-11-11 Claude, PLAN 4-8 자동 경로·4-9 건물·장소): `SimRoutePicker.request_places()`·`load_places_file()`·`place_outlines()`·`place_at()`·`search_places()`·`add_place()`·`point_labels()`, `poll()` 이벤트 `places_loaded`(7-2). 경로 계산 규칙 변경(일방통행·회전 제한·우회·교차로 단순화)은 `route()`·`status_lines()` 형식을 바꾸지 않는다. ※ `feature/phase5-scenarios`도 v1.5를 쓰므로 나중에 병합하는 쪽을 v1.6으로 올린다 |
 
 > GD-5(v1.3)에서 Bevy 앱을 지웠다. 본문의 "Bevy 판과 같음"·Bevy 파일 경로는 계약을 정할 때의 기준을 기록한 것이며, 그 규칙은 지금 `sim-core`에 있다.
 
@@ -340,7 +341,7 @@ Bevy 판 `src/picker/`(4-5·4-5b)의 계산·캐시·받기 부분은 Bevy와 �
 | `view_to_latlon(view: Vector2)` | `PackedFloat64Array` | 지도 좌표를 `[lat, lon]`으로. Bevy 판 투영(`tiles::to_view`)의 역변환. 값이 유한하지 않거나 메르카토르 유효 위도(±85.05112878°) 밖이면 **빈 배열**(Godot은 받기 버튼을 끈다) |
 | `request_region(center_latlon: PackedFloat64Array)` | `{ok, error, request_id: int}` | 가운데 1.5 × 1.5 km 받기 시작(이미 받은 범위면 캐시만). 백그라운드 처리. 받는 중이면 `ok=false, error="already loading"`, `request_id` 0 |
 | `cancel_region()` | 없음 | 받는 중인 요청 취소. 취소·이전 요청의 결과는 버린다 |
-| `poll()` | `Array[Dictionary]` | 진행 이벤트 `{type: "progress"|"region_loaded"|"failed", message: String, request_id: int}`. 매 프레임 호출 |
+| `poll()` | `Array[Dictionary]` | 진행 이벤트 `{type: "progress"|"region_loaded"|"failed", message: String, request_id: int}`. 매 프레임 호출. (v1.5) 장소 받기는 `places_loaded` |
 | `road_segments()` | `PackedVector2Array` | 그릴 도로 선분(짝수 개: from, to 반복), 지도 좌표 |
 | `road_usable()` | `PackedByteArray` | 선분별 경로 탐색 가능 여부(1/0) |
 | `add_point(view: Vector2)` | 없음 | 점 추가 |
@@ -351,6 +352,13 @@ Bevy 판 `src/picker/`(4-5·4-5b)의 계산·캐시·받기 부분은 Bevy와 �
 | `route()` | `{ok, error, line: PackedVector2Array, length_m: float, warnings: PackedStringArray}` | 현재 점에 대한 계산 결과. 항상 모든 키. 실패·2점 미만이면 `line` 빈 배열, `length_m` 0, 2점 미만은 `ok=false, error=""` |
 | `status_lines()` | `PackedStringArray` | Bevy 판 상태 문구(지역·점 수·경고·받기 진행) |
 | `save(name: String, overwrite: bool = false)` | `{ok, error, path: String}` | 경로 파일 저장(Bevy 판과 같은 형식·폴더). 실패면 `path=""` |
+| (v1.5) `request_places()` | `{ok, error, request_id: int}` | 열린 지역(지역 받기 범위, 아니면 스냅샷 도로 범위)의 건물·장소 받기 시작(4-9). `network=false`면 캐시만. 지역이 없으면 `error="open a region first"`, 받는 중이면 `"already loading"`. 결과는 `poll()`의 `places_loaded`/`failed`. 지역을 열 때 캐시(`cache/places`)에 장소 자료가 있으면 자동으로 함께 연다 |
+| (v1.5) `load_places_file(path: String)` | `{ok, error}` | 장소 파일(`places.osm.json` 형식)을 직접 연다(시험·수동 확인용). 상대 경로는 저장소 루트 기준 |
+| (v1.5) `place_outlines()` | `Array[PackedVector2Array]` | 장소 윤곽(지도 좌표, 닫는 점 중복 없음). 점 장소는 점 하나짜리 배열. 순서는 장소 번호 |
+| (v1.5) `place_at(view: Vector2)` | `int` | 그 위치의 장소 번호(윤곽 안이면 가장 작은 건물, 아니면 15 m 안의 점 장소). 없으면 -1 |
+| (v1.5) `search_places(text: String)` | `Array[Dictionary]` | 이름 포함 검색(대소문자 무시, 짧은 이름 순, 최대 20개) `{index: int, name: String, kind: String}`. 빈 검색어는 빈 배열 |
+| (v1.5) `add_place(index: int)` | `{ok, error}` | 장소의 진입 지점(출입구, 없으면 윤곽에서 가장 가까운 탐색 가능 도로 위 점, 100 m 이내)을 점으로 끝에 더하고 경로를 다시 계산. 실패하면 점은 그대로이고 `error`는 한국어 |
+| (v1.5) `point_labels()` | `PackedStringArray` | 점마다 표시 이름(장소로 고른 점은 장소 이름, 그냥 찍은 점은 빈 문자열). `points()`와 길이가 같다. 저장한 경로 파일의 `point_labels`(표시용) |
 
 - 점 편집 함수는 경로를 **동기로** 다시 계산한다(함수 안에서 끝남). 계산이 실패하면 이전 경로를 내보내지 않는다.
 - `request_region` 결과: 실패하면 기존 지역·점·경로를 그대로 둔다. 성공하면 지역을 **교체**하고 점·경로를 비운다(Bevy 판과 같음).

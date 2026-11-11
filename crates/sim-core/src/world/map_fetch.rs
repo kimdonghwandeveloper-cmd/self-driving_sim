@@ -140,6 +140,24 @@ impl Bbox {
     }
 }
 
+/// 받는 자료 종류(PLAN 4-9). 도로([`ROADS`])와 건물·장소([`super::places::PLACES`])가 같은 받기·캐시 규칙을 쓴다.
+#[derive(Debug)]
+pub struct Layer {
+    /// 세대 폴더 안 원본 파일 이름.
+    pub body_file: &'static str,
+    /// bbox와 서버 쪽 시간 제한(초)으로 Overpass 질의문을 만든다.
+    pub query: fn(&Bbox, u64) -> String,
+    /// 응답 본문을 검사하고 `timestamp_osm_base`를 꺼낸다.
+    pub check: fn(&[u8]) -> Result<String, String>,
+}
+
+/// 도로 자료(4-4). 원본은 [`SNAPSHOT_FILE`]이다.
+pub const ROADS: Layer = Layer {
+    body_file: SNAPSHOT_FILE,
+    query: Bbox::query,
+    check: check_response,
+};
+
 /// 받기 설정.
 #[derive(Debug, Clone, PartialEq)]
 pub struct FetchSettings {
@@ -293,6 +311,13 @@ struct Osm3s {
 ///
 /// `remark`(서버 쪽 실행 오류)가 있으면 일부만 담긴 응답일 수 있으므로 거부한다.
 pub fn check_response(body: &[u8]) -> Result<String, String> {
+    let (text, timestamp) = check_header(body)?;
+    parse_overpass_graph(text)?;
+    Ok(timestamp)
+}
+
+/// Overpass 응답의 공통 머리(UTF-8, `remark` 없음, `timestamp_osm_base`)를 검사하고 본문 문자열과 기준 시각을 돌려준다.
+pub fn check_header(body: &[u8]) -> Result<(&str, String), String> {
     let text = std::str::from_utf8(body).map_err(|_| "map response is not UTF-8".to_owned())?;
     let header: ResponseHeader = serde_json::from_str(text)
         .map_err(|error| format!("map response is not Overpass JSON: {error}"))?;
@@ -301,11 +326,11 @@ pub fn check_response(body: &[u8]) -> Result<String, String> {
             "Overpass reported a problem (the response may be partial): {remark}"
         ));
     }
-    parse_overpass_graph(text)?;
-    header
+    let timestamp = header
         .osm3s
         .and_then(|osm3s| osm3s.timestamp_osm_base)
-        .ok_or_else(|| "map response has no osm3s.timestamp_osm_base".to_owned())
+        .ok_or_else(|| "map response has no osm3s.timestamp_osm_base".to_owned())?;
+    Ok((text, timestamp))
 }
 
 /// bbox 범위를 받아 검사한 스냅샷을 만든다. 429/504면 `Retry-After`(없으면 기본 대기 × 시도 횟수)만큼
@@ -316,8 +341,19 @@ pub fn fetch_snapshot(
     transport: &dyn Transport,
     sleep: &dyn Fn(Duration),
 ) -> Result<Snapshot, String> {
+    fetch_layer(&ROADS, bbox, settings, transport, sleep)
+}
+
+/// [`fetch_snapshot`]과 같고 받을 자료 종류를 고른다.
+pub fn fetch_layer(
+    layer: &Layer,
+    bbox: &Bbox,
+    settings: &FetchSettings,
+    transport: &dyn Transport,
+    sleep: &dyn Fn(Duration),
+) -> Result<Snapshot, String> {
     bbox.validate()?;
-    let query = bbox.query(settings.timeout.as_secs().max(1));
+    let query = (layer.query)(bbox, settings.timeout.as_secs().max(1));
     let attempts = settings.attempts.max(1);
     for attempt in 1..=attempts {
         let reply = transport.post_query(
@@ -334,7 +370,7 @@ pub fn fetch_snapshot(
                         settings.max_bytes
                     ));
                 }
-                let timestamp_osm_base = check_response(&reply.body)?;
+                let timestamp_osm_base = (layer.check)(&reply.body)?;
                 return Ok(Snapshot {
                     meta: SnapshotMeta {
                         bbox: *bbox,
@@ -458,6 +494,15 @@ struct Latest {
 /// 다시 읽어 검사한 뒤 폴더 이름을 바꿔 게시하고, 그다음에 포인터 파일을 바꿔 단다. 어느 단계에서 실패해도
 /// 기존 세대와 기존 포인터는 그대로 남는다.
 pub fn save_snapshot(cache_root: &Path, snapshot: &Snapshot) -> Result<PathBuf, String> {
+    save_layer(&ROADS, cache_root, snapshot)
+}
+
+/// [`save_snapshot`]과 같고 자료 종류를 고른다(원본 파일 이름·검사).
+pub fn save_layer(
+    layer: &Layer,
+    cache_root: &Path,
+    snapshot: &Snapshot,
+) -> Result<PathBuf, String> {
     let bbox_dir = cache_root.join(snapshot.meta.bbox.cache_name());
     std::fs::create_dir_all(&bbox_dir)
         .map_err(|error| format!("cannot create {}: {error}", bbox_dir.display()))?;
@@ -470,9 +515,9 @@ pub fn save_snapshot(cache_root: &Path, snapshot: &Snapshot) -> Result<PathBuf, 
         let _ = std::fs::remove_dir_all(&staging);
         let staged = std::fs::create_dir(&staging)
             .map_err(|error| format!("cannot create {}: {error}", staging.display()))
-            .and_then(|()| write_atomic(&staging.join(SNAPSHOT_FILE), &snapshot.body))
+            .and_then(|()| write_atomic(&staging.join(layer.body_file), &snapshot.body))
             .and_then(|()| write_atomic(&staging.join(META_FILE), meta.as_bytes()))
-            .and_then(|()| load_generation(&staging, &snapshot.meta.bbox).map(|_| ()))
+            .and_then(|()| load_layer_generation(layer, &staging, &snapshot.meta.bbox).map(|_| ()))
             .and_then(|()| {
                 std::fs::rename(&staging, &dir)
                     .map_err(|error| format!("cannot publish {}: {error}", dir.display()))
@@ -499,6 +544,11 @@ pub struct Cached {
 
 /// 세대 폴더 하나를 읽고 기록·원본이 맞는지(bbox, 바이트 수, 응답 검사) 확인한다.
 pub fn load_generation(dir: &Path, bbox: &Bbox) -> Result<Cached, String> {
+    load_layer_generation(&ROADS, dir, bbox)
+}
+
+/// [`load_generation`]과 같고 자료 종류를 고른다.
+pub fn load_layer_generation(layer: &Layer, dir: &Path, bbox: &Bbox) -> Result<Cached, String> {
     let meta_path = dir.join(META_FILE);
     let text = std::fs::read_to_string(&meta_path)
         .map_err(|error| format!("cannot read {}: {error}", meta_path.display()))?;
@@ -510,7 +560,7 @@ pub fn load_generation(dir: &Path, bbox: &Bbox) -> Result<Cached, String> {
             meta_path.display()
         ));
     }
-    let body_path = dir.join(SNAPSHOT_FILE);
+    let body_path = dir.join(layer.body_file);
     let body = std::fs::read(&body_path)
         .map_err(|error| format!("cannot read {}: {error}", body_path.display()))?;
     if body.len() as u64 != meta.bytes {
@@ -521,7 +571,7 @@ pub fn load_generation(dir: &Path, bbox: &Bbox) -> Result<Cached, String> {
             meta.bytes
         ));
     }
-    check_response(&body)?;
+    (layer.check)(&body)?;
     Ok(Cached {
         dir: dir.to_path_buf(),
         meta,
@@ -530,6 +580,15 @@ pub fn load_generation(dir: &Path, bbox: &Bbox) -> Result<Cached, String> {
 
 /// `cache_root`에서 bbox의 최신 세대를 찾는다. 포인터가 없으면 `Ok(None)`, 있는데 세대가 맞지 않으면 `Err`다.
 pub fn load_cached(cache_root: &Path, bbox: &Bbox) -> Result<Option<Cached>, String> {
+    load_layer_cached(&ROADS, cache_root, bbox)
+}
+
+/// [`load_cached`]와 같고 자료 종류를 고른다.
+pub fn load_layer_cached(
+    layer: &Layer,
+    cache_root: &Path,
+    bbox: &Bbox,
+) -> Result<Option<Cached>, String> {
     let bbox_dir = cache_root.join(bbox.cache_name());
     let pointer_path = bbox_dir.join(LATEST_FILE);
     if !pointer_path.exists() {
@@ -550,7 +609,7 @@ pub fn load_cached(cache_root: &Path, bbox: &Bbox) -> Result<Option<Cached>, Str
             pointer_path.display()
         ));
     }
-    load_generation(&bbox_dir.join(&latest.generation), bbox).map(Some)
+    load_layer_generation(layer, &bbox_dir.join(&latest.generation), bbox).map(Some)
 }
 
 /// 스냅샷을 구하는 방법.
@@ -584,9 +643,22 @@ pub fn obtain_snapshot(
     transport: &dyn Transport,
     sleep: &dyn Fn(Duration),
 ) -> Result<Obtained, String> {
+    obtain_layer(&ROADS, cache_root, bbox, policy, settings, transport, sleep)
+}
+
+/// [`obtain_snapshot`]과 같고 자료 종류를 고른다.
+pub fn obtain_layer(
+    layer: &Layer,
+    cache_root: &Path,
+    bbox: &Bbox,
+    policy: FetchPolicy,
+    settings: &FetchSettings,
+    transport: &dyn Transport,
+    sleep: &dyn Fn(Duration),
+) -> Result<Obtained, String> {
     bbox.validate()?;
     if policy == FetchPolicy::CacheOnly {
-        return match load_cached(cache_root, bbox)? {
+        return match load_layer_cached(layer, cache_root, bbox)? {
             Some(cached) => Ok(Obtained {
                 cached,
                 downloaded: false,
@@ -598,15 +670,15 @@ pub fn obtain_snapshot(
             )),
         };
     }
-    match fetch_snapshot(bbox, settings, transport, sleep)
-        .and_then(|snapshot| save_snapshot(cache_root, &snapshot))
+    match fetch_layer(layer, bbox, settings, transport, sleep)
+        .and_then(|snapshot| save_layer(layer, cache_root, &snapshot))
     {
         Ok(dir) => Ok(Obtained {
-            cached: load_generation(&dir, bbox)?,
+            cached: load_layer_generation(layer, &dir, bbox)?,
             downloaded: true,
             warning: None,
         }),
-        Err(error) => match load_cached(cache_root, bbox) {
+        Err(error) => match load_layer_cached(layer, cache_root, bbox) {
             Ok(Some(cached)) => Ok(Obtained {
                 cached,
                 downloaded: false,
@@ -658,6 +730,18 @@ impl FetchJob {
         settings: FetchSettings,
         transport: Box<dyn Transport + Send>,
     ) -> Result<Self, String> {
+        Self::start_layer_with(&ROADS, cache_root, bbox, policy, settings, transport)
+    }
+
+    /// 자료 종류와 전송 수단을 골라 받기 작업을 시작한다. 도로·장소 받기를 합쳐 동시에 1개만 허용한다.
+    pub fn start_layer_with(
+        layer: &'static Layer,
+        cache_root: PathBuf,
+        bbox: Bbox,
+        policy: FetchPolicy,
+        settings: FetchSettings,
+        transport: Box<dyn Transport + Send>,
+    ) -> Result<Self, String> {
         if FETCH_IN_FLIGHT
             .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
             .is_err()
@@ -669,7 +753,8 @@ impl FetchJob {
             .name("map-fetch".to_owned())
             .spawn(move || {
                 let _guard = InFlightGuard;
-                let result = obtain_snapshot(
+                let result = obtain_layer(
+                    layer,
                     &cache_root,
                     &bbox,
                     policy,

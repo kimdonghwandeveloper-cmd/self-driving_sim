@@ -97,6 +97,21 @@ pub fn picker_line(line: &str) -> String {
     if line.starts_with("Simplified ") {
         return course_notice(line);
     }
+    if line == "Places: not loaded" {
+        return "건물·장소: 받지 않음(\"건물·장소 받기\")".to_owned();
+    }
+    if let Some(count) = between(line, "Places: ", " (click a building or search by name)") {
+        return format!("건물·장소: {count}곳(건물 클릭 또는 이름 검색)");
+    }
+    for (english, korean) in [
+        ("Start: ", "출발: "),
+        ("End: ", "도착: "),
+        ("Via: ", "경유: "),
+    ] {
+        if let Some(name) = line.strip_prefix(english) {
+            return format!("{korean}{name}");
+        }
+    }
     if line == "Click at least 2 points on the roads (start, end)" {
         return "도로 위에 점을 2개 이상 찍으세요(출발, 도착)".to_owned();
     }
@@ -358,6 +373,13 @@ mod tests {
             picker_line("지역 도로를 열었습니다"),
             "지역 도로를 열었습니다"
         );
+        // 4-9 건물·장소 안내.
+        assert_eq!(
+            picker_line("Places: 3 (click a building or search by name)"),
+            "건물·장소: 3곳(건물 클릭 또는 이름 검색)"
+        );
+        assert_eq!(picker_line("Start: 도서관"), "출발: 도서관");
+        assert_eq!(picker_line("End: way/5"), "도착: way/5");
         // 4-8 자동 경로 안내.
         assert_eq!(
             picker_line("Turn restrictions: 3 applied"),

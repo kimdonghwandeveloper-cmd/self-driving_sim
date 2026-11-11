@@ -4,6 +4,8 @@
 > 저작권·라이선스 상세: https://www.openstreetmap.org/copyright
 > 출처 표기와 라이선스 방침은 [`docs/map-data.md`](../../../docs/map-data.md)에 있다.
 
+> **예외:** `places-synthetic.osm.json`은 PLAN 4-9 시험용 **합성 자료**이며 실제 OSM 자료가 아니다(건물 2개·정류장 1개를 예제 경로 양 끝 옆에 임의로 둠).
+
 `survey-2026-11-06.osm.json`은 **통로 후보 조사용**이다. 주행 코스로 고정한 자료는 `course-way-532526349.osm.json`과 `course.toml`이다.
 선택 근거와 기록은 `docs/map-data.md`의 "상태" 절에 있다.
 

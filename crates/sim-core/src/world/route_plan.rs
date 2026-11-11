@@ -259,7 +259,7 @@ pub fn in_korea(point: LatLon) -> bool {
 }
 
 /// 기준점에서 본 지역 평면 좌표(동쪽 m, 북쪽 m)를 f64로 구한다. 점 붙이기와 경로 탐색에 쓴다.
-fn local(origin: LatLon, point: LatLon) -> [f64; 2] {
+pub(crate) fn local(origin: LatLon, point: LatLon) -> [f64; 2] {
     let cos_lat0 = origin.lat.to_radians().cos();
     [
         EARTH_RADIUS_M * (point.lon - origin.lon).to_radians() * cos_lat0,
@@ -268,7 +268,7 @@ fn local(origin: LatLon, point: LatLon) -> [f64; 2] {
 }
 
 /// [`local`]의 역변환.
-fn unlocal(origin: LatLon, [east, north]: [f64; 2]) -> LatLon {
+pub(crate) fn unlocal(origin: LatLon, [east, north]: [f64; 2]) -> LatLon {
     LatLon {
         lat: origin.lat + (north / EARTH_RADIUS_M).to_degrees(),
         lon: origin.lon + (east / (EARTH_RADIUS_M * origin.lat.to_radians().cos())).to_degrees(),
