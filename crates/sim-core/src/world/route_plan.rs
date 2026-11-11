@@ -4,8 +4,13 @@
 //! OSM 노드 ID 순서의 경로를 만든다. 결과는 경로 파일(TOML, [`RouteFile`])로 저장하며, `--course map:` 로더가
 //! 이 파일과 저장된 스냅샷만으로 같은 코스를 다시 만든다(코스 생성은 [`route::build_route_course_with`]).
 //!
-//! - 도로 그래프: 허용 `highway` 종류의 양방향 way를 같은 노드 ID에서 나눈 구간으로 잇는다. 일방통행 way는
-//!   1차 판에서 지원하지 않으므로 경로 탐색에서 뺀다(교차로 팔로 붙으면 4-2 규칙대로 거부된다).
+//! - 도로 그래프: 허용 `highway` 종류의 way를 같은 노드 ID에서 나눈 구간으로 잇는다. 일방통행
+//!   ([`RoadGraphConfig::nav_rules`], PLAN 4-8)을 쓰면 일방통행 way는 진행 방향 간선만 넣고, 쓰지 않으면(기존
+//!   경로 파일) 예전처럼 일방통행 way를 뺀다. 방향은 [`route::travel`]로 정한다.
+//! - 회전 제한(PLAN 4-8): 스냅샷에 회전 제한 관계([`TurnRestriction`])가 있으면 (노드, 들어온 way) 상태로 A*를 해
+//!   금지된 회전(`no_*`)과 지정 외 회전(`only_*`)을 하지 않는다. 경로 파일을 다시 읽을 때도 같은 규칙으로 검사한다.
+//! - 우회(PLAN 4-8): 찾은 경로의 교차로를 만들 수 없으면(너무 가까움·좁은 팔 각도 등) 그 교차로를 피해 다시 찾는다.
+//!   최대 [`MAX_DETOURS`]곳까지 피한다.
 //! - 점 붙이기: 찍은 점마다 [`RoadGraphConfig::snap_distance_m`] 안의 가장 가까운 구간 위 점을 고른다.
 //!   기존 노드에서 [`NODE_SNAP_M`] 안이면 그 노드를, 아니면 구간 사이에 **가상 노드**를 넣는다.
 //!   가상 노드 ID는 [`VIRTUAL_NODE_BASE`] + 점 번호다(OSM 노드가 아니다).
@@ -24,10 +29,9 @@ use serde::{Deserialize, Serialize};
 
 use super::course::CourseDef;
 use super::map::{self, LatLon};
-use super::osm_graph::{OsmGraphWay, OsmNode};
+use super::osm_graph::{OsmGraphWay, OsmNode, TurnRestriction};
 use super::road_snapshot::{self, Connectivity};
-use super::route::RouteCourse;
-use super::route::{self, JunctionSettings};
+use super::route::{self, BuildFailure, JunctionSettings, RouteCourse, Travel};
 
 /// 도로 그래프 설정 파일 경로.
 pub const ROAD_GRAPH_CONFIG_PATH: &str = "config/road_graph.toml";
@@ -47,6 +51,8 @@ pub const SNAP_DISTANCE_CAP_M: f64 = 100.0;
 pub const ROUTE_LENGTH_CAP_M: f64 = 2000.0;
 /// 지구 평균 반지름(m). [`map::project`]와 같은 값.
 const EARTH_RADIUS_M: f64 = 6_371_008.8;
+/// 교차로를 만들 수 없을 때 피해 다시 찾는 최대 교차로 수(임시값).
+pub const MAX_DETOURS: usize = 12;
 
 /// `config/road_graph.toml` 전체 구조. 경로를 **계획할 때** 쓰는 값이며, 결과는 경로 파일에 함께 저장한다.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -66,6 +72,10 @@ pub struct RoadGraphConfig {
     pub corner_radius_m: f32,
     /// 곁가지 길이(m). 임시값.
     pub stub_length_m: f32,
+    /// 내비게이션 규칙(PLAN 4-8)을 쓸지: 일방통행 way를 진행 방향으로 탐색하고, 형상이 맞지 않는 교차로를
+    /// 곧게 지나면 단순화한다. 없으면 `false`(예전 규칙: 일방통행 제외, 교차로 단순화 없음).
+    #[serde(default)]
+    pub nav_rules: bool,
 }
 
 impl Default for RoadGraphConfig {
@@ -77,6 +87,13 @@ impl Default for RoadGraphConfig {
             ("residential", 5.0),
             ("unclassified", 5.0),
             ("tertiary", 6.0),
+            ("tertiary_link", 4.5),
+            ("secondary", 6.5),
+            ("secondary_link", 4.5),
+            ("primary", 7.0),
+            ("primary_link", 4.5),
+            ("trunk", 7.0),
+            ("trunk_link", 4.5),
         ];
         Self {
             allowed_highways: kinds.iter().map(|(kind, _)| (*kind).to_owned()).collect(),
@@ -89,6 +106,7 @@ impl Default for RoadGraphConfig {
             max_route_length_m: 2000.0,
             corner_radius_m: route::CORNER_RADIUS_M,
             stub_length_m: route::STUB_LENGTH_M,
+            nav_rules: true,
         }
     }
 }
@@ -175,6 +193,14 @@ pub struct RouteFile {
     pub snap_distance_m: f64,
     /// 계획에 쓴 경로 길이 상한(m). 다시 읽을 때도 검사한다.
     pub max_route_length_m: f64,
+    /// 내비게이션 규칙(PLAN 4-8: 일방통행 방향 탐색, 교차로 단순화)으로 만들었는지. 없는 기존 파일은 `false`로 읽어
+    /// 예전 규칙으로 재생한다.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub nav_rules: bool,
+    /// 점마다 표시 이름(건물·장소로 고른 점은 그 이름, 그냥 찍은 점은 빈 문자열, PLAN 4-9). 코스 생성에는 쓰지 않는다.
+    /// 비어 있거나 점 개수와 같아야 한다.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub point_labels: Vec<String>,
 }
 
 /// 폭을 정한 출처.
@@ -254,9 +280,21 @@ fn distance(a: [f64; 2], b: [f64; 2]) -> f64 {
     (a[0] - b[0]).hypot(a[1] - b[1])
 }
 
-/// 경로 탐색에 쓰는 way인지(허용 종류이고 일방통행이 아님) 판정한다.
-fn searchable(way: &OsmGraphWay, allowed: &BTreeSet<&str>) -> bool {
-    way.highway().is_some_and(|kind| allowed.contains(kind)) && !route::is_oneway(way)
+/// 탐색에서 way의 통행 방향. `nav_rules`가 `false`면 예전 규칙(일방통행 way는 빼고 나머지는 양방향)이다.
+pub fn way_travel(way: &OsmGraphWay, nav_rules: bool) -> Travel {
+    if nav_rules {
+        route::travel(way)
+    } else if route::is_oneway(way) {
+        Travel::Closed
+    } else {
+        Travel::Both
+    }
+}
+
+/// 경로 탐색에 쓰는 way인지(허용 종류이고 탐색할 수 있는 방향이 있음) 판정한다.
+pub fn searchable(way: &OsmGraphWay, allowed: &BTreeSet<&str>, nav_rules: bool) -> bool {
+    way.highway().is_some_and(|kind| allowed.contains(kind))
+        && way_travel(way, nav_rules) != Travel::Closed
 }
 
 /// 찍은 점들을 도로에 붙인 결과.
@@ -273,6 +311,7 @@ struct Snapped {
 fn snap_points(
     ways: &[OsmGraphWay],
     allowed: &BTreeSet<&str>,
+    nav_rules: bool,
     points: &[LatLon],
     max_distance_m: f64,
 ) -> Result<Snapped, String> {
@@ -284,7 +323,7 @@ fn snap_points(
         let p = local(origin, point);
         let mut best: Option<(f64, usize, usize, f64)> = None;
         for (w, way) in ways.iter().enumerate() {
-            if !searchable(way, allowed) {
+            if !searchable(way, allowed, nav_rules) {
                 continue;
             }
             for s in 0..way.nodes.len() - 1 {
@@ -305,7 +344,7 @@ fn snap_points(
                 }
             }
         }
-        let (gap, w, s, t) = best.ok_or("no allowed two-way roads in the snapshot")?;
+        let (gap, w, s, t) = best.ok_or("no allowed roads in the snapshot")?;
         if gap > max_distance_m {
             return Err(format!(
                 "point #{k} {:?} is {gap:.0} m from the nearest allowed road (limit {max_distance_m} m)",
@@ -344,14 +383,20 @@ fn snap_points(
     Ok(Snapped { ways, nodes })
 }
 
-/// A* 우선순위 큐 항목(추정 총비용이 작은 것, 같으면 노드 ID가 작은 것이 먼저).
+/// A* 우선순위 큐 항목(추정 총비용이 작은 것, 같으면 상태가 작은 것이 먼저).
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct Open {
     /// 지금까지 비용 + 남은 직선 거리(m).
     estimate: f64,
-    /// 노드 ID.
-    node: u64,
+    /// 탐색 상태.
+    state: State,
 }
+
+/// 탐색 상태: (노드 ID, 들어온 way ID, 직전 노드 ID). 출발점처럼 들어온 way·직전 노드가 없으면 [`NO_WAY`]다.
+/// 직전 노드로 되돌아가는 간선(도로 가운데서 되돌기)은 쓰지 않는다.
+type State = (u64, u64, u64);
+/// 들어온 way·직전 노드가 없음을 뜻하는 값.
+const NO_WAY: u64 = u64::MAX;
 
 impl Eq for Open {}
 
@@ -361,7 +406,7 @@ impl Ord for Open {
         other
             .estimate
             .total_cmp(&self.estimate)
-            .then_with(|| other.node.cmp(&self.node))
+            .then_with(|| other.state.cmp(&self.state))
     }
 }
 
@@ -372,70 +417,184 @@ impl PartialOrd for Open {
     }
 }
 
-/// 탐색 가능한 way로 만든 노드 연결(이웃 노드, 구간 길이 m)과 노드 좌표.
+/// 방향 있는 간선.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Edge {
+    /// 도착 노드 ID.
+    to: u64,
+    /// 구간 길이(m).
+    length: f64,
+    /// 이 구간의 way ID.
+    way: u64,
+}
+
+/// 탐색 가능한 way로 만든 방향 있는 노드 연결과 노드 좌표, 회전 제한.
 struct SearchGraph {
     /// 노드 ID별 지역 좌표.
     pos: BTreeMap<u64, [f64; 2]>,
-    /// 노드 ID별 이웃과 구간 길이.
-    adjacent: BTreeMap<u64, Vec<(u64, f64)>>,
+    /// 노드 ID별 나가는 간선.
+    adjacent: BTreeMap<u64, Vec<Edge>>,
+    /// (via 노드, 들어온 way)별 회전 제한.
+    restrictions: BTreeMap<(u64, u64), Vec<TurnRestriction>>,
 }
 
 impl SearchGraph {
-    /// 탐색 가능한 way를 같은 노드 ID에서 나눈 구간으로 잇는다.
-    fn new(ways: &[OsmGraphWay], allowed: &BTreeSet<&str>, origin: LatLon) -> Self {
+    /// 탐색 가능한 way를 같은 노드 ID에서 나눈 구간으로 잇는다. 일방통행 way는 진행 방향 간선만 넣는다.
+    fn new(
+        ways: &[OsmGraphWay],
+        allowed: &BTreeSet<&str>,
+        nav_rules: bool,
+        restrictions: &[TurnRestriction],
+        origin: LatLon,
+    ) -> Self {
         let mut pos = BTreeMap::new();
-        let mut adjacent: BTreeMap<u64, Vec<(u64, f64)>> = BTreeMap::new();
-        for way in ways.iter().filter(|way| searchable(way, allowed)) {
+        let mut adjacent: BTreeMap<u64, Vec<Edge>> = BTreeMap::new();
+        for way in ways
+            .iter()
+            .filter(|way| searchable(way, allowed, nav_rules))
+        {
             for node in &way.nodes {
                 pos.insert(node.id, local(origin, node.pos));
             }
+            let travel = way_travel(way, nav_rules);
             for pair in way.nodes.windows(2) {
                 let length = distance(local(origin, pair[0].pos), local(origin, pair[1].pos));
-                for (from, to) in [(pair[0].id, pair[1].id), (pair[1].id, pair[0].id)] {
-                    adjacent.entry(from).or_default().push((to, length));
+                let (a, b) = (pair[0].id, pair[1].id);
+                let directions: &[(u64, u64)] = match travel {
+                    Travel::Both => &[(a, b), (b, a)],
+                    Travel::Forward => &[(a, b)],
+                    Travel::Backward => &[(b, a)],
+                    Travel::Closed => &[],
+                };
+                for &(from, to) in directions {
+                    adjacent.entry(from).or_default().push(Edge {
+                        to,
+                        length,
+                        way: way.id,
+                    });
                 }
             }
         }
-        Self { pos, adjacent }
+        let mut by_turn: BTreeMap<(u64, u64), Vec<TurnRestriction>> = BTreeMap::new();
+        for restriction in restrictions {
+            by_turn
+                .entry((restriction.via_node, restriction.from_way))
+                .or_default()
+                .push(*restriction);
+        }
+        Self {
+            pos,
+            adjacent,
+            restrictions: by_turn,
+        }
     }
 
-    /// `from`에서 `to`까지 가장 짧은 노드 순서를 A*(직선 거리 추정)로 찾는다. 이어지지 않으면 오류다.
-    fn find_path(&self, from: u64, to: u64) -> Result<Vec<u64>, String> {
+    /// `from_way`로 `via`에 들어와 `to_way`로 나가는 회전이 회전 제한에 걸리지 않는지 판정한다.
+    fn turn_allowed(&self, from_way: u64, via: u64, to_way: u64) -> bool {
+        self.restrictions
+            .get(&(via, from_way))
+            .into_iter()
+            .flatten()
+            .all(|r| {
+                if r.only {
+                    r.to_way == to_way
+                } else {
+                    r.to_way != to_way
+                }
+            })
+    }
+
+    /// `from`(들어온 way·직전 노드 `entry`)에서 `to`까지 가장 짧은 노드 순서를 A*(직선 거리 추정)로 찾는다.
+    /// 일방통행 방향과 회전 제한을 지키고, 되돌지 않으며, `avoid` 노드는 지나지 않는다(도착 노드 제외).
+    /// 노드 순서와 도착 때의 (들어온 way, 직전 노드)를 돌려준다. 이어지지 않으면 오류다.
+    fn find_path(
+        &self,
+        from: u64,
+        entry: (u64, u64),
+        to: u64,
+        avoid: &BTreeSet<u64>,
+    ) -> Result<(Vec<u64>, (u64, u64)), String> {
         let goal = self.pos[&to];
-        let mut best: BTreeMap<u64, f64> = [(from, 0.0)].into_iter().collect();
-        let mut came: BTreeMap<u64, u64> = BTreeMap::new();
+        let start: State = (from, entry.0, entry.1);
+        let mut best: BTreeMap<State, f64> = [(start, 0.0)].into_iter().collect();
+        let mut came: BTreeMap<State, State> = BTreeMap::new();
         let mut closed = BTreeSet::new();
         let mut open = BinaryHeap::from([Open {
             estimate: distance(self.pos[&from], goal),
-            node: from,
+            state: start,
         }]);
-        while let Some(Open { node, .. }) = open.pop() {
+        while let Some(Open { state, .. }) = open.pop() {
+            let (node, way, previous) = state;
             if node == to {
-                let mut path = vec![to];
-                while let Some(&previous) = came.get(path.last().unwrap()) {
-                    path.push(previous);
+                let mut path = vec![state];
+                while let Some(&before) = came.get(path.last().unwrap()) {
+                    path.push(before);
                 }
                 path.reverse();
-                return Ok(path);
+                return Ok((
+                    path.into_iter().map(|(id, ..)| id).collect(),
+                    (way, previous),
+                ));
             }
-            if !closed.insert(node) {
+            if !closed.insert(state) {
                 continue;
             }
-            for &(next, length) in self.adjacent.get(&node).into_iter().flatten() {
-                let cost = best[&node] + length;
+            for edge in self.adjacent.get(&node).into_iter().flatten() {
+                if edge.to == previous
+                    || (avoid.contains(&edge.to) && edge.to != to)
+                    || (way != NO_WAY && !self.turn_allowed(way, node, edge.way))
+                {
+                    continue;
+                }
+                let next: State = (edge.to, edge.way, node);
+                let cost = best[&state] + edge.length;
                 if best.get(&next).is_none_or(|&known| cost < known) {
                     best.insert(next, cost);
-                    came.insert(next, node);
+                    came.insert(next, state);
                     open.push(Open {
-                        estimate: cost + distance(self.pos[&next], goal),
-                        node: next,
+                        estimate: cost + distance(self.pos[&edge.to], goal),
+                        state: next,
                     });
                 }
             }
         }
         Err(format!(
-            "no road path from node {from} to node {to} (the road graph is disconnected)"
+            "no road path from node {from} to node {to} (the road graph is disconnected, or one-way roads and turn restrictions block it)"
         ))
+    }
+
+    /// 노드 순서가 간선 방향과 회전 제한을 지키고 되돌지 않는지 검사한다(경로 파일 재생용).
+    fn check_path(&self, nodes: &[u64]) -> Result<(), String> {
+        let mut way = NO_WAY;
+        if let Some(triple) = nodes.windows(3).find(|t| t[0] == t[2]) {
+            return Err(format!("route turns back at node {}", triple[1]));
+        }
+        for pair in nodes.windows(2) {
+            let edges: Vec<&Edge> = self
+                .adjacent
+                .get(&pair[0])
+                .into_iter()
+                .flatten()
+                .filter(|edge| edge.to == pair[1])
+                .collect();
+            if edges.is_empty() {
+                return Err(format!(
+                    "route goes from node {} to node {} against a one-way road or without a road segment",
+                    pair[0], pair[1]
+                ));
+            }
+            let Some(edge) = edges
+                .iter()
+                .find(|edge| way == NO_WAY || self.turn_allowed(way, pair[0], edge.way))
+            else {
+                return Err(format!(
+                    "route breaks a turn restriction at node {}",
+                    pair[0]
+                ));
+            };
+            way = edge.way;
+        }
+        Ok(())
     }
 
     /// 노드 순서의 길이(m).
@@ -474,7 +633,7 @@ fn korean_points(points: &[[f64; 2]]) -> Result<Vec<LatLon>, String> {
 /// 점마다 도로에 붙이고, 이웃한 점 사이를 A*로 이어 노드 순서를 만든 뒤, 폭을 정하고 실제로 코스를 만들어 본다.
 /// 붙일 도로 없음·끊긴 그래프·상한 초과·코스 생성 실패는 모두 오류다.
 ///
-/// 연결 정보가 없는 스냅샷(Overpass)용이다. Geofabrik 추출은 [`plan_route_detailed`]에 연결 정보를 넘긴다.
+/// 연결 정보·회전 제한이 없는 스냅샷용이다. 그 밖에는 [`plan_route_full`]을 쓴다.
 pub fn plan_route(
     ways: &[OsmGraphWay],
     snapshot: &str,
@@ -495,9 +654,11 @@ pub struct PlannedRoute {
     pub length_m: f64,
     /// 경로 노드의 위경도(노드 순서, 가상 노드 포함).
     pub path: Vec<LatLon>,
+    /// 만들 수 없어 피해 간 교차로 노드 ID(피한 순서).
+    pub avoided: Vec<u64>,
 }
 
-/// [`plan_route`]와 같고, 만든 코스·경로 길이·노드 위치도 함께 돌려준다.
+/// [`plan_route`]와 같고, 만든 코스·경로 길이·노드 위치도 함께 돌려준다. 회전 제한은 쓰지 않는다.
 ///
 /// `connectivity`가 있으면(Geofabrik 추출) 코스를 만들기 전에 경계 연결 검사를 한다([`build_route_file_course`]).
 pub fn plan_route_detailed(
@@ -507,35 +668,142 @@ pub fn plan_route_detailed(
     points: &[[f64; 2]],
     config: &RoadGraphConfig,
 ) -> Result<PlannedRoute, String> {
+    plan_route_full(ways, &[], connectivity, snapshot, points, config)
+}
+
+/// 회전 제한까지 써서 경로를 계획한다(PLAN 4-8).
+///
+/// 찾은 경로의 교차로를 만들 수 없으면 그 교차로를 피해 다시 찾는다(최대 [`MAX_DETOURS`]곳). 찍은 점이 붙은
+/// 노드는 피하지 않는다. 더 피할 수 없으면 마지막 실패 이유를 돌려준다.
+pub fn plan_route_full(
+    ways: &[OsmGraphWay],
+    restrictions: &[TurnRestriction],
+    connectivity: Option<&Connectivity>,
+    snapshot: &str,
+    points: &[[f64; 2]],
+    config: &RoadGraphConfig,
+) -> Result<PlannedRoute, String> {
     config.validate()?;
     let allowed: BTreeSet<&str> = config.allowed_highways.iter().map(String::as_str).collect();
     let picked = korean_points(points)?;
-    let snapped = snap_points(ways, &allowed, &picked, config.snap_distance_m)?;
-    let graph = SearchGraph::new(&snapped.ways, &allowed, picked[0]);
-    let mut nodes: Vec<u64> = vec![snapped.nodes[0]];
-    for pair in snapped.nodes.windows(2) {
+    let snapped = snap_points(
+        ways,
+        &allowed,
+        config.nav_rules,
+        &picked,
+        config.snap_distance_m,
+    )?;
+    let graph = SearchGraph::new(
+        &snapped.ways,
+        &allowed,
+        config.nav_rules,
+        restrictions,
+        picked[0],
+    );
+    let mut avoid: BTreeSet<u64> = BTreeSet::new();
+    let mut avoided: Vec<u64> = Vec::new();
+    // 처음 피한 교차로의 실패 이유. 돌아갈 길이 없으면 이 이유를 알린다.
+    let mut first_failure = String::new();
+    loop {
+        let nodes = match search_route(&graph, &snapped.nodes, &avoid) {
+            Ok(nodes) => nodes,
+            Err(error) if avoided.is_empty() => return Err(error),
+            Err(_) => {
+                return Err(format!(
+                    "{first_failure}; no detour around {} intersection(s) that cannot be built",
+                    avoided.len()
+                ));
+            }
+        };
+        let length = graph.length(&nodes);
+        if length > config.max_route_length_m {
+            return Err(format!(
+                "route is {length:.0} m long (limit {} m)",
+                config.max_route_length_m
+            ));
+        }
+        let (width_m, source) = route_width(&snapped.ways, &allowed, config, &nodes)?;
+        let file = RouteFile {
+            format: ROUTE_FORMAT.to_owned(),
+            snapshot: snapshot.to_owned(),
+            allowed_highways: config.allowed_highways.clone(),
+            points: points.to_vec(),
+            nodes,
+            width_m,
+            width_source: source.as_str().to_owned(),
+            corner_radius_m: config.corner_radius_m,
+            stub_length_m: config.stub_length_m,
+            snap_distance_m: config.snap_distance_m,
+            max_route_length_m: config.max_route_length_m,
+            nav_rules: config.nav_rules,
+            point_labels: Vec::new(),
+        };
+        match build_course_checked(&file, ways, restrictions, connectivity) {
+            Ok(course) => {
+                let path = file
+                    .nodes
+                    .iter()
+                    .map(|id| unlocal(picked[0], graph.pos[id]))
+                    .collect();
+                return Ok(PlannedRoute {
+                    file,
+                    course,
+                    length_m: length,
+                    path,
+                    avoided,
+                });
+            }
+            Err(BuildFailure {
+                node: Some(node),
+                message,
+            }) if avoided.len() < MAX_DETOURS
+                && !snapped.nodes.contains(&node)
+                && avoid.insert(node) =>
+            {
+                if avoided.is_empty() {
+                    first_failure = message;
+                }
+                avoided.push(node);
+            }
+            Err(failure) => return Err(failure.message),
+        }
+    }
+}
+
+/// 찍은 점이 붙은 노드를 차례로 A*로 잇는다. 구간 사이에서도 들어온 way를 이어받아 회전 제한을 지킨다.
+fn search_route(
+    graph: &SearchGraph,
+    stops: &[u64],
+    avoid: &BTreeSet<u64>,
+) -> Result<Vec<u64>, String> {
+    let mut nodes: Vec<u64> = vec![stops[0]];
+    let mut entry = (NO_WAY, NO_WAY);
+    for pair in stops.windows(2) {
         if pair[0] == pair[1] {
             return Err(format!(
                 "two consecutive points snap to the same place (node {})",
                 pair[0]
             ));
         }
-        nodes.extend(graph.find_path(pair[0], pair[1])?.into_iter().skip(1));
+        let (path, last) = graph.find_path(pair[0], entry, pair[1], avoid)?;
+        nodes.extend(path.into_iter().skip(1));
+        entry = last;
     }
-    let length = graph.length(&nodes);
-    if length > config.max_route_length_m {
-        return Err(format!(
-            "route is {length:.0} m long (limit {} m)",
-            config.max_route_length_m
-        ));
-    }
-    // 경로가 지나는 way 중 가장 좁은 폭을 코스 전체에 쓴다.
+    Ok(nodes)
+}
+
+/// 경로가 지나는 way 중 가장 좁은 폭과 그 출처를 정한다(코스 전체에 쓴다).
+fn route_width(
+    ways: &[OsmGraphWay],
+    allowed: &BTreeSet<&str>,
+    config: &RoadGraphConfig,
+    nodes: &[u64],
+) -> Result<(f32, WidthSource), String> {
     let mut width: Option<(f32, WidthSource)> = None;
     for pair in nodes.windows(2) {
-        let way = snapped
-            .ways
+        let way = ways
             .iter()
-            .filter(|way| searchable(way, &allowed))
+            .filter(|way| searchable(way, allowed, config.nav_rules))
             .find(|way| {
                 way.nodes
                     .windows(2)
@@ -547,32 +815,7 @@ pub fn plan_route_detailed(
             width = Some(resolved);
         }
     }
-    let (width_m, source) = width.ok_or("route has no road segment")?;
-    let file = RouteFile {
-        format: ROUTE_FORMAT.to_owned(),
-        snapshot: snapshot.to_owned(),
-        allowed_highways: config.allowed_highways.clone(),
-        points: points.to_vec(),
-        nodes,
-        width_m,
-        width_source: source.as_str().to_owned(),
-        corner_radius_m: config.corner_radius_m,
-        stub_length_m: config.stub_length_m,
-        snap_distance_m: config.snap_distance_m,
-        max_route_length_m: config.max_route_length_m,
-    };
-    let course = build_route_file_course(&file, ways, connectivity)?;
-    let path = file
-        .nodes
-        .iter()
-        .map(|id| unlocal(picked[0], graph.pos[id]))
-        .collect();
-    Ok(PlannedRoute {
-        file,
-        course,
-        length_m: length,
-        path,
-    })
+    width.ok_or_else(|| "route has no road segment".to_owned())
 }
 
 /// 경로 파일과 스냅샷 way로 코스를 만든다. 찍은 점을 같은 방법으로 다시 붙여 가상 노드를 복원한다.
@@ -582,42 +825,83 @@ pub fn plan_route_detailed(
 ///
 /// `connectivity`가 있으면(Geofabrik 추출) 경로 파일의 허용 도로 목록이 연결 정보와 같은지, 코스 형상에 쓰는 노드가
 /// 불완전 노드가 아닌지 검사한다([`road_snapshot::check_route_connectivity`]). 경로 계획과 재생이 모두 여기를 거친다.
+/// 회전 제한이 있는 스냅샷은 [`build_route_file_course_full`]을 쓴다.
 pub fn build_route_file_course(
     file: &RouteFile,
     ways: &[OsmGraphWay],
     connectivity: Option<&Connectivity>,
 ) -> Result<RouteCourse, String> {
+    build_route_file_course_full(file, ways, &[], connectivity)
+}
+
+/// [`build_route_file_course`]와 같고, 노드 순서가 일방통행 방향·회전 제한을 지키는지도 검사한다(PLAN 4-8).
+pub fn build_route_file_course_full(
+    file: &RouteFile,
+    ways: &[OsmGraphWay],
+    restrictions: &[TurnRestriction],
+    connectivity: Option<&Connectivity>,
+) -> Result<RouteCourse, String> {
+    build_course_checked(file, ways, restrictions, connectivity).map_err(|failure| failure.message)
+}
+
+/// [`build_route_file_course_full`]의 본체. 교차로 때문에 실패하면 그 노드를 함께 돌려준다.
+fn build_course_checked(
+    file: &RouteFile,
+    ways: &[OsmGraphWay],
+    restrictions: &[TurnRestriction],
+    connectivity: Option<&Connectivity>,
+) -> Result<RouteCourse, BuildFailure> {
     if file.format != ROUTE_FORMAT {
         return Err(format!(
             "unknown route file format `{}` (expected `{ROUTE_FORMAT}`)",
             file.format
-        ));
+        )
+        .into());
     }
     check_limits(file.snap_distance_m, file.max_route_length_m)?;
     if ![WidthSource::Tag, WidthSource::Lanes, WidthSource::Default]
         .iter()
         .any(|source| source.as_str() == file.width_source)
     {
-        return Err(format!("unknown width_source `{}`", file.width_source));
+        return Err(format!("unknown width_source `{}`", file.width_source).into());
+    }
+    if !file.point_labels.is_empty() && file.point_labels.len() != file.points.len() {
+        return Err(format!(
+            "point_labels has {} entries but there are {} points",
+            file.point_labels.len(),
+            file.points.len()
+        )
+        .into());
     }
     let max_route_length_m = file.max_route_length_m;
     let allowed: BTreeSet<&str> = file.allowed_highways.iter().map(String::as_str).collect();
     let picked = korean_points(&file.points)?;
-    let snapped = snap_points(ways, &allowed, &picked, file.snap_distance_m)?;
-    let graph = SearchGraph::new(&snapped.ways, &allowed, picked[0]);
+    let snapped = snap_points(
+        ways,
+        &allowed,
+        file.nav_rules,
+        &picked,
+        file.snap_distance_m,
+    )?;
+    let graph = SearchGraph::new(
+        &snapped.ways,
+        &allowed,
+        file.nav_rules,
+        restrictions,
+        picked[0],
+    );
     for &id in &file.nodes {
         let Some(&pos) = graph.pos.get(&id) else {
-            return Err(format!("route node {id} is not on an allowed two-way road"));
+            return Err(format!("route node {id} is not on an allowed searchable road").into());
         };
         if !in_korea(unlocal(picked[0], pos)) {
-            return Err(format!("route node {id} is outside the South Korea area"));
+            return Err(format!("route node {id} is outside the South Korea area").into());
         }
     }
+    graph.check_path(&file.nodes)?;
     let length = graph.length(&file.nodes);
     if length > max_route_length_m {
-        return Err(format!(
-            "route is {length:.0} m long (limit {max_route_length_m} m)"
-        ));
+        return Err(format!("route is {length:.0} m long (limit {max_route_length_m} m)").into());
     }
     let width_notice = if file.width_source == WidthSource::Tag.as_str() {
         format!("Road width {:.1} m from the OSM width tag", file.width_m)
@@ -627,11 +911,17 @@ pub fn build_route_file_course(
             file.width_m, file.width_source
         )
     };
-    let notices = vec![
+    let mut notices = vec![
         map::OSM_ATTRIBUTION.to_owned(),
         "Virtual training course from an OSM route (not a surveyed road)".to_owned(),
         width_notice,
     ];
+    if file.nav_rules {
+        notices.push(
+            "One-way and divided roads are drawn as a single carriageway (not the real lane layout)"
+                .to_owned(),
+        );
+    }
     if let Some(connectivity) = connectivity {
         road_snapshot::check_route_connectivity(
             connectivity,
@@ -644,7 +934,7 @@ pub fn build_route_file_course(
         corner_radius_m: file.corner_radius_m,
         stub_length_m: file.stub_length_m,
     };
-    route::build_route_course_with(
+    route::build_route_course_detailed(
         "route",
         &snapped.ways,
         &allowed,
@@ -652,16 +942,23 @@ pub fn build_route_file_course(
         file.width_m,
         &settings,
         notices,
+        file.nav_rules,
     )
 }
 
 /// 경로 파일 내용과 그 파일이 있는 폴더로 코스를 만든다. 스냅샷은 `base_dir` 기준 상대 경로다.
 ///
 /// 스냅샷은 [`road_snapshot::load_road_snapshot`]으로 읽으므로 Geofabrik 추출이면 연결 정보 검사를 건너뛰지 않는다.
+/// 스냅샷에 회전 제한이 있으면 함께 검사한다.
 pub fn load_route_course(file: &RouteFile, base_dir: &Path) -> Result<CourseDef, String> {
     let snapshot = road_snapshot::load_road_snapshot(&base_dir.join(&file.snapshot))?;
-    build_route_file_course(file, &snapshot.ways, snapshot.connectivity.as_ref())
-        .map(|built| built.course)
+    build_route_file_course_full(
+        file,
+        &snapshot.ways,
+        &snapshot.restrictions,
+        snapshot.connectivity.as_ref(),
+    )
+    .map(|built| built.course)
 }
 
 /// 경로 파일 내용을 TOML 문자열로 만든다.
@@ -949,14 +1246,23 @@ mod tests {
         let text = std::fs::read_to_string(dir.join("route-junctions.toml")).unwrap();
         let file: RouteFile = toml::from_str(&text).unwrap();
         let ways = real_snapshot();
-        let replanned = plan_route(
+        // 이 파일은 4-8 이전 규칙(작은 도로만, 일방통행 제외)으로 만들었다.
+        let legacy = RoadGraphConfig {
+            allowed_highways: file.allowed_highways.clone(),
+            nav_rules: false,
+            ..RoadGraphConfig::default()
+        };
+        let replanned = plan_route(&ways, &file.snapshot, &file.points, &legacy).unwrap();
+        assert_eq!(replanned, file);
+        // 지금 기본 규칙(큰 도로·일방통행 포함)으로 계획해도 이 구간은 같은 노드 순서다.
+        let current = plan_route(
             &ways,
             &file.snapshot,
             &file.points,
             &RoadGraphConfig::default(),
         )
         .unwrap();
-        assert_eq!(replanned, file);
+        assert_eq!(current.nodes, file.nodes);
         let built = build_route_file_course(&file, &ways, None).unwrap();
         for junction in [5_143_358_021, 5_143_358_070, 5_239_572_002] {
             assert!(built.junctions.contains(&junction), "{:?}", built.junctions);
@@ -1082,5 +1388,228 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// 4-8 합성 자료: 동서로 J1(0, 0)–J2(120, 0) 직통로(way 201)와 북쪽으로 돌아가는 길(way 202, (0, 60)–(120, 60)),
+    /// 양쪽 진입로(way 200, 203). `direct_tags`는 직통로 태그다.
+    ///
+    /// `spur`가 있으면 J2를 (120, 40)으로 올려 직통로가 가운데 노드 30(60, 0)에서 34° 꺾이게 하고, 노드 30에서 좁은 각으로
+    /// 갈라지는 막다른 길을 더한다. 경로가 꺾는 곳이라 단순화할 수 없으므로 그 교차로를 피해야 한다.
+    fn ladder(
+        direct_tags: &'static [(&'static str, &'static str)],
+        spur: bool,
+    ) -> Vec<FixtureWay<'static>> {
+        let j2 = if spur { 40.0 } else { 0.0 };
+        let direct = if spur {
+            vec![(10, 0.0, 0.0), (30, 60.0, 0.0), (11, 120.0, j2)]
+        } else {
+            vec![(10, 0.0, 0.0), (11, 120.0, j2)]
+        };
+        let mut ways: Vec<FixtureWay> = vec![
+            (
+                200,
+                "residential",
+                &[],
+                vec![(1, -100.0, 0.0), (10, 0.0, 0.0)],
+            ),
+            (201, "residential", direct_tags, direct),
+            (
+                202,
+                "residential",
+                &[],
+                vec![
+                    (10, 0.0, 0.0),
+                    (20, 0.0, 60.0),
+                    (21, 120.0, 80.0),
+                    (11, 120.0, j2),
+                ],
+            ),
+            (
+                203,
+                "residential",
+                &[],
+                vec![(11, 120.0, j2), (2, 220.0, j2)],
+            ),
+        ];
+        if spur {
+            ways.push((
+                204,
+                "residential",
+                &[],
+                vec![(30, 60.0, 0.0), (31, 110.0, 15.0)],
+            ));
+        }
+        ways
+    }
+
+    /// 일방통행: 정방향은 직통로로, 역방향은 북쪽으로 돌아간다. 예전 규칙(일방통행 제외)은 정방향도 돌아가고,
+    /// 경로 파일의 노드를 거꾸로 고치면 재생에서 거부된다.
+    #[test]
+    fn one_way_roads_are_followed_in_their_direction() {
+        let ways = parse(ladder(&[("oneway", "yes")], false));
+        let config = RoadGraphConfig::default();
+        let (west, east) = (at(-80.0, 0.0), at(200.0, 0.0));
+        let forward = plan_route_detailed(&ways, None, "s", &[west, east], &config).unwrap();
+        assert!(
+            !forward.file.nodes.contains(&20),
+            "{:?}",
+            forward.file.nodes
+        );
+        assert!(forward.file.nav_rules);
+        let backward = plan_route_detailed(&ways, None, "s", &[east, west], &config).unwrap();
+        assert!(
+            backward.file.nodes.contains(&20),
+            "{:?}",
+            backward.file.nodes
+        );
+        for planned in [&forward, &backward] {
+            let result = follow_path(&planned.course.course, &planned.course.guide, 4.0);
+            assert_eq!(result.impacts, 0, "{result:?}");
+        }
+        let legacy = RoadGraphConfig {
+            nav_rules: false,
+            ..config.clone()
+        };
+        let old = plan_route_detailed(&ways, None, "s", &[west, east], &legacy).unwrap();
+        assert!(old.file.nodes.contains(&20), "{:?}", old.file.nodes);
+        // 직통로를 역방향으로 지나도록 고친 파일은 거부한다.
+        let mut against = backward.file.clone();
+        let detour: Vec<u64> = against
+            .nodes
+            .iter()
+            .copied()
+            .filter(|&id| id != 20 && id != 21)
+            .collect();
+        against.nodes = detour;
+        let error = build_route_file_course(&against, &ways, None).unwrap_err();
+        assert!(error.contains("one-way"), "{error}");
+        // 회전교차로 태그만 있어도 정방향 일방통행으로 본다.
+        let roundabout = parse(ladder(&[("junction", "roundabout")], false));
+        let backward = plan_route_detailed(&roundabout, None, "s", &[east, west], &config).unwrap();
+        assert!(
+            backward.file.nodes.contains(&20),
+            "{:?}",
+            backward.file.nodes
+        );
+    }
+
+    /// 회전 제한: J1에서 직진 금지(`no_straight_on`)나 좌회전만 허용(`only_left_turn`)이면 북쪽으로 돌아가고,
+    /// 제한 없이 만든 직통 경로는 제한이 있는 스냅샷으로 재생하면 거부된다.
+    #[test]
+    fn turn_restrictions_are_respected() {
+        let fixture = ladder(&[], false);
+        let plain = parse(fixture.clone());
+        let config = RoadGraphConfig::default();
+        let points = [at(-80.0, 0.0), at(200.0, 0.0)];
+        let direct = plan_route_detailed(&plain, None, "s", &points, &config).unwrap();
+        assert!(!direct.file.nodes.contains(&20), "{:?}", direct.file.nodes);
+        for (value, to) in [("no_straight_on", 201), ("only_left_turn", 202)] {
+            let json = fixtures::overpass_json_with(&fixture, &[(900, value, 200, 10, to)]);
+            let body = crate::world::osm_graph::parse_graph_full(&json).unwrap();
+            assert_eq!(body.restrictions.len(), 1, "{value}");
+            let planned =
+                plan_route_full(&body.ways, &body.restrictions, None, "s", &points, &config)
+                    .unwrap();
+            assert!(
+                planned.file.nodes.contains(&20),
+                "{value}: {:?}",
+                planned.file.nodes
+            );
+            let error =
+                build_route_file_course_full(&direct.file, &body.ways, &body.restrictions, None)
+                    .unwrap_err();
+            assert!(error.contains("turn restriction"), "{value}: {error}");
+        }
+        // 승용차 예외가 있거나 via가 way인 관계는 읽지 않는다.
+        let json = fixtures::overpass_json(&fixture).replace(
+            "]}",
+            r#",{"type":"relation","id":901,"members":[{"type":"way","ref":200,"role":"from"},{"type":"way","ref":202,"role":"via"},{"type":"way","ref":201,"role":"to"}],"tags":{"type":"restriction","restriction":"no_straight_on"}},{"type":"relation","id":902,"members":[{"type":"way","ref":200,"role":"from"},{"type":"node","ref":10,"role":"via"},{"type":"way","ref":201,"role":"to"}],"tags":{"type":"restriction","restriction":"no_straight_on","except":"motorcar"}}]}"#,
+        );
+        let body = crate::world::osm_graph::parse_graph_full(&json).unwrap();
+        assert!(body.restrictions.is_empty(), "{:?}", body.restrictions);
+    }
+
+    /// 우회: 직통로 가운데 교차로(노드 30)는 팔 사이 각이 좁아 만들 수 없으므로 그 교차로를 피해 북쪽으로 돌아간다.
+    #[test]
+    fn unbuildable_junctions_are_avoided() {
+        let ways = parse(ladder(&[], true));
+        let config = RoadGraphConfig::default();
+        let points = [at(-80.0, 0.0), at(200.0, 40.0)];
+        let planned = plan_route_detailed(&ways, None, "s", &points, &config).unwrap();
+        assert_eq!(planned.avoided, vec![30]);
+        assert!(planned.file.nodes.contains(&20), "{:?}", planned.file.nodes);
+        let result = follow_path(&planned.course.course, &planned.course.guide, 4.0);
+        assert_eq!(result.impacts, 0, "{result:?}");
+        // 돌아갈 길이 없으면 피한 교차로 수와 함께 실패한다.
+        let mut blocked = ladder(&[], true);
+        blocked.retain(|way| way.0 != 202);
+        let error = plan_route_detailed(&parse(blocked), None, "s", &points, &config).unwrap_err();
+        assert!(error.contains("no detour around 1"), "{error}");
+    }
+
+    /// 4-8 여수 스냅샷: 두 점만으로 큰 도로(일방통행 `primary`·`primary_link`)를 따라가는 경로가 생기고, 곁가지 형상이
+    /// 맞지 않는 교차로는 단순화되며, 경로 추종 조향기가 충돌 없이 끝 부근까지 간다. 예전 규칙으로는 경로가 없다.
+    #[test]
+    fn yeosu_two_points_follow_big_one_way_roads() {
+        let ways = real_snapshot();
+        let config = RoadGraphConfig::default();
+        let points = [
+            [34.752_844_4, 127.746_254_3],
+            [34.758_249_15, 127.748_446_4],
+        ];
+        let planned = plan_route_detailed(&ways, None, "snapshot", &points, &config).unwrap();
+        let used: BTreeSet<u64> = ways
+            .iter()
+            .filter(|way| {
+                way.nodes.windows(2).any(|p| {
+                    planned
+                        .file
+                        .nodes
+                        .windows(2)
+                        .any(|q| q == [p[0].id, p[1].id] || q == [p[1].id, p[0].id])
+                })
+            })
+            .filter(|way| route::travel(way) == Travel::Forward)
+            .map(|way| way.id)
+            .collect();
+        for way in [66_645_672, 128_379_958] {
+            assert!(used.contains(&way), "{used:?}");
+        }
+        assert_eq!(
+            planned.course.simplified,
+            vec![1_748_929_006, 1_418_972_591]
+        );
+        assert!(
+            planned
+                .course
+                .course
+                .notices
+                .iter()
+                .any(|n| n.contains("Simplified 2")),
+            "{:?}",
+            planned.course.course.notices
+        );
+        for speed in [2.0, 4.0] {
+            let result = follow_path(&planned.course.course, &planned.course.guide, speed);
+            assert_eq!(result.impacts, 0, "{speed} m/s: {result:?}");
+            assert!(result.remaining_m < 12.5, "{speed} m/s: {result:?}");
+        }
+        // 저장한 파일로 다시 만들면 같은 코스다.
+        let rebuilt = build_route_file_course(&planned.file, &ways, None).unwrap();
+        assert_eq!(rebuilt, planned.course);
+        let legacy = RoadGraphConfig {
+            allowed_highways: [
+                "service",
+                "pedestrian",
+                "residential",
+                "unclassified",
+                "tertiary",
+            ]
+            .map(str::to_owned)
+            .to_vec(),
+            nav_rules: false,
+            ..config
+        };
+        assert!(plan_route_detailed(&ways, None, "snapshot", &points, &legacy).is_err());
     }
 }

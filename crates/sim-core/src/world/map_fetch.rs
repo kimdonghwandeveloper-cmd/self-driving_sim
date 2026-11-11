@@ -120,10 +120,13 @@ impl Bbox {
         )
     }
 
-    /// Overpass 질의문(`way[highway](bbox); out body geom;`). `timeout_s`는 서버 쪽 시간 제한이다.
+    /// Overpass 질의문. `timeout_s`는 서버 쪽 시간 제한이다.
+    ///
+    /// 도로 way를 `out body geom`으로 받고, 그 way에 걸린 회전 제한 관계(`type=restriction`, PLAN 4-8)를
+    /// `out body`로 더 받는다.
     pub fn query(&self, timeout_s: u64) -> String {
         format!(
-            "[out:json][timeout:{timeout_s}];\nway[\"highway\"]({:.7},{:.7},{:.7},{:.7});\nout body geom;",
+            "[out:json][timeout:{timeout_s}];\nway[\"highway\"]({:.7},{:.7},{:.7},{:.7})->.roads;\n.roads out body geom;\nrel(bw.roads)[\"type\"=\"restriction\"];\nout body;",
             self.south, self.west, self.north, self.east
         )
     }
@@ -848,7 +851,7 @@ mod tests {
         assert!((1150.0..1300.0).contains(&north_south), "{north_south}");
         assert_eq!(
             bbox.query(90),
-            "[out:json][timeout:90];\nway[\"highway\"](34.7480000,127.7460000,34.7590000,127.7600000);\nout body geom;"
+            "[out:json][timeout:90];\nway[\"highway\"](34.7480000,127.7460000,34.7590000,127.7600000)->.roads;\n.roads out body geom;\nrel(bw.roads)[\"type\"=\"restriction\"];\nout body;"
         );
         assert_eq!(
             bbox.cache_name(),

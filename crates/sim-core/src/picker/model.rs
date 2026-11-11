@@ -10,7 +10,7 @@ use glam::Vec2;
 
 use super::tiles;
 use crate::world::map::LatLon;
-use crate::world::osm_graph::OsmGraphWay;
+use crate::world::osm_graph::{OsmGraphWay, TurnRestriction};
 use crate::world::road_snapshot::Connectivity;
 use crate::world::route_plan::{self, PlannedRoute, RoadGraphConfig, WidthSource};
 
@@ -24,7 +24,7 @@ pub struct RoadSegment {
     pub from: Vec2,
     /// 끝점.
     pub to: Vec2,
-    /// 경로 탐색에 쓰는 도로(허용 종류·양방향)인지.
+    /// 경로 탐색에 쓰는 도로(허용 종류이고 탐색할 수 있는 방향이 있음)인지.
     pub usable: bool,
 }
 
@@ -37,6 +37,8 @@ pub struct PickerModel {
     pub ways: Vec<OsmGraphWay>,
     /// 경계 연결 정보(Geofabrik 추출). Overpass 스냅샷이면 `None`(연결 검증 정보 없음).
     pub connectivity: Option<Connectivity>,
+    /// 회전 제한(PLAN 4-8). 관계를 받지 않은 스냅샷이면 비어 있다.
+    pub restrictions: Vec<TurnRestriction>,
     /// 경로 계획 설정.
     pub config: RoadGraphConfig,
     /// 스냅샷 도로 범위의 가운데.
@@ -69,12 +71,12 @@ impl PickerModel {
             lat: (low[0] + high[0]) / 2.0,
             lon: (low[1] + high[1]) / 2.0,
         };
-        let allowed: Vec<&str> = config.allowed_highways.iter().map(String::as_str).collect();
+        let allowed: std::collections::BTreeSet<&str> =
+            config.allowed_highways.iter().map(String::as_str).collect();
         let segments = ways
             .iter()
             .flat_map(|way| {
-                let usable = way.highway().is_some_and(|kind| allowed.contains(&kind))
-                    && !crate::world::route::is_oneway(way);
+                let usable = route_plan::searchable(way, &allowed, config.nav_rules);
                 way.nodes.windows(2).map(move |pair| RoadSegment {
                     from: tiles::to_view(pair[0].pos),
                     to: tiles::to_view(pair[1].pos),
@@ -86,6 +88,7 @@ impl PickerModel {
             snapshot_path,
             ways,
             connectivity: None,
+            restrictions: Vec::new(),
             config,
             origin,
             segments,
@@ -97,6 +100,12 @@ impl PickerModel {
     /// 경계 연결 정보를 붙인다. 이후 경로 계산은 이 정보로 경계 연결 검사를 한다.
     pub fn with_connectivity(mut self, connectivity: Option<Connectivity>) -> Self {
         self.connectivity = connectivity;
+        self
+    }
+
+    /// 회전 제한을 붙인다. 이후 경로 계산은 이 제한을 지킨다.
+    pub fn with_restrictions(mut self, restrictions: Vec<TurnRestriction>) -> Self {
+        self.restrictions = restrictions;
         self
     }
 
@@ -175,8 +184,9 @@ impl PickerModel {
     /// 점이 2개 이상이면 경로를 다시 계산한다.
     fn recompute(&mut self) {
         self.planned = (self.points.len() >= 2).then(|| {
-            route_plan::plan_route_detailed(
+            route_plan::plan_route_full(
                 &self.ways,
+                &self.restrictions,
                 self.connectivity.as_ref(),
                 "",
                 &self.points,
@@ -203,6 +213,11 @@ impl PickerModel {
             ),
             None => "Road data: no boundary connectivity record (Overpass snapshot)".to_owned(),
         });
+        lines.push(if self.restrictions.is_empty() {
+            "Turn restrictions: none in this snapshot".to_owned()
+        } else {
+            format!("Turn restrictions: {} applied", self.restrictions.len())
+        });
         match &self.planned {
             None => lines.push("Click at least 2 points on the roads (start, end)".to_owned()),
             Some(Ok(planned)) => {
@@ -212,6 +227,18 @@ impl PickerModel {
                     planned.length_m,
                     planned.course.junctions.len()
                 ));
+                if !planned.course.simplified.is_empty() {
+                    lines.push(format!(
+                        "Simplified {} intersection(s): side roads with unsupported shapes are not drawn",
+                        planned.course.simplified.len()
+                    ));
+                }
+                if !planned.avoided.is_empty() {
+                    lines.push(format!(
+                        "Detour: avoided {} intersection(s) that cannot be built",
+                        planned.avoided.len()
+                    ));
+                }
                 lines.push(format!(
                     "Width: {:.1} m ({})",
                     file.width_m, file.width_source
@@ -441,13 +468,23 @@ mod tests {
         );
         let ways =
             parse_overpass_graph(&fixtures::overpass_json(&fixtures::narrow_arms())).unwrap();
-        let mut junction =
-            PickerModel::new(PathBuf::from("f.json"), ways, RoadGraphConfig::default()).unwrap();
-        let origin = junction.to_view(fixtures::offset(0.0, 0.0));
-        junction.add_point(origin + Vec2::new(-40.0, 0.0));
-        junction.add_point(origin + Vec2::new(40.0, 0.0));
-        let lines = junction.status_lines().join("\n");
-        assert!(lines.contains("Intersection rejected"), "{lines}");
+        // 예전 규칙은 좁은 팔 교차로를 거부하고, 4-8 규칙은 곧게 지나는 그 교차로를 단순화한다.
+        let legacy = RoadGraphConfig {
+            nav_rules: false,
+            ..RoadGraphConfig::default()
+        };
+        for (config, expected) in [
+            (legacy, "Intersection rejected"),
+            (RoadGraphConfig::default(), "Simplified 1 intersection"),
+        ] {
+            let mut junction =
+                PickerModel::new(PathBuf::from("f.json"), ways.clone(), config).unwrap();
+            let origin = junction.to_view(fixtures::offset(0.0, 0.0));
+            junction.add_point(origin + Vec2::new(-40.0, 0.0));
+            junction.add_point(origin + Vec2::new(40.0, 0.0));
+            let lines = junction.status_lines().join("\n");
+            assert!(lines.contains(expected), "{lines}");
+        }
         assert!(describe_error("bend is too sharp").starts_with("Turn the vehicle cannot make"));
         assert!(describe_error("no road path").starts_with("Route error"));
     }

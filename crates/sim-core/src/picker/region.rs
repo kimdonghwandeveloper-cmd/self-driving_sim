@@ -57,8 +57,12 @@ pub fn load_model(
 ) -> Result<(PickerModel, Option<String>), String> {
     let snapshot = road_snapshot::load_road_snapshot(graph_path)?;
     let (config, warning) = load_road_graph_config(config_path);
-    PickerModel::new(graph_path.to_path_buf(), snapshot.ways, config)
-        .map(|model| (model.with_connectivity(snapshot.connectivity), warning))
+    PickerModel::new(graph_path.to_path_buf(), snapshot.ways, config).map(|model| {
+        let model = model
+            .with_connectivity(snapshot.connectivity)
+            .with_restrictions(snapshot.restrictions);
+        (model, warning)
+    })
 }
 
 /// 캐시 폴더에서 이미 받은 범위 목록을 읽는다(`bbox_<남>_<서>_<북>_<동>` 폴더 중 최신 세대가 있는 것).

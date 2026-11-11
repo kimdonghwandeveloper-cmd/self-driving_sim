@@ -5,6 +5,9 @@
 //! ID와 좌표 개수가 맞지 않는 자료, 빠진 노드가 있는 자료는 오류로 거부한다.
 //!
 //! 교차로 판정(차수 3 이상)은 이 단계에서 자료 검증용으로만 쓴다. 교차로 형상 생성은 PLAN 4-2에서 한다.
+//!
+//! 회전 제한(PLAN 4-8): 본문에 `type=restriction` 관계가 있으면 from(way)·via(노드)·to(way)가 하나씩인 것만
+//! [`TurnRestriction`]으로 읽는다. via가 way인 것, 역할이 모자라거나 남는 것, 승용차 예외(`except`)가 있는 것은 건너뛴다.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -52,7 +55,7 @@ struct GraphResponse {
     elements: Vec<GraphElement>,
 }
 
-/// Overpass 요소. way가 아니면 무시한다.
+/// Overpass 요소. way·관계가 아니면 무시한다.
 #[derive(Debug, Deserialize)]
 struct GraphElement {
     #[serde(rename = "type")]
@@ -65,6 +68,49 @@ struct GraphElement {
     geometry: Vec<Option<LatLon>>,
     #[serde(default)]
     tags: BTreeMap<String, String>,
+    /// 관계의 구성원(`out body`). way에는 없다.
+    #[serde(default)]
+    members: Vec<GraphMember>,
+}
+
+/// 관계 구성원.
+#[derive(Debug, Deserialize)]
+struct GraphMember {
+    /// `node`·`way`·`relation`.
+    #[serde(rename = "type")]
+    kind: String,
+    /// 구성원 ID.
+    #[serde(rename = "ref")]
+    id: u64,
+    /// 역할(`from`·`via`·`to` 등).
+    #[serde(default)]
+    role: String,
+}
+
+/// 회전 제한 하나(via가 노드인 것만). `from_way`로 `via_node`에 들어와 `to_way`로 나가는 회전을 제한한다.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TurnRestriction {
+    /// 관계 ID.
+    pub id: u64,
+    /// 들어오는 way ID.
+    pub from_way: u64,
+    /// 회전하는 노드 ID.
+    pub via_node: u64,
+    /// 나가는 way ID.
+    pub to_way: u64,
+    /// `true`면 `only_*`(이 회전만 허용), `false`면 `no_*`(이 회전 금지).
+    pub only: bool,
+}
+
+/// 본문에서 읽은 도로 자료.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GraphBody {
+    /// 본문을 만든 프로그램(`generator`).
+    pub generator: Option<String>,
+    /// 노드 ID·태그를 보존한 way.
+    pub ways: Vec<OsmGraphWay>,
+    /// 회전 제한. 관계를 받지 않은 본문(기존 스냅샷·Geofabrik 추출)은 비어 있다.
+    pub restrictions: Vec<TurnRestriction>,
 }
 
 /// `out body geom` Overpass JSON에서 노드 ID·좌표·태그를 보존한 way 목록을 읽는다.
@@ -89,9 +135,65 @@ pub fn parse_overpass_graph(json: &str) -> Result<Vec<OsmGraphWay>, String> {
 
 /// 본문의 `generator` 값과 way 목록을 읽는다(출처 확인 없이). 검사 규칙은 [`parse_overpass_graph`]와 같다.
 pub fn parse_graph_body(json: &str) -> Result<(Option<String>, Vec<OsmGraphWay>), String> {
+    parse_graph_full(json).map(|body| (body.generator, body.ways))
+}
+
+/// 관계(`type=restriction`)에서 회전 제한을 읽는다. 읽을 수 없는 관계는 `None`이다(건너뜀).
+fn turn_restriction(element: &GraphElement) -> Option<TurnRestriction> {
+    if element.tags.get("type").map(String::as_str) != Some("restriction") {
+        return None;
+    }
+    // 승용차에 적용되지 않거나(`except`에 motorcar) 승용차 전용이 아닌 제한(`restriction:hgv` 등)은 건너뛴다.
+    if element
+        .tags
+        .get("except")
+        .is_some_and(|except| except.split(';').any(|v| v.trim() == "motorcar"))
+    {
+        return None;
+    }
+    let value = element
+        .tags
+        .get("restriction")
+        .or_else(|| element.tags.get("restriction:motorcar"))?;
+    let only = if value.starts_with("only_") {
+        true
+    } else if value.starts_with("no_") {
+        false
+    } else {
+        return None;
+    };
+    let pick = |role: &str, kind: &str| {
+        let found: Vec<&GraphMember> = element
+            .members
+            .iter()
+            .filter(|member| member.role == role)
+            .collect();
+        match found[..] {
+            [member] if member.kind == kind => Some(member.id),
+            _ => None,
+        }
+    };
+    Some(TurnRestriction {
+        id: element.id,
+        from_way: pick("from", "way")?,
+        via_node: pick("via", "node")?,
+        to_way: pick("to", "way")?,
+        only,
+    })
+}
+
+/// 본문의 `generator`·way·회전 제한을 읽는다. way 검사 규칙은 [`parse_overpass_graph`]와 같다.
+pub fn parse_graph_full(json: &str) -> Result<GraphBody, String> {
     let response: GraphResponse =
         serde_json::from_str(json).map_err(|error| format!("invalid Overpass JSON: {error}"))?;
     let generator = response.generator;
+    let mut restrictions: Vec<TurnRestriction> = response
+        .elements
+        .iter()
+        .filter(|e| e.kind == "relation")
+        .filter_map(turn_restriction)
+        .collect();
+    restrictions.sort_by_key(|r| r.id);
     let mut ways = Vec::new();
     for element in response.elements.into_iter().filter(|e| e.kind == "way") {
         let id = element.id;
@@ -131,7 +233,11 @@ pub fn parse_graph_body(json: &str) -> Result<(Option<String>, Vec<OsmGraphWay>)
     if ways.is_empty() {
         return Err("the response contains no ways".to_string());
     }
-    Ok((generator, ways))
+    Ok(GraphBody {
+        generator,
+        ways,
+        restrictions,
+    })
 }
 
 /// 허용한 `highway` 종류의 way만으로 노드 ID별 연결 차수를 센다.
@@ -205,6 +311,30 @@ pub mod fixtures {
             })
             .collect();
         format!("{{\"elements\":[{}]}}", elements.join(","))
+    }
+
+    /// 합성 회전 제한: (관계 ID, `restriction` 값, from way, via 노드, to way).
+    pub type FixtureRestriction<'a> = (u64, &'a str, u64, u64, u64);
+
+    /// [`overpass_json`]에 회전 제한 관계를 더한 Overpass JSON 문자열을 만든다.
+    pub fn overpass_json_with(ways: &[FixtureWay], restrictions: &[FixtureRestriction]) -> String {
+        let base = overpass_json(ways);
+        let relations: Vec<String> = restrictions
+            .iter()
+            .map(|(id, value, from, via, to)| {
+                format!(
+                    "{{\"type\":\"relation\",\"id\":{id},\"members\":[{{\"type\":\"way\",\"ref\":{from},\"role\":\"from\"}},{{\"type\":\"node\",\"ref\":{via},\"role\":\"via\"}},{{\"type\":\"way\",\"ref\":{to},\"role\":\"to\"}}],\"tags\":{{\"type\":\"restriction\",\"restriction\":\"{value}\"}}}}"
+                )
+            })
+            .collect();
+        if relations.is_empty() {
+            return base;
+        }
+        format!(
+            "{},{}]}}",
+            base.strip_suffix("]}").unwrap(),
+            relations.join(",")
+        )
     }
 
     /// 중심 (cx, cn), 반경 r(m)의 원호를 시작각 a0부터 a1까지(도, 동쪽 0°·반시계) `steps`조각으로 나눈
@@ -363,7 +493,7 @@ pub mod fixtures {
         ]
     }
 
-    /// 일방통행 팔: T자 교차로의 남쪽 팔이 `oneway=yes`다. 1차 판에서는 거부 대상.
+    /// 일방통행 팔: T자 교차로의 남쪽 팔이 `oneway=yes`다. 1차 판에서는 거부했고, 4-8부터 곁가지로 만든다.
     pub fn oneway_arm() -> Vec<FixtureWay<'static>> {
         vec![
             (
