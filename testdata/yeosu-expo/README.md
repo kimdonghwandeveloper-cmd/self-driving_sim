@@ -1,5 +1,8 @@
 # 여수 엑스포해양공원 일대 OSM 조사 자료
 
+> **자동 시험 전용(PLAN 4-11, 2026-11-12):** 예전에는 `assets/maps/yeosu-expo`에서 메뉴 코스로 썼다. 전국 지도 자료로 바꾸면서
+> 제품(메뉴·코스 목록)에서는 빼고 시험 자료로만 남겼다.
+
 > © OpenStreetMap contributors. 이 폴더의 데이터는 [ODbL 1.0](https://opendatacommons.org/licenses/odbl/1-0/)을 따른다.
 > 저작권·라이선스 상세: https://www.openstreetmap.org/copyright
 > 출처 표기와 라이선스 방침은 [`docs/map-data.md`](../../docs/map-data.md)에 있다.
