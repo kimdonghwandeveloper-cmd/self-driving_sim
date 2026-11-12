@@ -167,14 +167,18 @@ pub fn junction_shape(
         boundary.extend(line.iter().copied());
         corners.push(line);
     }
-    // 별 모양 검사: 중심과 이웃한 두 경계점이 이루는 삼각형이 모두 반시계여야 한다.
+    // 모서리가 이어지는 곳(앞 모서리 끝 = 다음 모서리 처음)이나 처음·끝이 겹친 점은 하나만 남긴다.
+    boundary.dedup_by(|q, p| p.distance(*q) <= 1.0e-4);
+    while boundary.len() > 1 && boundary[0].distance(boundary[boundary.len() - 1]) <= 1.0e-4 {
+        boundary.pop();
+    }
+    // 별 모양 검사: 중심과 이웃한 두 경계점이 이루는 삼각형이 모두 반시계여야 한다. 코스 형상 계약
+    // ([`super::course::CourseDef::validate`])과 같이 0(일직선)도 거부한다. 처음에는 −1e-4까지 허용해, 계획은 되는데
+    // 저장 경로를 열 때 형상 검사에 걸리는 교차로가 있었다(PLAN 4-11 2단계 긴 경로 측정).
     let m = boundary.len();
     for k in 0..m {
         let (p, q) = (boundary[k], boundary[(k + 1) % m]);
-        if p.distance(q) <= 1.0e-4 {
-            continue;
-        }
-        if cross(p - center, q - center) < -1.0e-4 {
+        if (p - center).perp_dot(q - center) <= 0.0 {
             return Err(format!(
                 "junction at ({:.1}, {:.1}) is not star-shaped near ({:.1}, {:.1})",
                 center.x, center.y, p.x, p.y

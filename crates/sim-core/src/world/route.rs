@@ -621,6 +621,21 @@ pub fn build_route_course_detailed(
         ROUTE_MAX_EXTENT_M,
     )?;
     course.goal = Some(map::goal_pose(&last_piece)?);
+    // 화면이 코스를 열 때 하는 형상 계약 검사를 여기서도 해, 계획은 되는데 저장 경로를 열 수 없는 일이 없게 한다.
+    // 교차로 면이 걸리면 그 교차로를 원인으로 돌려줘 경로 계획이 피하게 한다.
+    if let Err(error) = course.validate() {
+        let message = format!("course shape check failed: {error}");
+        return Err(match error {
+            super::course::ShapeError::FanNotVisible { index, .. }
+            | super::course::ShapeError::TooFewBoundaryPoints { index, .. } => {
+                match junction_ids.get(index) {
+                    Some(&node) => BuildFailure::at(node, message),
+                    None => message.into(),
+                }
+            }
+            _ => message.into(),
+        });
+    }
     Ok(RouteCourse {
         course,
         guide,
