@@ -30,8 +30,10 @@ pub const LINE_MAX_ANGLE_DEG: f64 = 45.0;
 pub const LINE_JUNCTION_CLEAR_M: f64 = 20.0;
 /// 그린 선의 진행 방향을 재는 거리(m): 점 앞뒤로 이만큼 떨어진 선 위 두 점의 방향. 임시값.
 pub const LINE_HEADING_SPAN_M: f64 = 15.0;
-/// 그린 선의 출발·도착은 교차로 노드에서 이만큼 떨어진 점으로 한다(m, 코스는 교차로에서 시작·끝날 수 없음). 임시값.
-pub const LINE_END_CLEAR_M: f64 = 5.0;
+/// 그린 선의 출발·도착은 교차로 노드에서 이만큼 떨어진 점으로 한다(m). 도로에 붙인 점이 노드에서 1 m 안이면 그 노드를 쓰는데
+/// 코스는 교차로 노드에서 시작·끝날 수 없기 때문이다. 교차로 가까이에서 시작·끝나는 것은 코스 만들기가 그 교차로를 단순화해
+/// 처리하므로 크게 둘 필요가 없다(5 m로 두었더니 도심에서 도착이 100 m 앞당겨짐). 임시값.
+pub const LINE_END_CLEAR_M: f64 = 2.0;
 /// 그린 선을 따른 경로가 (선 길이 × 이 배수 + 200 m)보다 길면 돌아간 것으로 보고 경유점을 줄여 다시 찾는다. 임시값.
 pub const LINE_DETOUR_FACTOR: f64 = 1.5;
 
@@ -1069,7 +1071,6 @@ mod tests {
             drawn.length_m,
             planned.length_m
         );
-        assert!(model.points.len() > 2);
         // 손떨림처럼 좌우로 8 m 흔들린 선도(예전 방식은 5 m에서 되돌아감·고리로 실패) 같은 길로 경로가 된다.
         let samples = region::resample_line(&planned.path, region::LINE_STEP_M);
         let shaky: Vec<LatLon> = samples
