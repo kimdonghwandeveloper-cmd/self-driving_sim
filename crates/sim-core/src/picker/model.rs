@@ -148,6 +148,24 @@ impl PickerModel {
         Ok(())
     }
 
+    /// 전국 검색 결과(이름, 위치)를 가장 가까운 탐색 가능 도로 위 점(4-9 진입 지점 규칙)으로 끝에 더하고 경로를 다시
+    /// 계산한다. 도로에서 너무 멀면 오류이고 점은 그대로다.
+    pub fn add_named_point(&mut self, name: &str, at: LatLon) -> Result<(), String> {
+        let place = Place {
+            id: String::new(),
+            name: name.to_owned(),
+            kind: String::new(),
+            outline: Vec::new(),
+            center: at,
+            entrances: Vec::new(),
+        };
+        let access = places::access_point(&place, &self.ways, &self.config)?;
+        self.points.push([access.lat, access.lon]);
+        self.labels.push(name.to_owned());
+        self.recompute();
+        Ok(())
+    }
+
     /// 경계 연결 정보를 붙인다. 이후 경로 계산은 이 정보로 경계 연결 검사를 한다.
     pub fn with_connectivity(mut self, connectivity: Option<Connectivity>) -> Self {
         self.connectivity = connectivity;
@@ -638,5 +656,26 @@ mod tests {
         assert_eq!(model.labels, ["시험 도서관 (합성)"]);
         model.add_point(center);
         assert_eq!(model.labels, ["시험 도서관 (합성)", ""]);
+    }
+
+    /// 전국 검색 결과는 가까운 도로 위 점으로 이름과 함께 더해지고, 도로에서 먼 곳은 거부된다.
+    #[test]
+    fn search_hits_become_named_points_on_roads() {
+        let mut model = yeosu();
+        let gym = {
+            let path = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."))
+                .join("assets/maps/yeosu-expo/places-synthetic.osm.json");
+            let list = places::load_places(&path).unwrap();
+            let index = places::search(&list, "체육관")[0];
+            list[index].center
+        };
+        model.add_named_point("여수 체육관", gym).unwrap();
+        assert_eq!(model.labels, ["여수 체육관"]);
+        let far = LatLon {
+            lat: gym.lat + 0.05,
+            lon: gym.lon,
+        };
+        assert!(model.add_named_point("먼 곳", far).is_err());
+        assert_eq!(model.points.len(), 1, "failed hit must not add a point");
     }
 }

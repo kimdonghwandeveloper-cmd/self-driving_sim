@@ -77,6 +77,21 @@ func _run() -> void:
 	map._search_places("없는 이름")
 	_check(map.place_results.disabled and map.feedback.contains("없습니다"), "빈 검색 결과 안내: " + map.feedback)
 	_check(int(picker.call("place_at", center + Vector2(5000, 5000))) == -1, "빈 곳이 장소로 잡힘")
+
+	# 전국 검색(4-10): 헤드리스는 네트워크가 꺼져 있어 저장한 결과가 없으면 실패 안내가 와야 한다.
+	map._search_submitted("저장되지 않은 시험 검색어 4-10")
+	_check(map.search_request != 0, "전국 검색 요청이 시작되지 않음: " + map.feedback)
+	for i in range(200):
+		await process_frame
+		if map.search_request == 0:
+			break
+	_check(map.search_request == 0 and map.feedback.contains("네트워크"), "오프라인 전국 검색 실패 안내: " + map.feedback)
+	# 열린 지역 밖 전국 결과를 고르면 그 위치로 지도를 옮기고 도로 받기를 안내한다.
+	var away: Vector2 = map.opened_region.get_center() + Vector2(5000, 0)
+	map._pick_area_result({"source": "area", "index": 0, "view": away})
+	_check(map.camera.position.distance_to(away) < 1.0 and map.feedback.contains("옮겼습니다"), "전국 결과로 지도 옮기기: " + map.feedback)
+	# 바깥은 바다색으로 덮는다.
+	_check(map.MASK_COLOR == Color("aad3df"), "바깥 덮는 색이 바다색이 아님")
 	_finish(map)
 
 
@@ -84,7 +99,7 @@ func _run() -> void:
 func _finish(map: Node) -> void:
 	map.free()
 	if failures.is_empty():
-		print("PLACE PICK OK: 장소 윤곽 3개 · 이름 검색으로 출발 · 건물 클릭으로 도착 · 경로 계산 · 출발·도착 안내")
+		print("PLACE PICK OK: 장소 윤곽 3개 · 이름 검색으로 출발 · 건물 클릭으로 도착 · 경로 계산 · 출발·도착 안내 · 전국 검색 오프라인 안내·지도 옮기기")
 		quit(0)
 	else:
 		for message in failures:

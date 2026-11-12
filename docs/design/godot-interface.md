@@ -1,4 +1,4 @@
-# Godot ↔ Rust 인터페이스 계약 (v1.5)
+# Godot ↔ Rust 인터페이스 계약 (v1.6)
 
 작성: 2026-11-08 Claude 초안, 2026-11-09 v1 고정(Codex가 동의한 v0.2와 Codex 추가 요청 2건 반영).
 목적: Claude(Rust, `crates/`)와 Codex(Godot, `godot/`)가 동시에 개발할 때 서로 기다리지 않도록
@@ -15,6 +15,7 @@ Godot에 노출할 클래스·메서드·시그널·좌표 규칙·실패 처리
 | v1.3 | 항목 추가(기존 이름·인자 변경 없음, 2026-11-10 Claude, GD-5 Bevy 앱 제거 사용자 결정): `SimVehicle.calibration_lines()`(2절, Bevy 앱에서 옮긴 2-5 보정 측정. 주행 결과에는 영향 없음). Bevy 앱이 없어져 `sim-core` 문구가 영어인 이유는 시험과 개발 명령(`sim-tools`) 공용이다 |
 | v1.4 | 항목 추가(기존 이름·인자 변경 없음, 2026-11-10 Claude, Phase 5-1 시나리오 틀): `SimVehicle.scenario` 속성, `scenario_control()`·`scenario_status()`, 시나리오 시그널 4개(2절 2-1), `SimScenario.scenario_files()`(3-2). 시나리오 파일 형식은 `docs/scenarios.md` |
 | v1.5 | 항목 추가(기존 이름·인자 변경 없음, 2026-11-11 Claude, PLAN 4-8 자동 경로·4-9 건물·장소): `SimRoutePicker.request_places()`·`load_places_file()`·`place_outlines()`·`place_at()`·`search_places()`·`add_place()`·`point_labels()`, `poll()` 이벤트 `places_loaded`(7-2). 경로 계산 규칙 변경(일방통행·회전 제한·우회·교차로 단순화)은 `route()`·`status_lines()` 형식을 바꾸지 않는다. ※ `feature/phase5-scenarios`도 v1.5를 쓰므로 나중에 병합하는 쪽을 v1.6으로 올린다 |
+| v1.6 | 항목 추가(기존 이름·인자 변경 없음, 2026-11-12 Claude, PLAN 4-10 전국 장소 검색): `SimRoutePicker.search_nationwide()`·`add_search_hit()`, `poll()` 이벤트 `search_results`(7-2). ※ `feature/phase5-scenarios`(v1.5)를 나중에 병합하면 그쪽을 v1.7로 올린다 |
 
 > GD-5(v1.3)에서 Bevy 앱을 지웠다. 본문의 "Bevy 판과 같음"·Bevy 파일 경로는 계약을 정할 때의 기준을 기록한 것이며, 그 규칙은 지금 `sim-core`에 있다.
 
@@ -341,7 +342,7 @@ Bevy 판 `src/picker/`(4-5·4-5b)의 계산·캐시·받기 부분은 Bevy와 �
 | `view_to_latlon(view: Vector2)` | `PackedFloat64Array` | 지도 좌표를 `[lat, lon]`으로. Bevy 판 투영(`tiles::to_view`)의 역변환. 값이 유한하지 않거나 메르카토르 유효 위도(±85.05112878°) 밖이면 **빈 배열**(Godot은 받기 버튼을 끈다) |
 | `request_region(center_latlon: PackedFloat64Array)` | `{ok, error, request_id: int}` | 가운데 1.5 × 1.5 km 받기 시작(이미 받은 범위면 캐시만). 백그라운드 처리. 받는 중이면 `ok=false, error="already loading"`, `request_id` 0 |
 | `cancel_region()` | 없음 | 받는 중인 요청 취소. 취소·이전 요청의 결과는 버린다 |
-| `poll()` | `Array[Dictionary]` | 진행 이벤트 `{type: "progress"|"region_loaded"|"failed", message: String, request_id: int}`. 매 프레임 호출. (v1.5) 장소 받기는 `places_loaded` |
+| `poll()` | `Array[Dictionary]` | 진행 이벤트 `{type: "progress"|"region_loaded"|"failed", message: String, request_id: int}`. 매 프레임 호출. (v1.5) 장소 받기는 `places_loaded`. (v1.6) 전국 검색은 `{type: "search_results", ok: bool, message, request_id, results: Array[Dictionary]}`(`results` 항목은 `{index, name, address, kind, view: Vector2}`, 실패면 빈 배열이고 `message`는 한국어) |
 | `road_segments()` | `PackedVector2Array` | 그릴 도로 선분(짝수 개: from, to 반복), 지도 좌표 |
 | `road_usable()` | `PackedByteArray` | 선분별 경로 탐색 가능 여부(1/0) |
 | `add_point(view: Vector2)` | 없음 | 점 추가 |
@@ -359,6 +360,8 @@ Bevy 판 `src/picker/`(4-5·4-5b)의 계산·캐시·받기 부분은 Bevy와 �
 | (v1.5) `search_places(text: String)` | `Array[Dictionary]` | 이름 포함 검색(대소문자 무시, 짧은 이름 순, 최대 20개) `{index: int, name: String, kind: String}`. 빈 검색어는 빈 배열 |
 | (v1.5) `add_place(index: int)` | `{ok, error}` | 장소의 진입 지점(출입구, 없으면 윤곽에서 가장 가까운 탐색 가능 도로 위 점, 100 m 이내)을 점으로 끝에 더하고 경로를 다시 계산. 실패하면 점은 그대로이고 `error`는 한국어 |
 | (v1.5) `point_labels()` | `PackedStringArray` | 점마다 표시 이름(장소로 고른 점은 장소 이름, 그냥 찍은 점은 빈 문자열). `points()`와 길이가 같다. 저장한 경로 파일의 `point_labels`(표시용) |
+| (v1.6) `search_nationwide(text: String)` | `{ok, error, request_id: int}` | Nominatim 전국 장소 검색 시작(4-10). Enter·검색 버튼에서만 부른다(입력 중 자동완성 금지). 같은 검색어는 `cache/geocode` 저장분을 쓰고, `network=false`면 저장분만. 검색 중이면 `error="이미 검색 중입니다"`. 결과는 `poll()`의 `search_results` |
+| (v1.6) `add_search_hit(index: int)` | `{ok, error}` | 마지막 전국 검색 결과 `index`를 가장 가까운 탐색 가능 도로 위 점(100 m 이내)으로 이름과 함께 끝에 더하고 경로를 다시 계산. 열린 지역이 없거나 도로에서 멀면 실패(`error` 한국어) |
 
 - 점 편집 함수는 경로를 **동기로** 다시 계산한다(함수 안에서 끝남). 계산이 실패하면 이전 경로를 내보내지 않는다.
 - `request_region` 결과: 실패하면 기존 지역·점·경로를 그대로 둔다. 성공하면 지역을 **교체**하고 점·경로를 비운다(Bevy 판과 같음).

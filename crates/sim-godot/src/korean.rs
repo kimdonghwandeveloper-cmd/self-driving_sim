@@ -64,6 +64,20 @@ pub fn course_notice(notice: &str) -> String {
     notice.to_owned()
 }
 
+/// 전국 장소 검색(4-10) 오류를 한국어로 바꾼다. 모르는 오류는 앞에 "전국 검색 실패:"를 붙여 그대로 둔다.
+pub fn search_error(error: &str) -> String {
+    if error == "this search is not saved and the network is off" {
+        return "전국 검색: 네트워크가 꺼져 있고 저장한 결과도 없습니다".to_owned();
+    }
+    if error == "empty search text" {
+        return "검색어를 입력하세요".to_owned();
+    }
+    if let Some(status) = error.strip_prefix("the place search server answered ") {
+        return format!("전국 검색 서버가 응답 코드 {status}로 거절했습니다(잠시 뒤 다시 시도)");
+    }
+    format!("전국 검색 실패: {error}")
+}
+
 /// 경로 선택 화면 안내·경고·경로 오류 한 줄을 한국어로 바꾼다.
 pub fn picker_line(line: &str) -> String {
     if let Some(count) = line.strip_prefix("Points: ") {
@@ -402,6 +416,16 @@ mod tests {
     }
 
     /// 시나리오 단계·끝난 방식이 모두 한국어로 바뀌는지 확인한다.
+    /// 전국 검색 오류는 아는 것만 한국어로 바꾸고 나머지는 앞말을 붙인다.
+    #[test]
+    fn search_errors_translate() {
+        assert!(
+            search_error("this search is not saved and the network is off").contains("네트워크")
+        );
+        assert!(search_error("the place search server answered 429").contains("429"));
+        assert_eq!(search_error("boom"), "전국 검색 실패: boom");
+    }
+
     #[test]
     fn scenario_phase_translates() {
         assert_eq!(scenario_phase(Phase::Briefing), "시작 전");
