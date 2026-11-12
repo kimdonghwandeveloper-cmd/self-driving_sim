@@ -37,7 +37,18 @@ pub fn course_notice(notice: &str) -> String {
         "Virtual training course from OSM centerline (not a surveyed road)" => {
             return "OSM 중심선으로 만든 가상 교육 코스입니다(실측 도로 아님)".to_owned();
         }
+        "One-way and divided roads are drawn as a single carriageway (not the real lane layout)" => {
+            return "일방통행·왕복 분리 도로는 한 줄 도로로 그립니다(실제 차로 구성 아님)"
+                .to_owned();
+        }
         _ => {}
+    }
+    if let Some(count) = between(
+        notice,
+        "Simplified ",
+        " intersection(s): side roads with unsupported shapes are not drawn",
+    ) {
+        return format!("교차로 {count}곳 단순화: 형상을 지원하지 않는 곁가지는 그리지 않습니다");
     }
     if let Some(rest) = notice.strip_prefix("Road width ") {
         if let Some((width, source)) = split_once_between(rest, " m is a temporary value (", ")") {
@@ -69,6 +80,37 @@ pub fn picker_line(line: &str) -> String {
         return format!(
             "도로 자료: Geofabrik 추출, 경계 연결 확인됨(가장자리 미완성 노드 {count}개)"
         );
+    }
+    if line == "Turn restrictions: none in this snapshot" {
+        return "회전 제한: 이 스냅샷에 없음".to_owned();
+    }
+    if let Some(count) = between(line, "Turn restrictions: ", " applied") {
+        return format!("회전 제한: {count}개 반영");
+    }
+    if let Some(count) = between(
+        line,
+        "Detour: avoided ",
+        " intersection(s) that cannot be built",
+    ) {
+        return format!("우회: 만들 수 없는 교차로 {count}곳을 피해 감");
+    }
+    if line.starts_with("Simplified ") {
+        return course_notice(line);
+    }
+    if line == "Places: not loaded" {
+        return "건물·장소: 받지 않음(\"건물·장소 받기\")".to_owned();
+    }
+    if let Some(count) = between(line, "Places: ", " (click a building or search by name)") {
+        return format!("건물·장소: {count}곳(건물 클릭 또는 이름 검색)");
+    }
+    for (english, korean) in [
+        ("Start: ", "출발: "),
+        ("End: ", "도착: "),
+        ("Via: ", "경유: "),
+    ] {
+        if let Some(name) = line.strip_prefix(english) {
+            return format!("{korean}{name}");
+        }
     }
     if line == "Click at least 2 points on the roads (start, end)" {
         return "도로 위에 점을 2개 이상 찍으세요(출발, 도착)".to_owned();
@@ -330,6 +372,32 @@ mod tests {
         assert_eq!(
             picker_line("지역 도로를 열었습니다"),
             "지역 도로를 열었습니다"
+        );
+        // 4-9 건물·장소 안내.
+        assert_eq!(
+            picker_line("Places: 3 (click a building or search by name)"),
+            "건물·장소: 3곳(건물 클릭 또는 이름 검색)"
+        );
+        assert_eq!(picker_line("Start: 도서관"), "출발: 도서관");
+        assert_eq!(picker_line("End: way/5"), "도착: way/5");
+        // 4-8 자동 경로 안내.
+        assert_eq!(
+            picker_line("Turn restrictions: 3 applied"),
+            "회전 제한: 3개 반영"
+        );
+        assert_eq!(
+            picker_line("Turn restrictions: none in this snapshot"),
+            "회전 제한: 이 스냅샷에 없음"
+        );
+        assert_eq!(
+            picker_line("Detour: avoided 2 intersection(s) that cannot be built"),
+            "우회: 만들 수 없는 교차로 2곳을 피해 감"
+        );
+        assert_eq!(
+            picker_line(
+                "Simplified 1 intersection(s): side roads with unsupported shapes are not drawn"
+            ),
+            "교차로 1곳 단순화: 형상을 지원하지 않는 곁가지는 그리지 않습니다"
         );
     }
 

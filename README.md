@@ -18,7 +18,8 @@ Godot 확장(`crates/sim-godot`, godot-rust)으로 연결합니다. 처음에 �
 | 단계 | 상태 |
 | --- | --- |
 | Phase 1~3 (기반·운동 모델·카메라·여수 코스) | 대부분 완료. 실제 게임패드 축 범위·드리프트 측정은 남음 |
-| Phase 4 (굽은 길·교차로·경로 탐색·지도 받기·경로 선택 화면·통합) | 구현과 자동 시험 완료. 4-5·4-5a·4-5b·4-6 일부 체크는 사람 확인 반영 결정 대기, 경사 도로(4-7)는 시작 전 |
+| Phase 4 (굽은 길·교차로·경로 탐색·지도 받기·경로 선택 화면·통합) | 구현과 자동 시험 완료. 경사 도로(4-7)는 시작 전 |
+| 4-8 자동 경로 · 4-9 건물·장소 고르기 (2026-11-11 추가) | 구현과 자동 시험 완료(`feature/auto-route`). 사람 확인 전. 위아래로 겹치는 도로(4-7 추가)는 시작 전 |
 | Phase G (Godot 전환, GD-0~GD-4) | 완료. GD-2~GD-4 사람 확인 2026-11-10. GD-5 Bevy 앱 제거 |
 | 4-5G G-1 Geofabrik 지역 추출 | 코드와 fixture 시험 완료. 실제 한국 PBF 검증·측정 전 |
 | Phase 5~6 | 시작 전(6-1 일부 제외) |
@@ -162,12 +163,22 @@ HUD의 "입력" 항목에 지금 조향·가속에 쓰는 장치가 표시됩니
 | 받아 둔 지역 열기(캐시만 사용) | 목록 상자 |
 | 스냅샷 파일 열기 / 스냅샷 폴더 열기(오프라인) | 버튼 |
 | 맞춤 보기: 전국 / 받은 지역 / 경로 | 버튼 |
-| 점 추가(시작 → 경유 → 끝) / 점 삭제 | 왼쪽 클릭 / `Shift` + 클릭, "마지막 점 삭제"·"점 모두 삭제" 버튼 |
+| 점 추가(시작 → 경유 → 끝) / 점 삭제 | 왼쪽 클릭(건물을 누르면 그 건물의 진입 지점) / `Shift` + 클릭, "마지막 점 삭제"·"점 모두 삭제" 버튼 |
+| 건물·장소 받기(열린 지역, 4-9) / 장소 이름 검색 | 버튼 / 검색 칸에 입력 후 `Enter`, 결과 상자에서 고르면 점으로 더함 |
 | 경로 저장(같은 이름은 "덮어쓰기"를 켜야 함) | 이름 입력 후 "경로 저장" |
 | 메인 메뉴 | `Esc` |
 
-화면에는 경로 길이, 교차로 수, 폭과 그 출처, 경고(임시 폭, 3 m 미만의 좁은 폭, 돌 수 없는 꺾임, 거부된 교차로 등)가 표시됩니다.
-저장한 경로는 `cache/routes/<이름>.toml`이고, 메인 메뉴 코스 목록에서 골라 주행합니다. 장소 이름 검색은 없습니다.
+출발·도착 두 점만 찍으면 도로를 따라 경로를 만듭니다(4-8). 큰 도로·일방통행 방향·회전 제한을 따르고, 만들 수 없는 교차로는 피해 가거나
+곧게 지나면 곁가지를 그리지 않고 잇습니다. 화면에는 다음이 표시됩니다.
+
+- 경로 길이, 교차로 수, 단순화·우회한 교차로 수
+- 회전 제한 수
+- 출발·도착 건물 이름
+- 폭과 그 출처
+- 경고: 임시 폭, 3 m 미만의 좁은 폭, 돌 수 없는 꺾임, 거부된 교차로 등
+
+건물·장소 자료는 OSM에서 받으며(4-9, `cache/places/`), 한국 OSM은 건물 이름이 빈 곳이 많습니다.
+저장한 경로는 `cache/routes/<이름>.toml`이고, 메인 메뉴 코스 목록에서 골라 주행합니다. 주소 검색은 없습니다.
 
 ## 준비
 
@@ -264,6 +275,7 @@ cargo.exe build --locked -p sim-godot
 & '<Godot 콘솔 실행 파일>' --headless --fixed-fps 64 --path godot --script res://tests/map_course_test.gd
 & '<Godot 콘솔 실행 파일>' --headless --fixed-fps 64 --path godot --script res://tests/menu_flow_test.gd
 & '<Godot 콘솔 실행 파일>' --headless --fixed-fps 64 --path godot --script res://tests/route_save_test.gd
+& '<Godot 콘솔 실행 파일>' --headless --fixed-fps 64 --path godot --script res://tests/place_pick_test.gd
 & '<Godot 콘솔 실행 파일>' --headless --fixed-fps 64 --path godot --script res://tests/goal_reset_test.gd
 & '<Godot 콘솔 실행 파일>' --headless --fixed-fps 64 --path godot --script res://tests/calibration_test.gd
 & '<Godot 콘솔 실행 파일>' --headless --fixed-fps 64 --path godot --script res://tests/scenario_test.gd
@@ -276,6 +288,8 @@ cargo.exe build --locked -p sim-godot
 - `map_course_test.gd`는 저장소의 여수 경로 코스(`map:assets/maps/yeosu-expo/route-junctions.toml`)를 만들고 몇 초 주행합니다(GD-3).
 - `menu_flow_test.gd`는 메인 메뉴 → 코스 선택 → Rust 차량 주행 → Esc 메뉴 복귀를, `route_save_test.gd`는 오프라인으로 경로를 찍어 저장하고
   그 저장 경로로 차량이 준비되는지 확인합니다(GD-4, 시험 파일은 끝에 지움).
+- `place_pick_test.gd`는 지도 화면에서 여수 스냅샷과 합성 장소 자료를 열어 건물 윤곽 표시, 이름 검색으로 출발 건물, 건물 클릭으로
+  도착 건물을 고르고 경로가 계산되며 출발·도착 이름이 안내에 나오는지 확인합니다(4-9, 네트워크 없음).
 - `goal_reset_test.gd`는 지도 코스의 경로 끝 목표 표시, 주행 후 리셋 시 경로 시작 자세 복원, 없는 지도 파일을 열 때
   개발 코스(training) 대체를 확인합니다(4-6). 출력의 `ERROR: ... 없는-코스.toml` 한 줄은 의도된 실패 경로입니다.
 - `calibration_test.gd`는 보정 코스의 측정 상자, 가속·제동 시험 1회차 결과, 리셋 후 결과 유지와 training에서의 상자 숨김을 확인합니다(2-5).

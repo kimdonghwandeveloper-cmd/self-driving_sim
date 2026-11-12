@@ -19,7 +19,9 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use super::map_fetch::{self, Bbox, SnapshotMeta};
-use super::osm_graph::{EXTRACT_GENERATOR_PREFIX, OsmGraphWay, parse_graph_body};
+use super::osm_graph::{
+    EXTRACT_GENERATOR_PREFIX, GraphBody, OsmGraphWay, TurnRestriction, parse_graph_full,
+};
 use super::route;
 
 /// Geofabrik 세대 `meta.toml`의 형식 이름.
@@ -164,6 +166,8 @@ pub struct RoadSnapshot {
     pub ways: Vec<OsmGraphWay>,
     /// 경계 연결 정보. Overpass 스냅샷이면 `None`(연결 검증 정보 없음).
     pub connectivity: Option<Connectivity>,
+    /// 회전 제한(PLAN 4-8). 관계를 받은 Overpass 스냅샷만 있고, 기존 스냅샷·Geofabrik 추출은 비어 있다.
+    pub restrictions: Vec<TurnRestriction>,
 }
 
 /// 바이트열의 SHA-256을 소문자 16진 문자열로 만든다.
@@ -190,7 +194,11 @@ pub fn load_road_snapshot(graph_path: &Path) -> Result<RoadSnapshot, String> {
     let body = read(graph_path)?;
     let text =
         std::str::from_utf8(&body).map_err(|_| format!("{} is not UTF-8", graph_path.display()))?;
-    let (generator, ways) = parse_graph_body(text)?;
+    let GraphBody {
+        generator,
+        ways,
+        restrictions,
+    } = parse_graph_full(text)?;
     if !generator
         .as_deref()
         .is_some_and(|g| g.starts_with(EXTRACT_GENERATOR_PREFIX))
@@ -198,6 +206,7 @@ pub fn load_road_snapshot(graph_path: &Path) -> Result<RoadSnapshot, String> {
         return Ok(RoadSnapshot {
             ways,
             connectivity: None,
+            restrictions,
         });
     }
     let dir = graph_path.parent().unwrap_or(Path::new("."));
@@ -225,6 +234,7 @@ pub fn load_road_snapshot(graph_path: &Path) -> Result<RoadSnapshot, String> {
     Ok(RoadSnapshot {
         ways,
         connectivity: Some(connectivity),
+        restrictions,
     })
 }
 

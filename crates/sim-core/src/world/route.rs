@@ -9,8 +9,16 @@
 //!   두 경로 팔을 더 길게 자르고, 안쪽 모서리를 안내선과 같은 중심의 원호로 만든다.
 //!
 //! 1차 판에서 거부하는 경우: 시작 노드가 교차로, 노드 재방문, 이웃한 팔 사이 각 [`MIN_ARM_GAP_DEG`] 미만,
-//! 교차로 근처에서 팔이 굽음, 교차로끼리 너무 가까움, 일방통행(`oneway`) 팔(왕복 분리 도로 미지원),
-//! 서로 다른 조각·교차로 면의 겹침, 같은 노드 ID에 다른 좌표. 형상 임시값은 모두 **실측이 아니다**.
+//! 교차로 근처에서 팔이 굽음, 교차로끼리 너무 가까움, 서로 다른 조각·교차로 면의 겹침, 같은 노드 ID에 다른 좌표.
+//! 형상 임시값은 모두 **실측이 아니다**.
+//!
+//! 일방통행(PLAN 4-8): 일방통행 way도 한 줄 도로로 만든다. 경로에 없는 일방통행 팔은 곁가지가 된다. 왕복 분리 도로는
+//! 경로가 지나는 쪽만 그린다(진행 방향 검사는 경로 계획 [`super::route_plan`]이 한다).
+//! 교차로 때문에 거부되면 [`BuildFailure::node`]에 그 교차로 노드를 담아, 경로 계획이 그 교차로를 피해 다시 찾게 한다.
+//!
+//! 단순화(PLAN 4-8 규칙에서만): 교차로 형상 규칙(좁은 팔 각도, 교차로 근처 굽음, 짧은 팔)에 걸리는 교차로는 경로에 없는 팔을
+//! 그리지 않고 보통 굽은 길처럼 잇는다([`RouteCourse::simplified`]). 그렇게 이은 조각을 만들 수 없으면(돌 수 없는
+//! 꺾임 등) 그 교차로 노드를 원인으로 돌려준다.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -72,12 +80,43 @@ const MIN_PIECE_LENGTH_M: f32 = 1.0;
 const SAME_NODE_TOLERANCE_DEG: f64 = 1.0e-7;
 /// 교차로 접합 허용 원 반경에 더하는 여유(m).
 const CONTACT_MARGIN_M: f32 = 0.05;
+/// 교차로를 단순화할 수 있는 경로 꺾임 각 상한(deg). 이보다 꺾어 돌면 단순화하지 않는다. 임시값.
+pub const SIMPLIFY_MAX_TURN_DEG: f32 = 30.0;
 /// 교차로를 건너는 안내선의 표본 수.
 const GUIDE_SAMPLES: usize = 16;
 /// 교차로에서 꺾는 안내선 원호 반경의 하한을 차량 최소 회전 반경의 몇 배로 둘지. 임시값.
 ///
 /// 최소 회전 반경 그대로면 조향을 끝까지 꺾어야 해서 조금만 늦어도 바깥쪽 연석에 닿는다.
 pub const TURN_RADIUS_FACTOR: f32 = 1.3;
+
+/// 경로 코스 생성 실패. 특정 교차로 때문이면 그 노드 ID를 함께 준다.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BuildFailure {
+    /// 거부 원인이 된 교차로 노드. 교차로와 무관한 실패(겹침·범위 초과 등)면 `None`.
+    pub node: Option<u64>,
+    /// 오류 문구.
+    pub message: String,
+}
+
+impl From<String> for BuildFailure {
+    /// 교차로와 무관한 실패로 감싼다.
+    fn from(message: String) -> Self {
+        Self {
+            node: None,
+            message,
+        }
+    }
+}
+
+impl BuildFailure {
+    /// 교차로 `node` 때문에 실패한 것으로 감싼다.
+    fn at(node: u64, message: String) -> Self {
+        Self {
+            node: Some(node),
+            message,
+        }
+    }
+}
 
 /// 경로 코스 생성 결과.
 #[derive(Debug, Clone, PartialEq)]
@@ -88,6 +127,8 @@ pub struct RouteCourse {
     pub guide: Vec<Vec2>,
     /// 경로가 지나는 교차로 노드 ID(경로 순서).
     pub junctions: Vec<u64>,
+    /// 형상 규칙에 걸려 곁가지를 그리지 않고 보통 길처럼 이은 교차로 노드 ID(경로 순서).
+    pub simplified: Vec<u64>,
 }
 
 /// 허용한 way로 만든 노드 연결 정보.
@@ -214,12 +255,40 @@ pub fn shape_nodes(
     Ok(used)
 }
 
-/// `oneway` 태그가 일방통행을 뜻하는지 판정한다.
+/// `oneway` 태그가 일방통행을 뜻하는지 판정한다(일방통행을 쓰지 않는 기존 규칙용).
 pub fn is_oneway(way: &OsmGraphWay) -> bool {
     matches!(
         way.tags.get("oneway").map(String::as_str),
         Some("yes" | "1" | "-1" | "true" | "reversible")
     )
+}
+
+/// way의 통행 방향(PLAN 4-8).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Travel {
+    /// 양방향.
+    Both,
+    /// 노드 순서 방향만.
+    Forward,
+    /// 노드 순서 반대 방향만.
+    Backward,
+    /// 탐색에 쓰지 않음(시간에 따라 바뀌는 방향 등 알 수 없는 값).
+    Closed,
+}
+
+/// way의 통행 방향을 정한다. `oneway` 태그를 따르고, 태그가 없으면 회전교차로(`junction=roundabout|circular`)는
+/// 정방향, 나머지는 양방향이다. `reversible`·`alternating`과 알 수 없는 값은 쓰지 않는다.
+pub fn travel(way: &OsmGraphWay) -> Travel {
+    match way.tags.get("oneway").map(String::as_str) {
+        Some("yes" | "1" | "true") => Travel::Forward,
+        Some("-1") => Travel::Backward,
+        Some("no" | "0" | "false") => Travel::Both,
+        Some(_) => Travel::Closed,
+        None => match way.tags.get("junction").map(String::as_str) {
+            Some("roundabout" | "circular") => Travel::Forward,
+            _ => Travel::Both,
+        },
+    }
 }
 
 /// 폴리라인 앞에서 `start_m`, 뒤에서 `end_m`만큼 잘라 낸다. 남는 길이가 [`MIN_PIECE_LENGTH_M`]보다 짧으면 오류다.
@@ -327,19 +396,44 @@ pub fn build_route_course_with(
     settings: &JunctionSettings,
     notices: Vec<String>,
 ) -> Result<RouteCourse, String> {
+    build_route_course_detailed(
+        name, ways, allowed, route, width_m, settings, notices, false,
+    )
+    .map_err(|failure| failure.message)
+}
+
+/// [`build_route_course_with`]와 같고, 실패하면 원인 교차로 노드를 함께 돌려준다(경로 계획의 우회용).
+/// `simplify`가 `true`면(PLAN 4-8 규칙) 형상이 맞지 않는 교차로를 경로가 거의 곧게 지날 때 단순화한다.
+#[allow(clippy::too_many_arguments)]
+pub fn build_route_course_detailed(
+    name: &str,
+    ways: &[OsmGraphWay],
+    allowed: &BTreeSet<&str>,
+    route: &[u64],
+    width_m: f32,
+    settings: &JunctionSettings,
+    notices: Vec<String>,
+    simplify: bool,
+) -> Result<RouteCourse, BuildFailure> {
     map::check_width(width_m)?;
     settings.validate()?;
     let graph = Graph::new(ways, allowed)?;
     if route.len() < 2 {
-        return Err("route needs at least 2 nodes".to_owned());
+        return Err("route needs at least 2 nodes".to_owned().into());
     }
     let mut seen = BTreeSet::new();
     for &id in route {
         if !graph.pos.contains_key(&id) {
-            return Err(format!("route node {id} is not on an allowed road"));
+            return Err(format!("route node {id} is not on an allowed road").into());
         }
         if !seen.insert(id) {
-            return Err(format!("route visits node {id} twice"));
+            // 같은 교차로를 두 번 지나면(회전 제한을 돌아가는 고리 등) 그 교차로를 피하게 한다.
+            let message = format!("route visits node {id} twice");
+            return Err(if graph.is_junction(id) {
+                BuildFailure::at(id, message)
+            } else {
+                message.into()
+            });
         }
     }
     for pair in route.windows(2) {
@@ -347,14 +441,16 @@ pub fn build_route_course_with(
             return Err(format!(
                 "route nodes {} and {} are not connected by one road segment",
                 pair[0], pair[1]
-            ));
+            )
+            .into());
         }
     }
     if graph.is_junction(route[0]) {
         return Err(format!(
             "route starts at intersection node {}; start on a road segment",
             route[0]
-        ));
+        )
+        .into());
     }
     let origin = graph.pos[&route[0]];
     let at = |id: u64| project(origin, graph.pos[&id]);
@@ -370,6 +466,7 @@ pub fn build_route_course_with(
         .filter(|&i| graph.is_junction(route[i]))
         .collect();
     let mut builds: BTreeMap<usize, JunctionBuild> = BTreeMap::new();
+    let mut simplified: Vec<usize> = Vec::new();
     for &i in &junction_indices {
         let id = route[i];
         let route_neighbors: Vec<u64> = [i.checked_sub(1), Some(i + 1)]
@@ -377,15 +474,29 @@ pub fn build_route_course_with(
             .flatten()
             .filter_map(|k| route.get(k).copied())
             .collect();
-        builds.insert(
-            i,
-            build_junction(&graph, id, &route_neighbors, origin, &spec, settings)?,
-        );
+        match build_junction(&graph, id, &route_neighbors, origin, &spec, settings) {
+            Ok(build) => {
+                builds.insert(i, build);
+            }
+            // 경로가 거의 곧게 지나는 교차로만 단순화한다. 경로 끝이거나 꺾어 도는 교차로는 원인으로 돌려준다.
+            Err(message) => {
+                let straight = simplify
+                    && route.get(i + 1).is_some_and(|&next| {
+                        let (before, here, after) = (at(route[i - 1]), at(id), at(next));
+                        (here - before).angle_to(after - here).abs()
+                            <= SIMPLIFY_MAX_TURN_DEG.to_radians()
+                    });
+                if !straight {
+                    return Err(BuildFailure::at(id, message));
+                }
+                simplified.push(i);
+            }
+        }
     }
 
-    // 경로 조각: 시작·교차로·끝으로 나눈다.
+    // 경로 조각: 시작·교차로·끝으로 나눈다. 단순화한 교차로는 조각 안의 보통 노드다.
     let mut breaks = vec![0];
-    breaks.extend(junction_indices.iter().copied());
+    breaks.extend(builds.keys().copied());
     if *breaks.last().unwrap() != route.len() - 1 {
         breaks.push(route.len() - 1);
     }
@@ -406,9 +517,22 @@ pub fn build_route_course_with(
         let points: Vec<Vec2> = route[a..=b].iter().map(|&id| at(id)).collect();
         let start_cut = builds.get(&a).map_or(0.0, |j| j.cut[&route[a + 1]]);
         let end_cut = builds.get(&b).map_or(0.0, |j| j.cut[&route[b - 1]]);
-        let trimmed = trim(&points, start_cut, end_cut)?;
+        // 교차로 사이가 모자라면 뒤쪽(없으면 앞쪽) 교차로를 원인으로 본다.
+        let trimmed = trim(&points, start_cut, end_cut).map_err(|message| {
+            match [b, a].into_iter().find(|k| builds.contains_key(k)) {
+                Some(k) => BuildFailure::at(route[k], message),
+                None => message.into(),
+            }
+        })?;
         let walls = [!builds.contains_key(&a), !builds.contains_key(&b)];
-        let piece = map::road_piece(&trimmed, &spec, walls)?;
+        // 단순화한 교차로가 든 조각을 만들 수 없으면 그 교차로를 원인으로 본다.
+        let piece = map::road_piece(&trimmed, &spec, walls).map_err(|message| match simplified
+            .iter()
+            .find(|&&k| a < k && k < b)
+        {
+            Some(&k) => BuildFailure::at(route[k], message),
+            None => message.into(),
+        })?;
         // 교차로를 건너는 안내선: 앞 조각 끝과 이 조각 시작에 접하는 원호.
         if builds.contains_key(&a)
             && let [.., before, from] = guide[..]
@@ -455,6 +579,13 @@ pub fn build_route_course_with(
     }
     check_outline_overlaps(&outlines, &zones)?;
     let start = map::start_pose(&first_piece.unwrap())?;
+    let mut notices = notices;
+    if !simplified.is_empty() {
+        notices.push(format!(
+            "Simplified {} intersection(s): side roads with unsupported shapes are not drawn",
+            simplified.len()
+        ));
+    }
     let mut course = map::finish_course(
         name,
         notices,
@@ -469,6 +600,7 @@ pub fn build_route_course_with(
         course,
         guide,
         junctions: junction_ids,
+        simplified: simplified.into_iter().map(|i| route[i]).collect(),
     })
 }
 
@@ -486,13 +618,7 @@ fn build_junction(
     let half = spec.width_m / 2.0;
     let mut arms = Vec::with_capacity(neighbors.len());
     let mut polylines = Vec::with_capacity(neighbors.len());
-    for &(neighbor, way) in neighbors {
-        if is_oneway(way) {
-            return Err(format!(
-                "intersection {id}: way {} is one-way; divided or one-way roads are not supported yet",
-                way.id
-            ));
-        }
+    for &(neighbor, _) in neighbors {
         let walked = graph.walk(id, neighbor, ARM_WALK_M, origin);
         let points: Vec<Vec2> = walked
             .iter()
@@ -894,7 +1020,7 @@ mod tests {
         assert!(built.junctions.is_empty() && built.course.areas.is_empty());
     }
 
-    /// 거부 사례: 좁은 팔 사이 각, 가까운 교차로, 일방통행 팔, 교차로에서 시작, 끊긴 경로, 노드 재방문,
+    /// 거부 사례: 좁은 팔 사이 각, 가까운 교차로, 교차로에서 시작, 끊긴 경로, 노드 재방문,
     /// 같은 노드 ID에 다른 좌표(PLAN 4-2 합성 거부 기준).
     #[test]
     fn junction_rejections() {
@@ -906,7 +1032,6 @@ mod tests {
                 vec![1, 10, 11, 2],
                 "too close",
             ),
-            ("oneway", fixtures::oneway_arm(), vec![1, 10, 2], "one-way"),
             (
                 "start",
                 fixtures::three_way(),
@@ -927,6 +1052,18 @@ mod tests {
         let error = build_route_course("conflict", &ways, &allowed(), &[1, 10, 3], 4.0, Vec::new())
             .unwrap_err();
         assert!(error.contains("conflicting"), "{error}");
+    }
+
+    /// 4-8: 경로에 없는 일방통행 팔은 거부하지 않고 곁가지로 만든다.
+    #[test]
+    fn one_way_arm_becomes_a_stub() {
+        let ways = parse(fixtures::oneway_arm());
+        let built =
+            build_route_course("oneway", &ways, &allowed(), &[1, 10, 2], 4.0, Vec::new()).unwrap();
+        assert_eq!(built.junctions, vec![10]);
+        assert!(built.simplified.is_empty());
+        let result = follow_path(&built.course, &built.guide, 4.0);
+        assert_eq!(result.impacts, 0, "{result:?}");
     }
 
     /// 교차로 면 경계가 노면 띠 입구 점과 맞닿고(틈 없음), 모서리 연석이 면 안으로 들어오지 않는지 확인한다.

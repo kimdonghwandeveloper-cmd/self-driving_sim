@@ -1,8 +1,16 @@
 # 도로 그래프·경로 계획 설정(Phase 4-3, 개발용 임시값). 실측값이 아닙니다.
 # 경로를 계획할 때만 읽으며, 코스를 다시 만드는 데 필요한 값(허용 종류, 폭, 교차로 형상)은 경로 파일에 함께 저장합니다.
 
-# 도로 그래프에 넣을 OSM highway 종류. 일방통행(oneway) way는 1차 판에서 경로 탐색에 쓰지 않습니다.
-allowed_highways = ["service", "pedestrian", "residential", "unclassified", "tertiary"]
+# 도로 그래프에 넣을 OSM highway 종류. 고속도로(motorway)는 넣지 않습니다(PLAN 4-8).
+# 목록을 바꾸면 이전에 만든 Geofabrik 추출은 다시 추출해야 합니다(연결 정보가 허용 목록에 묶여 있음).
+allowed_highways = [
+    "service", "pedestrian", "residential", "unclassified",
+    "tertiary", "tertiary_link", "secondary", "secondary_link",
+    "primary", "primary_link", "trunk", "trunk_link",
+]
+# 내비게이션 규칙(PLAN 4-8): 일방통행 way를 진행 방향으로만 탐색하고, 곁가지 형상이 맞지 않는 교차로를 경로가
+# 거의 곧게 지나면 곁가지를 그리지 않고 잇습니다. false면 예전 규칙(일방통행 제외, 교차로 단순화 없음)입니다.
+nav_rules = true
 # lanes 태그로 폭을 정할 때 쓰는 차로 폭(m). 폭은 width 태그 → lanes × 차로 폭 → 아래 기본값 순서로 정합니다.
 lane_width_m = 3.0
 # 찍은 점을 도로에 붙일 수 있는 최대 거리(m).
@@ -20,3 +28,10 @@ pedestrian = 4.0
 residential = 5.0
 unclassified = 5.0
 tertiary = 6.0
+tertiary_link = 4.5
+secondary = 6.5
+secondary_link = 4.5
+primary = 7.0
+primary_link = 4.5
+trunk = 7.0
+trunk_link = 4.5
