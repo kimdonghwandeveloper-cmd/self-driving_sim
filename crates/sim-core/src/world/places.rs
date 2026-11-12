@@ -124,8 +124,8 @@ fn valid(point: LatLon) -> bool {
         && point.lon.abs() <= 180.0
 }
 
-/// 태그로 장소 종류를 정한다. 아무 종류 태그도 없으면 빈 문자열.
-fn place_kind(tags: &BTreeMap<String, String>) -> String {
+/// 태그로 장소 종류를 정한다. 아무 종류 태그도 없으면 빈 문자열. 전국 자료 변환([`super::korea_data`])도 쓴다.
+pub(crate) fn place_kind(tags: &BTreeMap<String, String>) -> String {
     KIND_KEYS
         .iter()
         .find_map(|key| {

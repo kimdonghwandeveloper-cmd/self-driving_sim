@@ -332,6 +332,7 @@ mod tests {
             ],
             replication: None,
             dense: true,
+            ..Fixture::default()
         }
     }
 
