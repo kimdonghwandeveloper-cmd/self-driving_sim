@@ -17,6 +17,10 @@ const VIEW_NAMES := {"front": "전방", "rear": "후방", "left": "좌측", "rig
 const EXTERIOR_NOTICE := "외부 시점 · 차체 외관은 임시 모델이며 충돌 판정 차체와 크기가 다릅니다"
 ## 1인칭 전방이 아닌 시점일 때 시선과 진행 방향이 다름을 알리는 문구.
 const SIDE_VIEW_NOTICE := "현재 시선은 차량 전방과 다릅니다"
+## 충돌 뒤 HUD에 충격 크기를 보이는 시간(물리 틱 수, 64 Hz에서 3초, 표시용 임시값, 2-7).
+const IMPACT_SHOW_TICKS := 192
+## 충격 크기 줄. 크기는 임시값으로 계산한 값이라 실제 충돌 거동이 아님을 함께 알린다.
+const IMPACT_TEXT := "충돌 · 속도 변화 %.1f m/s · 충격량 %.1f kN·s (임시값, 실제 충돌 거동 아님)"
 ## HUD 이동 방향을 "정지"로 보일 속도 크기 상한(m/s, 표시용 임시값).
 const MOVING_THRESHOLD_MPS := 0.01
 ## 지도 코스(`map:`)를 열지 못했을 때 대신 여는 개발 코스와 안내 문구(Bevy `--course map:` 대체와 같음, 4-6).
@@ -277,12 +281,22 @@ func _process(_delta: float) -> void:
 	elif rig.current_view != "front":
 		hud.text += "\n" + SIDE_VIEW_NOTICE
 
+	var impact_line := _impact_line(vehicle.call("last_impact"), int(vehicle.call("tick_count")))
+	if not impact_line.is_empty():
+		hud.text += "\n" + impact_line
 	if Time.get_ticks_msec() < command_notice_until:
 		hud.text += "\n" + command_notice
 	if calibration_box.visible:
 		calibration_label.text = CALIBRATION_TITLE + "\n" + "\n".join(vehicle.call("calibration_lines"))
 	if scenario_box.visible:
 		_update_scenario(vehicle.call("scenario_status"))
+
+## 마지막 충돌 사전(`SimVehicle.last_impact`, 계약 v1.8)으로 충격 크기 줄을 만든다.
+## 충돌이 없거나 [constant IMPACT_SHOW_TICKS]보다 오래됐으면 빈 문자열.
+func _impact_line(impact: Dictionary, tick: int) -> String:
+	if impact.is_empty() or tick - int(impact.get("tick", 0)) >= IMPACT_SHOW_TICKS:
+		return ""
+	return IMPACT_TEXT % [float(impact.get("delta_v_mps", 0.0)), float(impact.get("impulse_ns", 0.0)) / 1000.0]
 
 ## 시나리오 상태 사전(`SimVehicle.scenario_status`)으로 안내 상자 글자·메시지·버튼 사용 가능 여부를 갱신한다.
 func _update_scenario(status: Dictionary) -> void:
@@ -303,6 +317,8 @@ func _update_scenario(status: Dictionary) -> void:
 	var collision_text := "충돌 %d회" % int(status.get("collisions", 0))
 	if int(status.get("max_collisions", -1)) >= 0:
 		collision_text += " / 허용 %d회" % int(status.max_collisions)
+	if float(status.get("max_impact_delta_v_mps", 0.0)) > 0.0:
+		collision_text += " · 최대 속도 변화 %.1f m/s" % float(status.max_impact_delta_v_mps)
 	lines.append(time_text + "    " + collision_text)
 	lines.append(SCENARIO_HELP.get(phase, ""))
 	scenario_label.text = "\n".join(lines)

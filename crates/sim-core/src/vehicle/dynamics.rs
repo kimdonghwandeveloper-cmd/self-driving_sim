@@ -96,6 +96,9 @@ pub struct DynamicsParams {
     pub body_friction_coeff: f32,
     /// 타이어 옆방향 마찰 계수(2-7). 충돌로 생긴 옆 미끄러짐·회전을 `계수 × g`로 줄여 평소 주행으로 되돌린다.
     pub tire_lateral_friction_coeff: f32,
+    /// 충돌 속도 변화(Δv, m/s)가 이 값 이상이면 비상 정지를 건다(2-7, 임시 규칙). 0이면 끔(기본값).
+    /// 실차가 충돌 때 스스로 비상 정지하는지 확인하지 못해 기본은 끈다.
+    pub impact_emergency_delta_v_mps: f32,
 }
 
 impl Default for DynamicsParams {
@@ -125,6 +128,7 @@ impl Default for DynamicsParams {
             bounce_min_speed_mps: 0.5,
             body_friction_coeff: 0.3,
             tire_lateral_friction_coeff: 0.7,
+            impact_emergency_delta_v_mps: 0.0,
         }
     }
 }
@@ -142,6 +146,10 @@ impl DynamicsParams {
             ),
             ("bounce_min_speed_mps", self.bounce_min_speed_mps),
             ("body_friction_coeff", self.body_friction_coeff),
+            (
+                "impact_emergency_delta_v_mps",
+                self.impact_emergency_delta_v_mps,
+            ),
         ] {
             if !(value.is_finite() && value >= 0.0) {
                 return Err(format!(

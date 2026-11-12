@@ -315,6 +315,16 @@ pub struct Impact {
     pub x_m: f32,
     /// 멈춘 자세의 후륜축 중심 z 좌표(m).
     pub z_m: f32,
+    /// 닿는 순간 접촉점이 장애물 쪽으로 다가오던 속도(m/s, 0 이상, 2-7).
+    pub normal_speed_mps: f32,
+    /// 장애물이 차체를 민 법선 충격량(N·s, 0 이상, 2-7). 차체 질량·관성·반발 계수 임시값으로 계산한 값이다.
+    pub impulse_ns: f32,
+    /// 충돌로 바뀐 무게중심 속도 크기(m/s, 2-7). 화면의 충격 크기 표시에 쓴다.
+    pub delta_v_mps: f32,
+    /// 접촉점 x 좌표(m, 2-7). 면 접촉이면 접촉 구간 가운데.
+    pub contact_x_m: f32,
+    /// 접촉점 z 좌표(m, 2-7).
+    pub contact_z_m: f32,
 }
 
 /// `from`과 `to` 사이를 비율 `t`(0..=1)로 보간한 자세를 만든다. 위치·방향 외 값은 `to`를 따른다.
@@ -740,25 +750,35 @@ fn step_filtered(
             break;
         };
         *motion = pose_between(&from, &to, result.fraction);
+        let speed_mps = state.speed_mps();
+        // 닿은 점이 이미 떨어지는 중이면 근사 때문에 다시 막힌 것이므로 작은 이탈 속도를 준다(벽에 붙어 끼지 않게).
+        let response =
+            impulse::resolve(state, motion, params, footprint, &touch, 0.0).or_else(|| {
+                impulse::resolve(
+                    state,
+                    motion,
+                    params,
+                    footprint,
+                    &touch,
+                    impulse::DRIFT_SEPARATION_MPS,
+                )
+            });
+        let (normal_speed_mps, impulse_ns, delta_v_mps) = response.map_or((0.0, 0.0, 0.0), |r| {
+            (r.normal_speed_mps, r.impulse_ns, r.delta_v_mps)
+        });
         hits.push((
             index,
             Impact {
-                speed_mps: state.speed_mps(),
+                speed_mps,
                 x_m: motion.x_m,
                 z_m: motion.z_m,
+                normal_speed_mps,
+                impulse_ns,
+                delta_v_mps,
+                contact_x_m: touch.point.x,
+                contact_z_m: touch.point.y,
             },
         ));
-        // 닿은 점이 이미 떨어지는 중이면 근사 때문에 다시 막힌 것이므로 작은 이탈 속도를 준다(벽에 붙어 끼지 않게).
-        if !impulse::resolve(state, motion, params, footprint, &touch, 0.0) {
-            impulse::resolve(
-                state,
-                motion,
-                params,
-                footprint,
-                &touch,
-                impulse::DRIFT_SEPARATION_MPS,
-            );
-        }
         remaining *= 1.0 - result.fraction;
         if pass + 1 == MAX_CONTACT_PASSES || remaining <= 0.0 {
             break;
@@ -1630,6 +1650,19 @@ mod tests {
         );
         assert_eq!(impacts.len(), 1);
         assert!(state.speed_mps() < -0.5, "speed {}", state.speed_mps());
+        // 충돌 기록(2-7 6항목): 닿는 속도 ≈ 5 m/s, 속도 변화 = 닿는 속도 × (1+e), 충격량 = 질량 × 속도 변화,
+        // 접촉점은 앞범퍼 가운데(후륜축 3.5 m 앞).
+        let hit = impacts[0];
+        let params = DynamicsParams::default();
+        assert!((4.8..=5.0).contains(&hit.normal_speed_mps), "{hit:?}");
+        let change = hit.normal_speed_mps * (1.0 + params.restitution);
+        assert!((hit.delta_v_mps - change).abs() < 1e-3, "{hit:?}");
+        assert!(
+            (hit.impulse_ns - params.mass_kg * change).abs() < 1.0,
+            "{hit:?}"
+        );
+        assert!(hit.contact_x_m.abs() < 1e-3, "{hit:?}");
+        assert!((hit.contact_z_m - (hit.z_m - 3.5)).abs() < 1e-3, "{hit:?}");
         drive(
             &mut state,
             &mut motion,

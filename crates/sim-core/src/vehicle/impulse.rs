@@ -112,7 +112,18 @@ impl RigidVelocity {
     }
 }
 
-/// 접촉 `contact`에서 차체가 장애물 쪽으로 움직이고 있으면 충격량을 줘 속도를 바꾼다. 줬으면 `true`.
+/// 충격량 하나를 준 결과(2-7 기록·화면용). 크기는 모두 시뮬레이터 임시값으로 계산한 값이다.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Response {
+    /// 닿는 순간 접촉점이 장애물 쪽으로 다가오던 속도(m/s, 0 이상). 면 접촉이면 두 끝 중 빠른 쪽.
+    pub normal_speed_mps: f32,
+    /// 법선 충격량 합(N·s, 0 이상). 마찰 충격량은 넣지 않는다.
+    pub impulse_ns: f32,
+    /// 무게중심 속도 변화 크기(m/s). 마찰로 줄어든 접선 속도도 들어간다.
+    pub delta_v_mps: f32,
+}
+
+/// 접촉 `contact`에서 차체가 장애물 쪽으로 움직이고 있으면 충격량을 줘 속도를 바꾼다. 줬으면 그 결과를 반환한다.
 ///
 /// 법선 충격량 `j = −(1+e)·vₙ ÷ (1/m + (r×n)²/I)`로 닿는 방향 속도를 없애고 반발 계수 `e`만큼 되돌린다.
 /// 닿는 속도가 [`DynamicsParams::bounce_min_speed_mps`]보다 느리면 `e = 0`이다(벽을 밀 때 떨림 방지).
@@ -127,19 +138,22 @@ pub fn resolve(
     footprint: &Footprint,
     contact: &Contact,
     separation_mps: f32,
-) -> bool {
+) -> Option<Response> {
     let mut body = RigidVelocity::from_motion(state, motion, params, footprint);
-    if push(&mut body, params, contact, separation_mps).is_none() {
-        return false;
-    }
+    let before = body.linear;
+    let (normal_speed_mps, impulse_ns) = push(&mut body, params, contact, separation_mps)?;
     body.store(state, motion, params);
-    true
+    Some(Response {
+        normal_speed_mps,
+        impulse_ns,
+        delta_v_mps: (body.linear - before).length(),
+    })
 }
 
 /// 충격량을 나눠 주는 반복 횟수(임시값). 면 접촉의 두 끝과 마찰이 서로 영향을 주므로 몇 번 되풀이해 맞춘다.
 const SOLVER_ITERATIONS: usize = 8;
 
-/// [`resolve`]의 강체 계산 부분. 충격량을 줬으면 법선 충격량 합(N·s)을 반환한다.
+/// [`resolve`]의 강체 계산 부분. 충격량을 줬으면 (닿는 속도 m/s, 법선 충격량 합 N·s)을 반환한다.
 ///
 /// 접촉 구간의 끝점마다 목표 법선 속도(반발 속도, 반발이 없으면 0)를 정하고, 끝점별 누적 법선 충격량을
 /// 0 이상으로 유지하며 되풀이해 맞춘다(순차 충격량 방식). 마찰은 접촉점 가운데에서 누적 법선 충격량 합 × 마찰 계수 안으로 준다.
@@ -148,7 +162,7 @@ fn push(
     params: &DynamicsParams,
     contact: &Contact,
     separation_mps: f32,
-) -> Option<f32> {
+) -> Option<(f32, f32)> {
     let normal = contact.normal;
     let ends: &[Vec2] = if contact.ends[0].distance(contact.ends[1]) < 1e-6 {
         &contact.ends[..1]
@@ -184,7 +198,10 @@ fn push(
     }
     // 마지막 마찰이 닿은 점을 다시 장애물 쪽으로 돌렸으면 법선 충격량을 한 번 더 맞춘다.
     solve_normal(body, params, ends, normal, &targets, &mut pushed);
-    Some(pushed.iter().sum())
+    let closing = approach
+        .iter()
+        .fold(0.0f32, |fastest, &speed| fastest.max(-speed));
+    Some((closing, pushed.iter().sum()))
 }
 
 /// 접촉 끝점(1~2개)의 누적 법선 충격량 `pushed`를 목표 법선 속도 `targets`에 맞게 다시 정하고 차이만큼 준다.
@@ -294,19 +311,31 @@ mod tests {
     }
 
     /// 정면 벽에 빠르게 닿으면 반발 계수만큼 뒤로 튕기고, 옆 미끄러짐·회전은 생기지 않는지 확인한다.
+    /// 결과의 닿는 속도는 5 m/s, 속도 변화는 `5(1+e)`, 충격량은 `m·5(1+e)`다.
     #[test]
     fn head_on_bounces_back_by_restitution() {
         let params = DynamicsParams::default();
         let mut state = moving(5.0);
         let mut motion = Motion::default();
-        assert!(resolve(
+        let response = resolve(
             &mut state,
             &mut motion,
             &params,
             &VEHICLE_FOOTPRINT,
             &front_wall(),
-            0.0
-        ));
+            0.0,
+        )
+        .unwrap();
+        let change = 5.0 * (1.0 + params.restitution);
+        assert!(
+            (response.normal_speed_mps - 5.0).abs() < 1e-4,
+            "{response:?}"
+        );
+        assert!((response.delta_v_mps - change).abs() < 1e-3, "{response:?}");
+        assert!(
+            (response.impulse_ns - params.mass_kg * change).abs() < 1.0,
+            "{response:?}"
+        );
         assert!((state.speed_mps() + 5.0 * params.restitution).abs() < 1e-4);
         assert!(motion.lateral_mps.abs() < 1e-5);
         assert!(motion.slip_yaw_rate_rad_s.abs() < 1e-5);
@@ -318,26 +347,32 @@ mod tests {
         let params = DynamicsParams::default();
         let mut state = moving(0.3);
         let mut motion = Motion::default();
-        assert!(resolve(
-            &mut state,
-            &mut motion,
-            &params,
-            &VEHICLE_FOOTPRINT,
-            &front_wall(),
-            0.0
-        ));
+        assert!(
+            resolve(
+                &mut state,
+                &mut motion,
+                &params,
+                &VEHICLE_FOOTPRINT,
+                &front_wall(),
+                0.0
+            )
+            .is_some()
+        );
         assert_eq!(state.speed_mps(), 0.0);
 
         let mut leaving = moving(-0.3);
         let mut still = Motion::default();
-        assert!(!resolve(
-            &mut leaving,
-            &mut still,
-            &params,
-            &VEHICLE_FOOTPRINT,
-            &front_wall(),
-            0.0
-        ));
+        assert!(
+            resolve(
+                &mut leaving,
+                &mut still,
+                &params,
+                &VEHICLE_FOOTPRINT,
+                &front_wall(),
+                0.0
+            )
+            .is_none()
+        );
         assert_eq!(leaving.speed_mps(), -0.3);
         assert_eq!(still, Motion::default());
     }

@@ -147,6 +147,8 @@ pub struct DriveSession {
     tick: u64,
     /// 제동·가속 보정 시험 측정(2-5). 주행 결과에는 영향을 주지 않는다.
     calibration: CalibrationLog,
+    /// 마지막 충돌과 그 틱 번호(2-7). 화면이 충격 크기를 잠시 보이는 데 쓴다.
+    last_impact: Option<(u64, Impact)>,
 }
 
 impl DriveSession {
@@ -168,6 +170,7 @@ impl DriveSession {
             manual: VehicleInput::default(),
             tick: 0,
             calibration,
+            last_impact: None,
         }
     }
 
@@ -189,6 +192,11 @@ impl DriveSession {
     /// 장애물 접촉 상태를 반환한다.
     pub fn contact(&self) -> &ContactState {
         &self.contact
+    }
+
+    /// 마지막 충돌(틱 번호, 충돌 정보)을 반환한다. 아직 없거나 시작 위치로 복귀한 뒤면 `None`.
+    pub fn last_impact(&self) -> Option<(u64, Impact)> {
+        self.last_impact
     }
 
     /// 보정 측정 기록을 반환한다.
@@ -311,6 +319,10 @@ impl DriveSession {
         );
         self.tick += 1;
         report.tick = self.tick;
+        if let Some(hit) = report.collided {
+            self.last_impact = Some((self.tick, hit));
+            self.stop_on_impact(&hit);
+        }
 
         let gear_after = self.state.gear();
         report.gear_changed = (gear_after != gear_before).then_some(gear_after);
@@ -319,6 +331,16 @@ impl DriveSession {
         let emergency_after = self.emergency_active();
         report.emergency_changed = (emergency_after != emergency_before).then_some(emergency_after);
         report
+    }
+
+    /// 충돌 속도 변화가 설정값([`DynamicsParams::impact_emergency_delta_v_mps`]) 이상이면 비상 정지를 건다(2-7, 임시 규칙).
+    /// 설정이 0(기본)이거나 시동이 꺼져 있으면 아무것도 하지 않는다. 결과는 이 틱의 `emergency_changed`로 보인다.
+    fn stop_on_impact(&mut self, hit: &Impact) {
+        let threshold = self.params.impact_emergency_delta_v_mps;
+        if threshold > 0.0 && hit.delta_v_mps >= threshold && self.engine_on() {
+            // 시동이 켜져 있으면 비상 정지는 거부되지 않는다.
+            let _ = self.state.apply(VehicleCommand::EngageEmergencyStop);
+        }
     }
 
     /// 명령 하나를 적용하고 결과를 만든다. 복귀가 성공하면 `report.course_reset`을 켠다.
@@ -347,7 +369,7 @@ impl DriveSession {
         }
     }
 
-    /// 정지 상태면 자세·속도·조향각·접촉을 코스 시작값으로 되돌리고 진행 중인 보정 시험을 버린다.
+    /// 정지 상태면 자세·속도·조향각·접촉·마지막 충돌을 코스 시작값으로 되돌리고 진행 중인 보정 시험을 버린다.
     /// 끝난 보정 결과·기어·시동·비상 정지·수동 입력·대기열은 그대로 둔다.
     fn reset_to_start(&mut self) -> Result<(), String> {
         if !self.state.is_stopped() {
@@ -356,6 +378,7 @@ impl DriveSession {
         self.state.set_speed_mps(0.0);
         self.motion = self.course.start;
         self.contact = ContactState::default();
+        self.last_impact = None;
         self.calibration.restart_from(&self.state, &self.motion);
         Ok(())
     }
@@ -391,6 +414,68 @@ mod tests {
             throttle: value,
             ..VehicleInput::default()
         }
+    }
+
+    /// 시동·D로 출발해 가속을 밟은 채 첫 충돌까지 달린다. 충돌한 틱의 결과를 반환한다(60초 안에 없으면 실패).
+    fn drive_into_obstacle(session: &mut DriveSession) -> TickReport {
+        for command in [
+            VehicleCommand::ToggleEngine,
+            VehicleCommand::RequestGear(Gear::Drive),
+        ] {
+            session.enqueue(DriveCommand::Vehicle(command)).unwrap();
+        }
+        session.set_manual_input(throttle(1.0));
+        for _ in 0..64 * 60 {
+            let report = session.tick(&DeviceTick::default());
+            if report.collided.is_some() {
+                return report;
+            }
+        }
+        panic!("never hit an obstacle");
+    }
+
+    /// 충돌하면 마지막 충돌로 기록되고(2-7), 기본 설정에서는 비상 정지가 걸리지 않으며,
+    /// 시작 위치 복귀 뒤에는 지워지는지 확인한다.
+    #[test]
+    fn impact_is_kept_without_emergency_by_default() {
+        let mut session = session();
+        assert_eq!(session.last_impact(), None);
+        let report = drive_into_obstacle(&mut session);
+        let hit = report.collided.unwrap();
+        assert_eq!(session.last_impact(), Some((report.tick, hit)));
+        assert!(hit.delta_v_mps > 0.0 && hit.impulse_ns > 0.0, "{hit:?}");
+        assert!(!session.emergency_active());
+        assert_eq!(report.emergency_changed, None);
+
+        session.set_manual_input(VehicleInput {
+            brake: 1.0,
+            ..VehicleInput::default()
+        });
+        while !session.state().is_stopped() {
+            session.tick(&DeviceTick::default());
+        }
+        session.enqueue(DriveCommand::ResetCourse).unwrap();
+        assert!(session.tick(&DeviceTick::default()).course_reset);
+        assert_eq!(session.last_impact(), None);
+    }
+
+    /// 충돌 비상 정지 설정(2-7, 임시 규칙)을 켜면 속도 변화가 설정값 이상인 충돌 틱에 비상 정지가 걸리고,
+    /// 설정값이 충돌보다 크면 걸리지 않는지 확인한다.
+    #[test]
+    fn impact_over_threshold_engages_emergency_stop() {
+        let mut config = VehicleConfig::default();
+        config.dynamics.impact_emergency_delta_v_mps = 0.1;
+        let mut session = DriveSession::new(CourseId::Training.build(), &config);
+        let report = drive_into_obstacle(&mut session);
+        assert!(report.collided.unwrap().delta_v_mps >= 0.1);
+        assert_eq!(report.emergency_changed, Some(true));
+        assert!(session.emergency_active());
+
+        config.dynamics.impact_emergency_delta_v_mps = 1000.0;
+        let mut session = DriveSession::new(CourseId::Training.build(), &config);
+        let report = drive_into_obstacle(&mut session);
+        assert_eq!(report.emergency_changed, None);
+        assert!(!session.emergency_active());
     }
 
     /// 계약 이름과 명령이 서로 바뀌고, 모르는 이름은 거부하는지 확인한다.

@@ -1,4 +1,4 @@
-# Godot ↔ Rust 인터페이스 계약 (v1.6)
+# Godot ↔ Rust 인터페이스 계약 (v1.8)
 
 작성: 2026-11-08 Claude 초안, 2026-11-09 v1 고정(Codex가 동의한 v0.2와 Codex 추가 요청 2건 반영).
 목적: Claude(Rust, `crates/`)와 Codex(Godot, `godot/`)가 동시에 개발할 때 서로 기다리지 않도록
@@ -17,6 +17,7 @@ Godot에 노출할 클래스·메서드·시그널·좌표 규칙·실패 처리
 | v1.5 | 항목 추가(기존 이름·인자 변경 없음, 2026-11-11 Claude, PLAN 4-8 자동 경로·4-9 건물·장소): `SimRoutePicker.request_places()`·`load_places_file()`·`place_outlines()`·`place_at()`·`search_places()`·`add_place()`·`point_labels()`, `poll()` 이벤트 `places_loaded`(7-2). 경로 계산 규칙 변경(일방통행·회전 제한·우회·교차로 단순화)은 `route()`·`status_lines()` 형식을 바꾸지 않는다. ※ `feature/phase5-scenarios`도 v1.5를 쓰므로 나중에 병합하는 쪽을 v1.6으로 올린다 |
 | v1.6 | 항목 추가(기존 이름·인자 변경 없음, 2026-11-12 Claude, PLAN 4-10 전국 장소 검색): `SimRoutePicker.search_nationwide()`·`add_search_hit()`, `poll()` 이벤트 `search_results`(7-2). ※ `feature/phase5-scenarios`(v1.5)를 나중에 병합하면 그쪽을 v1.7로 올린다 |
 | v1.7 | **항목 제거·추가**(2026-11-12 Claude, PLAN 4-11 전국 지도 자료 내장, 사용자 결정): 네트워크 지역 받기 `request_region()`·`cancel_region()`·`request_places()`·`cached_regions()`와 `poll()` 이벤트 `progress`·`region_loaded`·`places_loaded`·`failed`를 없앴다. 대신 `open_region()`(내장 전국 자료에서 바로 열기, 동기)·`data_status()`·`use_data_dir()`·`latlon_to_view()`를 더했다. `network`는 전국 장소 검색에만 쓴다. ※ `feature/phase5-scenarios`(v1.5)를 나중에 병합하면 그쪽을 v1.8로 올린다 |
+| v1.8 | 항목 추가(기존 이름·인자 변경 없음, 2026-11-12 Claude, PLAN 2-7 충돌 물리 반응): `SimVehicle.last_impact()`(2절 읽기 함수, 마지막 충돌의 틱·닿는 속도·충격량·속도 변화·접촉점), `scenario_status()`의 `max_impact_delta_v_mps`(2-1). `collided` 시그널은 인자 없이 그대로다. 충돌하면 바로 서지 않고 튕기거나 미끄러지므로 `in_contact()`는 "접촉 거리 안"이라는 뜻만 남는다. ※ `feature/phase5-scenarios`(v1.5)를 나중에 병합하면 그쪽을 v1.9로 올린다 |
 
 > GD-5(v1.3)에서 Bevy 앱을 지웠다. 본문의 "Bevy 판과 같음"·Bevy 파일 경로는 계약을 정할 때의 기준을 기록한 것이며, 그 규칙은 지금 `sim-core`에 있다.
 
@@ -77,7 +78,8 @@ Godot 쪽은 이 노드의 **자식**으로 차체 메시·실내·카메라를 
 | `engine_on()` | `bool` | 시동 상태 |
 | `emergency_active()` | `bool` | 비상 정지 중 |
 | `steer_angle_deg()` | `float` | 현재 바퀴 조향각(오른쪽 양수) |
-| `in_contact()` | `bool` | 장애물·연석과 접촉해 정지한 상태 |
+| `in_contact()` | `bool` | 장애물·연석과 접촉 거리 안에 있음. (v1.8) 충돌해도 바로 서지 않으므로 정지를 뜻하지 않는다 |
+| (v1.8) `last_impact()` | `Dictionary` | 마지막 충돌. 없거나 `reset_course` 성공 뒤면 빈 사전. `{tick: int`(충돌한 틱, `collided`를 보낸 틱)`, speed_mps`(닿기 직전 부호 있는 속도)`, normal_speed_mps`(접촉점이 장애물로 다가오던 속도, 0 이상)`, impulse_ns`(법선 충격량 N·s)`, delta_v_mps`(무게중심 속도 변화 크기)`, point: Vector3`(접촉점, y=0)`}`. 크기는 질량·관성·반발 계수 **임시값**으로 계산한 값이며 실제 충돌 거동이 아니다. 화면은 충돌 뒤 3초 동안 속도 변화·충격량을 HUD에 보인다 |
 | (v1.3) `calibration_lines()` | `PackedStringArray` | 보정 측정 한국어 5줄: 회전반경(후륜축)·최대 조향 최소 반경, 최대 제동 예상 정지거리, 진행 중 시험, 마지막 제동·가속 시험(회차 포함). 모두 시뮬레이터 임시값. 시험은 매 틱 측정하고 `reset_course` 성공 시 진행 중 시험만 버린다. 준비 전에는 빈 배열. 주행 화면은 `calibration` 코스에서만 표시한다 |
 | `view()` | `String` | `"front"`, `"rear"`, `"left"`, `"right"` (입석 시점 방향) |
 | `debug_camera()` | `bool` | 외부 디버그 카메라 켜짐 |
@@ -128,7 +130,7 @@ Godot 쪽은 이 노드의 **자식**으로 차체 메시·실내·카메라를 
 | 함수 | 반환 | 설명 |
 | --- | --- | --- |
 | `scenario_control(name: String)` | `bool` | `"start"`(briefing→running), `"pause"`(running→paused), `"resume"`(paused→running), `"restart"`(어느 단계든 → briefing, 차량을 시작 조건의 새 세션으로 바꾸고 `tick_count` 0, 시점 전방), `"end"`(끝나지 않았으면 → finished `aborted`). **대기열 없이 바로** 적용한다. 시나리오가 없거나 지금 단계에서 받을 수 없으면 `false`(상태 그대로), 모르는 이름은 `godot_error!` 뒤 `false` |
-| `scenario_status()` | `Dictionary` | 시나리오가 없으면 `{active: false}`. 있으면 `active`, `title`, `briefing`, `phase`, `phase_text`(한국어), `outcome`(끝났을 때만, 아니면 `""`), `step_index`(지금 단계 번호, 다 끝냈으면 단계 수), `step_count`, `guide`(지금 단계 안내, 다 끝냈으면 `""`), `elapsed_s`, `time_limit_s`(없으면 -1), `collisions`, `max_collisions`(없으면 -1), `message`(지금 띄울 메시지, 없으면 `""`) |
+| `scenario_status()` | `Dictionary` | 시나리오가 없으면 `{active: false}`. 있으면 `active`, `title`, `briefing`, `phase`, `phase_text`(한국어), `outcome`(끝났을 때만, 아니면 `""`), `step_index`(지금 단계 번호, 다 끝냈으면 단계 수), `step_count`, `guide`(지금 단계 안내, 다 끝냈으면 `""`), `elapsed_s`, `time_limit_s`(없으면 -1), `collisions`, `max_collisions`(없으면 -1), `message`(지금 띄울 메시지, 없으면 `""`), (v1.8) `max_impact_delta_v_mps`(시작 뒤 가장 큰 충돌 속도 변화, 없으면 0) |
 
 시그널(틱 안에서 생긴 것은 9번 `debug_camera_toggled` 뒤, `tick_finished` 앞에 처리 순서대로):
 
