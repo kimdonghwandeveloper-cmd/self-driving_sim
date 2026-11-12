@@ -72,6 +72,8 @@ func _run() -> void:
 	map.end_box.edit.text = ""
 	map.end_box.edit.caret_column = 0
 	map.end_box.edit.insert_text_at_caret("체육")
+	# 트리 안의 LineEdit는 text_changed를 다음 프레임에 보낸다.
+	await process_frame
 	_check(map.end_box.results.item_count == 2, "입력 중 검색 결과 상자: %d (칸 '%s', Rust 검색 %d곳, 안내 '%s')" % [map.end_box.results.item_count, map.end_box.edit.text, picker.call("search_places", "체육").size(), map.end_box.feedback])
 	map.end_box._typed("")
 	_check(map.end_box.results.disabled, "빈 칸인데 결과 상자가 남음")
