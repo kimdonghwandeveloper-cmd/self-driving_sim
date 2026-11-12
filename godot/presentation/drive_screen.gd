@@ -7,6 +7,16 @@ const Visual = preload("res://presentation/vehicle_visual.gd")
 const Rig = preload("res://presentation/camera_rig.gd")
 ## GLB의 미터 원점을 공유하는 여수 고정 코스. 저장 경로는 시작점이 달라 이 배경을 쓰지 않는다.
 const YEOSU_COURSE := "map:testdata/yeosu-expo/course.toml"
+## 위성사진으로 근사한 컨벤션센터 통로는 전부 같은 여수 좌표계를 쓴다.
+const CONVENTION_PREFIX := "map:testdata/yeosu-expo/convention/"
+const CONVENTION_COURSES := {
+	"north-access": "북측 진입로",
+	"central-gallery": "중앙 갤러리 통로",
+	"south-plaza": "남측 광장 진입로",
+	"west-link": "서측 연결 통로",
+	"east-plaza": "동측 광장 연결로",
+	"west-crossing": "국제관 서측 횡단 통로",
+}
 const YEOSU_BACKGROUND = preload("res://assets/maps/yeosu-expo/background.glb")
 ## 코스 범위 밖으로 바닥을 더 까는 여백(m).
 const GROUND_MARGIN_M := 300.0
@@ -85,7 +95,7 @@ func start(course_name: String, force_preview: bool = false) -> void:
 	scene_content.add_child(course_mesh)
 	course_mesh.build(data)
 	var bounds := CourseMesh.ground_bounds(data)
-	if course_name == YEOSU_COURSE and not is_preview and fallback_notice.is_empty():
+	if (course_name == YEOSU_COURSE or course_name.begins_with(CONVENTION_PREFIX)) and not is_preview and fallback_notice.is_empty():
 		bounds = _add_yeosu_background(bounds)
 	_fit_ground(bounds)
 	vehicle.add_child(Visual.new())
@@ -104,7 +114,15 @@ func start(course_name: String, force_preview: bool = false) -> void:
 		warnings.push_front(fallback_notice)
 	warnings_label.text = "\n".join(warnings)
 	dismiss.visible = not warnings_label.text.is_empty()
-	notice.text = "\n".join(vehicle.call("course_notices"))
+	var course_notices := PackedStringArray(vehicle.call("course_notices"))
+	if course_name.begins_with(CONVENTION_PREFIX) and fallback_notice.is_empty():
+		for i in range(course_notices.size()):
+			if course_notices[i].begins_with("Virtual training course from OSM centerline") or course_notices[i].contains("실측"):
+				course_notices[i] = "위성사진에서 추정한 훈련용 통로 · 실제 통행 허가와 무관"
+		notice.text = "\n".join(course_notices)
+		notice.text += "\n컨벤션센터 · 위성사진 기반 근사 형상"
+	else:
+		notice.text = "\n".join(course_notices)
 	calibration_box.visible = not is_preview and str(vehicle.get("course")) == CALIBRATION_COURSE
 	scenario_box.visible = _has_scenario()
 	if is_preview:

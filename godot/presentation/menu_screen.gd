@@ -43,6 +43,9 @@ func _ready() -> void:
 	_add_course("보정 코스", "calibration")
 	if ClassDB.class_exists("SimVehicle"):
 		_add_course("여수 엑스포 · OSM 배경", DriveScreen.YEOSU_COURSE)
+		for key: String in DriveScreen.CONVENTION_COURSES:
+			_add_course("여수 컨벤션센터 · " + DriveScreen.CONVENTION_COURSES[key],
+				DriveScreen.CONVENTION_PREFIX + key + ".toml")
 	if ClassDB.class_exists("SimCourse") and ClassDB.class_has_method("SimCourse", "course_files"):
 		for file in ClassDB.class_call_static("SimCourse", "course_files"):
 			_add_course("지도: " + str(file.label), str(file.course))
