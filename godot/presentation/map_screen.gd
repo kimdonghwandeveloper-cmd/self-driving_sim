@@ -45,6 +45,14 @@ var end_choice: Dictionary = {}
 var draw_toggle := CheckButton.new()
 var drawing := false
 var drawn := PackedVector2Array()
+## 손떨림 보정(사용자 요청 2026-11-12): 선 끝(펜)은 커서가 이 거리(화면 px)보다 멀어질 때만 그 차이만큼 커서 쪽으로 끌려온다
+## (그림 앱의 줄 보정). 작은 떨림은 펜을 움직이지 못한다. 임시값.
+const DRAW_STABILIZE_PX := 12.0
+## 다 그린 선을 고르게 펴는 횟수(앞뒤 점과 1:2:1 평균, 처음·끝은 그대로). 임시값.
+const DRAW_SMOOTH_PASSES := 3
+## 보정된 펜 위치와 마지막 커서 위치(지도 좌표).
+var pen := Vector2.ZERO
+var last_cursor := Vector2.ZERO
 ## 그릴 건물·장소 윤곽(점 장소는 점 하나, PLAN 4-9).
 var place_outlines: Array = []
 ## 도로·건물·경로·점을 그리는 층(4-11 렉 수정). 카메라가 움직여도 다시 그리지 않고, 자료나 배율이 바뀔 때만 다시 그린다.
@@ -418,21 +426,48 @@ func _move_to(view: Vector2) -> void:
 ## 선 그리기를 시작한다(왼쪽 누름).
 func _start_line(at: Vector2) -> void:
 	drawing = true
+	pen = at
+	last_cursor = at
 	drawn = PackedVector2Array([at])
 	overlay_layer.queue_redraw()
 
-## 그리는 선에 점을 더한다(화면 4 px보다 움직였을 때만).
+## 커서가 `at`으로 움직였을 때 손떨림 보정한 펜 위치. 펜에서 `radius`보다 멀어진 만큼만 커서 쪽으로 끌려온다.
+static func _stabilized_pen(current: Vector2, at: Vector2, radius: float) -> Vector2:
+	var gap := at - current
+	if gap.length() <= radius:
+		return current
+	return current + gap.normalized() * (gap.length() - radius)
+
+## 선 점을 앞뒤 점과 1:2:1로 평균해 `passes`번 고르게 편다. 처음·끝 점은 그대로 둔다.
+static func _smoothed(line: PackedVector2Array, passes: int) -> PackedVector2Array:
+	var out := line.duplicate()
+	for pass_index in range(passes):
+		var previous := out.duplicate()
+		for i in range(1, out.size() - 1):
+			out[i] = (previous[i - 1] + previous[i] * 2.0 + previous[i + 1]) * 0.25
+	return out
+
+## 그리는 선에 손떨림 보정한 펜 위치를 더한다(펜이 화면 4 px보다 움직였을 때만).
 func _extend_line(at: Vector2) -> void:
-	if drawn.is_empty() or at.distance_to(drawn[drawn.size() - 1]) * camera.zoom.x >= 4.0:
-		drawn.append(at)
+	last_cursor = at
+	pen = _stabilized_pen(pen, at, DRAW_STABILIZE_PX / camera.zoom.x)
+	if drawn.is_empty() or pen.distance_to(drawn[drawn.size() - 1]) * camera.zoom.x >= 4.0:
+		drawn.append(pen)
 		overlay_layer.queue_redraw()
 
-## 선 그리기를 끝내고(왼쪽 뗌) 그 선을 따라 Rust에 경로를 계산시킨다. 출발·도착 칸에는 선의 처음·끝이라고 보인다.
+## 다 그린 선을 마무리한다: 놓은 곳(마지막 커서)에서 끝나게 하고 고르게 편다.
+func _finished_line() -> PackedVector2Array:
+	var line := drawn.duplicate()
+	if line.size() > 0 and line[line.size() - 1].distance_to(last_cursor) * camera.zoom.x >= 1.0:
+		line.append(last_cursor)
+	return _smoothed(line, DRAW_SMOOTH_PASSES)
+
+## 선 그리기를 끝내고(왼쪽 뗌) 손떨림 보정한 선을 따라 Rust에 경로를 계산시킨다. 출발·도착 칸에는 선의 처음·끝이라고 보인다.
 func _finish_line() -> void:
 	if not drawing:
 		return
 	drawing = false
-	var line := drawn
+	var line := _finished_line()
 	drawn = PackedVector2Array()
 	if line.size() < 2:
 		overlay_layer.queue_redraw()

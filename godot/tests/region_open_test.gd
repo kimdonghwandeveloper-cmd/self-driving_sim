@@ -79,6 +79,22 @@ func _run() -> void:
 		ends = "처음 %.0f m·끝 %.0f m 떨어짐, 선 점 %d개, 경로 점 %d개" % [map.route_line[0].distance_to(clicked_line[0]), map.route_line[map.route_line.size() - 1].distance_to(clicked_line[clicked_line.size() - 1]), clicked_line.size(), map.points.size()]
 	_check(absf(float(route.length_m) - clicked_length) < clicked_length * 0.2, "선 그리기 경로가 같은 길이 아님: %.0f m / %.0f m (%s)" % [route.length_m, clicked_length, ends])
 
+	# 손떨림 보정: 오른쪽으로 곧게 그으면서 위아래로 ±5 m(배율 2에서 10 px) 떨어도, 보정한 선은 거의 곧고 놓은 곳에서 끝난다.
+	var shaky_start := start + Vector2(0, -2000)
+	map._start_line(shaky_start)
+	var last_at := shaky_start
+	for i in range(1, 80):
+		last_at = shaky_start + Vector2(i * 2.0, 5.0 if i % 2 == 0 else -5.0)
+		map._extend_line(last_at)
+	var steady: PackedVector2Array = map._finished_line()
+	var wobble := 0.0
+	for i in range(1, steady.size() - 1):
+		wobble = maxf(wobble, absf(steady[i].y - shaky_start.y))
+	_check(wobble < 2.0, "손떨림 보정 뒤에도 선이 %.1f m 흔들림(입력 5 m)" % wobble)
+	_check(steady[steady.size() - 1] == last_at, "보정한 선이 놓은 곳에서 끝나지 않음")
+	map.drawing = false
+	map.drawn = PackedVector2Array()
+
 	# 도로에서 멀리 떨어진 선은 안내만 하고 기존 경로를 둔다.
 	var far := PackedVector2Array([start + Vector2(0, -3000), start + Vector2(300, -3000), start + Vector2(600, -3000)])
 	_draw_line(map, far)
@@ -116,7 +132,7 @@ func _draw_line(map: Node2D, line: PackedVector2Array) -> void:
 func _finish(map: Node) -> void:
 	map.free()
 	if failures.is_empty():
-		print("REGION OPEN OK: 클릭한 곳 지역 열기 · 도로·건물 · 클릭 두 번 출발·도착 경로·저장·다시 코스 · 선 그리기 경로 · 도로 밖 선 안내 · 멈춘 화면 자동 열기 · 자료 없음 안내")
+		print("REGION OPEN OK: 클릭한 곳 지역 열기 · 도로·건물 · 클릭 두 번 출발·도착 경로·저장·다시 코스 · 선 그리기 경로 · 손떨림 보정 · 도로 밖 선 안내 · 멈춘 화면 자동 열기 · 자료 없음 안내")
 		quit(0)
 	else:
 		for message in failures:
