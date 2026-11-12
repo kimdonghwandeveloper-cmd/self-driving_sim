@@ -16,8 +16,8 @@ use godot::prelude::*;
 use sim_core::picker::geocode::{GEOCODE_CACHE_DIR, GeocodeHit, GeocodeJob, UreqGet};
 use sim_core::picker::model::{Endpoint, PickerModel};
 use sim_core::picker::region::{
-    self, LINE_SNAP_M, LINE_STEP_M, ROUTE_DIR, bbox_around, load_model, resample_line, route_area,
-    snapshot_graph_path, valid_route_name,
+    self, LINE_SNAP_M, ROUTE_DIR, bbox_around, load_model, route_area, snapshot_graph_path,
+    valid_route_name,
 };
 use sim_core::picker::tiles;
 use sim_core::world::korea_data::{KOREA_DATA_DIR, KoreaData, REGION_CACHE_DIR};
@@ -237,10 +237,9 @@ impl SimRoutePicker {
             if drawn.len() < 2 {
                 return Err("draw a line along roads".to_owned());
             }
-            let samples = resample_line(&drawn, LINE_STEP_M);
-            let area = route_area(&samples)?;
+            let area = route_area(&drawn)?;
             let mut model = self.route_model(&area)?;
-            let skipped = model.set_line(&samples, LINE_SNAP_M)?;
+            let skipped = model.set_line(&drawn, LINE_SNAP_M)?;
             Ok((model, area, skipped))
         })();
         self.finish_route(built)

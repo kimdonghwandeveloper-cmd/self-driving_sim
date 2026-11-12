@@ -56,6 +56,30 @@ pub fn route_area(points: &[LatLon]) -> Result<Bbox, String> {
     Ok(bbox)
 }
 
+/// 선을 따라 처음에서 `s` m 떨어진 점(`s`는 0..=선 길이로 묶는다). 빈 선이면 `None`.
+pub fn point_along(line: &[LatLon], s: f64) -> Option<LatLon> {
+    let mut left = s.max(0.0);
+    for pair in line.windows(2) {
+        let length = distance_m(pair[0], pair[1]);
+        if left <= length && length > 0.0 {
+            let t = left / length;
+            return Some(LatLon {
+                lat: pair[0].lat + (pair[1].lat - pair[0].lat) * t,
+                lon: pair[0].lon + (pair[1].lon - pair[0].lon) * t,
+            });
+        }
+        left -= length;
+    }
+    line.last().copied()
+}
+
+/// 선 길이(m).
+pub fn line_length_m(line: &[LatLon]) -> f64 {
+    line.windows(2)
+        .map(|pair| distance_m(pair[0], pair[1]))
+        .sum()
+}
+
 /// 그린 선을 처음부터 `step_m` 간격의 점으로 나눈다. 처음·끝 점은 항상 넣는다. 점이 하나뿐이면 그대로다.
 pub fn resample_line(line: &[LatLon], step_m: f64) -> Vec<LatLon> {
     let Some(&first) = line.first() else {

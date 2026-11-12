@@ -28,6 +28,8 @@ pub const LINE_GAPS_M: [f64; 3] = [200.0, 400.0, 800.0];
 pub const LINE_MAX_ANGLE_DEG: f64 = 45.0;
 /// 경유점은 교차로 노드에서 이만큼 떨어진 곳에만 둔다(m, 교차로 바로 너머 다른 팔에 붙는 것 방지). 임시값.
 pub const LINE_JUNCTION_CLEAR_M: f64 = 20.0;
+/// 그린 선의 진행 방향을 재는 거리(m): 점 앞뒤로 이만큼 떨어진 선 위 두 점의 방향. 임시값.
+pub const LINE_HEADING_SPAN_M: f64 = 15.0;
 /// 그린 선의 출발·도착은 교차로 노드에서 이만큼 떨어진 점으로 한다(m, 코스는 교차로에서 시작·끝날 수 없음). 임시값.
 pub const LINE_END_CLEAR_M: f64 = 5.0;
 /// 그린 선을 따른 경로가 (선 길이 × 이 배수 + 200 m)보다 길면 돌아간 것으로 보고 경유점을 줄여 다시 찾는다. 임시값.
@@ -305,10 +307,11 @@ impl PickerModel {
         Ok(())
     }
 
-    /// 그린 선을 경로 점으로 바꾸고 경로를 다시 계산한다(PLAN 4-11 2단계 선으로 그리기). `line`은 이미 일정 간격으로 나눈 점이다.
+    /// 그린 선을 경로 점으로 바꾸고 경로를 다시 계산한다(PLAN 4-11 2단계 선으로 그리기). `line`은 그린 그대로의 선(촘촘한 점)이다.
     ///
-    /// 1. 점마다 선 진행 방향과 [`LINE_MAX_ANGLE_DEG`] 안으로 달리는(일방통행은 통행 방향이 맞는) `max_m` 안의 가장 가까운 도로
-    ///    위 점을 찾는다. 없는 점은 건너뛰고 그 수를 돌려준다.
+    /// 1. 선을 [`region::LINE_STEP_M`] 간격 점으로 나누고, 점마다 그 자리 선 진행 방향(앞뒤 [`LINE_HEADING_SPAN_M`])과
+    ///    [`LINE_MAX_ANGLE_DEG`] 안으로 달리는(일방통행은 통행 방향이 맞는) `max_m` 안의 가장 가까운 도로 위 점을 찾는다. 처음·끝 점은
+    ///    그런 도로가 없으면 방향과 상관없이 가장 가까운 도로에 붙인다. 붙일 도로가 없는 점은 건너뛰고 그 수를 돌려준다.
     /// 2. 처음·끝 점을 출발·도착으로, 그 사이는 선을 따라 [`LINE_GAPS_M`]의 첫 간격마다(교차로에서 [`LINE_JUNCTION_CLEAR_M`] 떨어진 점만)
     ///    경유점으로 두고 계산한다.
     /// 3. 경로가 안 되거나 (선 길이 × [`LINE_DETOUR_FACTOR`] + 200 m)보다 길면 간격을 넓혀 다시, 끝까지 안 되면 출발·도착만으로
@@ -339,15 +342,29 @@ impl PickerModel {
             .filter(|&(_, degree)| degree >= 3)
             .filter_map(|(id, _)| positions.get(&id).copied())
             .collect();
+        let drawn = line;
+        let drawn_length = region::line_length_m(drawn);
+        let line = region::resample_line(drawn, region::LINE_STEP_M);
+        let last_index = line.len().saturating_sub(1);
         let snapped: Vec<Option<LatLon>> = (0..line.len())
             .map(|i| {
-                let (from, to) = (line[i.saturating_sub(1)], line[(i + 1).min(line.len() - 1)]);
-                let d = local_m(line[i], to);
-                let back = local_m(line[i], from);
-                let h = [d[0] - back[0], d[1] - back[1]];
+                // 선 진행 방향은 그린 선에서 이 점 앞뒤 [`LINE_HEADING_SPAN_M`]의 두 점으로 잰다(꺾이는 곳에서도 그 자리 방향).
+                let s = if i == last_index {
+                    drawn_length
+                } else {
+                    i as f64 * region::LINE_STEP_M
+                };
+                let ahead = region::point_along(drawn, s + LINE_HEADING_SPAN_M)?;
+                let behind = region::point_along(drawn, s - LINE_HEADING_SPAN_M)?;
+                let h = local_m(behind, ahead);
                 let length = h[0].hypot(h[1]);
                 let heading = (length > 0.0).then(|| [h[0] / length, h[1] / length]);
-                nearest_on_roads(&roads, line[i], heading, max_m)
+                nearest_on_roads(&roads, line[i], heading, max_m).or_else(|| {
+                    // 출발·도착(선의 처음·끝)은 놓은 곳에서 끝나야 하므로 방향이 맞는 도로가 없으면 가장 가까운 도로에 붙인다.
+                    (i == 0 || i == last_index)
+                        .then(|| nearest_on_roads(&roads, line[i], None, max_m))
+                        .flatten()
+                })
             })
             .collect();
         let skipped = snapped.iter().filter(|p| p.is_none()).count();
@@ -380,10 +397,7 @@ impl PickerModel {
                 "the drawn line does not follow a road (only 1 point(s) within {max_m} m of a road in the drawn direction)"
             ));
         }
-        let line_length: f64 = line
-            .windows(2)
-            .map(|pair| region::distance_m(pair[0], pair[1]))
-            .sum();
+        let line_length = drawn_length;
         let clear_of_junctions = |p: LatLon| {
             junctions
                 .iter()
@@ -1044,8 +1058,8 @@ mod tests {
         line.insert(middle, off);
         model.clear();
         let skipped = model.set_line(&line, region::LINE_SNAP_M).unwrap();
-        // 먼 점과, 그 점 때문에 진행 방향이 틀어진 앞뒤 점이 건너뛰어진다.
-        assert!((1..=3).contains(&skipped), "{skipped}");
+        // 선이 먼 점까지 갔다 오는 부분(약 2.2 km)에서 도로가 없는 점들이 건너뛰어진다.
+        assert!(skipped >= 1, "{skipped}");
         let Some(Ok(drawn)) = &model.planned else {
             panic!("{:?}", model.planned);
         };
