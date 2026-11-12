@@ -39,6 +39,24 @@ func _run() -> void:
 		print("LONG ROUTE PROBE: 경로 실패 %.0f ms: %s %s" % [plan_ms, planned.error, route.error])
 		quit(0)
 		return
+	# --jitter=<m>: 계산된 경로선을 사람이 손으로 그린 선처럼 좌우로 흔들어(사인파, 진폭 m) 선 그리기 경로로 다시 만들어 본다.
+	var jitter := float(_arg("jitter", "-1"))
+	if jitter >= 0.0:
+		var line: PackedVector2Array = route.line
+		var drawn := PackedVector2Array()
+		var walked := 0.0
+		for i in range(line.size()):
+			if i > 0:
+				walked += line[i].distance_to(line[i - 1])
+			var along: Vector2 = (line[mini(i + 1, line.size() - 1)] - line[maxi(i - 1, 0)]).normalized()
+			drawn.append(line[i] + Vector2(-along.y, along.x) * jitter * sin(walked / 37.0))
+		started = Time.get_ticks_usec()
+		var drew: Dictionary = picker.call("plan_line", drawn)
+		var draw_ms := (Time.get_ticks_usec() - started) / 1000.0
+		var redrawn: Dictionary = picker.call("route")
+		print("LONG ROUTE PROBE: 선 그리기(흔들림 %.0f m) %s %.0f ms, 건너뜀 %d, 경로 %s %.0f m (원래 %.0f m) %s %s" % [jitter, str(drew.ok), draw_ms, int(drew.skipped), str(redrawn.ok), redrawn.length_m, route.length_m, drew.error, redrawn.error])
+		quit(0)
+		return
 	var saved: Dictionary = picker.call("save", name, true)
 	started = Time.get_ticks_usec()
 	var built: Dictionary = ClassDB.class_call_static("SimCourse", "build", "map:cache/routes/%s.toml" % name)
