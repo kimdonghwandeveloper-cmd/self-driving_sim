@@ -5,10 +5,14 @@
 //!
 //! 건물·장소(PLAN 4-9): "건물·장소 받기"로 열린 지역의 장소 자료를 받고(도로와 같은 받기 규칙, 동시 1개),
 //! 지역을 열 때 캐시에 장소 자료가 있으면 함께 연다. 건물 클릭·이름 검색으로 고른 장소의 진입 지점을 점으로 더한다.
+//!
+//! 전국 장소 검색(PLAN 4-10): Nominatim에 묻는 검색은 백그라운드에서 하나씩 하고(`cache/geocode`에 저장),
+//! 결과는 `poll()`의 `search_results` 이벤트로 돌려준다.
 
 use std::path::{Path, PathBuf};
 
 use godot::prelude::*;
+use sim_core::picker::geocode::{GEOCODE_CACHE_DIR, GeocodeHit, GeocodeJob, UreqGet};
 use sim_core::picker::model::PickerModel;
 use sim_core::picker::region::{
     self, ROUTE_DIR, cached_regions, load_model, region_to_load, snapshot_graph_path,
@@ -65,6 +69,10 @@ pub struct SimRoutePicker {
     loading: Option<Loading>,
     /// 받는 중인 장소 자료 요청.
     places_loading: Option<Loading>,
+    /// 진행 중인 전국 검색(작업, 요청 번호).
+    searching: Option<(GeocodeJob, i64)>,
+    /// 마지막 전국 검색 결과.
+    hits: Vec<GeocodeHit>,
     /// 다음 요청 번호(1부터).
     next_request: i64,
     /// 다음 `poll()`에 돌려줄 이벤트.
@@ -316,6 +324,51 @@ impl SimRoutePicker {
             .collect()
     }
 
+    /// 전국 장소 검색을 시작한다(Enter·검색 버튼에서만 부른다). 결과는 `poll()`의 `search_results`. 검색 중이면 거부한다.
+    #[func]
+    fn search_nationwide(&mut self, text: GString) -> VarDictionary {
+        let failure =
+            |error: &str| vdict! { "ok" => false, "error" => error, "request_id" => 0_i64 };
+        if self.searching.is_some() {
+            return failure("이미 검색 중입니다");
+        }
+        if text.to_string().trim().is_empty() {
+            return failure("검색어를 입력하세요");
+        }
+        match GeocodeJob::start(
+            repo_path(GEOCODE_CACHE_DIR),
+            text.to_string(),
+            self.network,
+            Box::new(UreqGet),
+        ) {
+            Ok(job) => {
+                self.next_request += 1;
+                let request_id = self.next_request;
+                self.searching = Some((job, request_id));
+                vdict! { "ok" => true, "error" => "", "request_id" => request_id }
+            }
+            Err(error) => failure(&error),
+        }
+    }
+
+    /// 전국 검색 결과 `index`를 가장 가까운 도로 위 점으로 이름과 함께 더한다. 열린 지역이 없거나 도로에서 멀면 실패.
+    #[func]
+    fn add_search_hit(&mut self, index: i64) -> VarDictionary {
+        let Some(hit) = usize::try_from(index).ok().and_then(|i| self.hits.get(i)) else {
+            return result(false, "검색 결과가 없습니다");
+        };
+        let Some(model) = self.model.as_mut() else {
+            return result(false, "먼저 지역 도로를 받으세요");
+        };
+        match model.add_named_point(&hit.name, hit.at) {
+            Ok(()) => result(true, ""),
+            Err(error) => result(
+                false,
+                &crate::korean::picker_line(&sim_core::picker::model::describe_error(&error)),
+            ),
+        }
+    }
+
     /// 진행 이벤트를 꺼낸다. 매 프레임 부른다. 받기가 끝났으면 지역을 교체하고 점·경로를 비운다.
     #[func]
     fn poll(&mut self) -> Array<VarDictionary> {
@@ -370,6 +423,42 @@ impl SimRoutePicker {
                         .push(event("failed", &self.message, loading.request_id));
                 }
             }
+        }
+        if let Some(outcome) = self
+            .searching
+            .as_ref()
+            .and_then(|(job, _)| job.try_result())
+        {
+            let (_, request_id) = self.searching.take().expect("checked above");
+            let mut found = event("search_results", "", request_id);
+            match outcome {
+                Ok(hits) => {
+                    let results: Array<VarDictionary> = hits
+                        .iter()
+                        .enumerate()
+                        .map(|(index, hit)| {
+                            let view = tiles::to_view(hit.at);
+                            vdict! {
+                                "index" => index as i64,
+                                "name" => hit.name.as_str(),
+                                "address" => hit.address.as_str(),
+                                "kind" => hit.kind.as_str(),
+                                "view" => Vector2::new(view.x, view.y),
+                            }
+                        })
+                        .collect();
+                    found.set("ok", true);
+                    found.set("message", format!("전국 검색 결과 {}곳", hits.len()));
+                    found.set("results", &results);
+                    self.hits = hits;
+                }
+                Err(error) => {
+                    found.set("ok", false);
+                    found.set("message", crate::korean::search_error(&error));
+                    found.set("results", &Array::<VarDictionary>::new());
+                }
+            }
+            self.events.push(found);
         }
         self.events.drain(..).collect()
     }

@@ -33,16 +33,25 @@ var places_button := Button.new()
 var place_search := LineEdit.new()
 var place_results := OptionButton.new()
 var place_outlines: Array = []
-## 검색 결과 상자 항목별 장소 번호(첫 항목은 안내문).
-var result_indices: Array[int] = []
+## 검색 결과 상자 항목별 내용 {source: "place"(받은 건물·장소)|"area"(전국 검색), index, view}. 안내문·구분선은 null.
+var result_items: Array = []
+## 받은 건물·장소 검색 결과와 마지막 전국 검색 결과(4-10).
+var local_results: Array = []
+var area_results: Array = []
+## 기다리는 전국 검색 요청 번호(0이면 없음). 지역 받기 요청과 따로 센다.
+var search_request := 0
+## 전국 검색 결과로 옮길 때 화면에 담을 범위(m). 지역 받기 범위(1.5 km)와 맞춘다.
+const SEARCH_VIEW_M := 1500.0
 ## 건물 윤곽·점 장소 색.
 const PLACE_COLOR := Color("b48ead")
 ## Godot 쪽 지도 텍스처 보관 상한(계약 7-3 권장값).
 const MAX_TEXTURES := 512
 ## 맞춤 보기에서 버튼·안내 영역으로 빼는 화면 크기(px). 최소 배율도 같은 영역 기준이다.
 const FIT_MARGIN := Vector2(80, 380)
-## 대한민국 근사 경계 밖을 덮는 색(사용자 결정: 주변 나라는 보이지 않게 한다).
-const MASK_COLOR := Color("262d34")
+## 화면 위쪽 버튼·안내 영역 높이(px). 지도 북쪽 끝이 이 영역 아래까지 내려와 보이도록 이동 한계에 더한다.
+const TOP_PANEL_PX := 300.0
+## 대한민국 근사 경계 밖을 덮는 색. 주변 나라는 보이지 않게 하되(사용자 결정) 이질감이 없도록 OSM 지도 바다색을 쓴다(4-10).
+const MASK_COLOR := Color("aad3df")
 ## 대한민국 근사 경계(지도 좌표). Rust SimTiles가 없으면 비어 있고 가림·제한을 하지 않는다.
 var country_outline := PackedVector2Array()
 ## 경계를 감싸는 범위. 카메라 이동·축소 한계로 쓴다.
@@ -144,12 +153,9 @@ func _draw() -> void:
 	for tile in tile_layers:
 		if tile.get("texture") is Texture2D:
 			draw_texture_rect(tile.texture, tile.rect, false)
+	# 근사 경계선은 바다 위에 가짜 선이 보이므로 그리지 않는다(4-10).
 	for polygon in mask_polygons:
 		draw_colored_polygon(polygon, MASK_COLOR)
-	if country_outline.size() > 2:
-		var closed := country_outline.duplicate()
-		closed.append(country_outline[0])
-		draw_polyline(closed, Color("8a96a3"), 1.5 / scale_m, true)
 	for bounds in cached:
 		draw_rect(bounds, Color("657f99"), false, 1.0 / scale_m)
 	if opened_region.has_area():
@@ -281,36 +287,85 @@ func _search_places(text: String) -> void:
 	_fill_place_results(found)
 	feedback = "검색 결과 %d곳" % found.size() if not found.is_empty() else "'%s' 이름의 장소가 없습니다(건물·장소를 받았는지 확인)" % text
 
-## 입력이 바뀔 때마다(한글은 글자 조합이 끝날 때마다) 찾는다. 빈 칸이면 결과 상자만 비운다.
+## 입력이 바뀔 때마다(한글은 글자 조합이 끝날 때마다) 받은 건물·장소 안에서만 찾는다. 전국 검색은 하지 않는다
+## (Nominatim 이용 규칙: 입력 중 자동완성 금지). 지난 전국 결과는 지운다. 빈 칸이면 결과 상자만 비운다.
 func _search_typed(text: String) -> void:
+	area_results = []
 	if text.strip_edges().is_empty():
 		_fill_place_results([])
 		feedback = ""
 	else:
 		_search_places(text)
 
-## Enter·검색 버튼: 아직 조합 중인 한글 글자(IME)를 붙여 찾는다.
+## Enter·검색 버튼: 아직 조합 중인 한글 글자(IME)를 붙여 받은 건물·장소에서 찾고, 전국 검색도 요청한다.
 func _search_submitted(text: String) -> void:
 	var composing := DisplayServer.ime_get_text() if place_search.has_focus() else ""
-	_search_places((text + composing).strip_edges())
+	var query := (text + composing).strip_edges()
+	if query.is_empty() or picker == null:
+		return
+	area_results = []
+	_search_places(query)
+	var result: Dictionary = picker.call("search_nationwide", query)
+	if result.get("ok", false):
+		search_request = int(result.request_id)
+		feedback = "전국 검색 중... (OpenStreetMap Nominatim)"
+	else:
+		feedback = str(result.error)
 
-## 결과 상자를 안내문 한 줄과 검색 결과(이름 · 종류)로 다시 만든다.
+## 전국 검색 결과 이벤트를 받아 결과 상자 아래쪽에 붙인다.
+func _show_area_results(event: Dictionary) -> void:
+	search_request = 0
+	area_results = event.get("results", [])
+	_fill_place_results(local_results)
+	feedback = str(event.message)
+	if not area_results.is_empty():
+		place_results.show_popup()
+
+## 결과 상자를 안내문 한 줄, 받은 건물·장소 결과(이름 · 종류), 전국 검색 결과(구분선 아래, 이름 — 주소)로 다시 만든다.
 func _fill_place_results(found: Array) -> void:
+	local_results = found
 	place_results.clear()
-	result_indices.clear()
-	place_results.add_item("검색 결과에서 점으로 더하기")
+	result_items.clear()
+	place_results.add_item("검색 결과에서 고르기")
+	result_items.append(null)
 	for item in found:
 		place_results.add_item("%s · %s" % [item.name, item.kind] if str(item.kind) != "" else str(item.name))
-		result_indices.append(int(item.index))
-	place_results.disabled = found.is_empty()
+		result_items.append({"source": "place", "index": int(item.index)})
+	if not area_results.is_empty():
+		place_results.add_separator("전국 검색")
+		result_items.append(null)
+		for item in area_results:
+			place_results.add_item("%s — %s" % [item.name, item.address])
+			result_items.append({"source": "area", "index": int(item.index), "view": item.view})
+	place_results.disabled = result_items.size() <= 1
 
-## 고른 검색 결과의 장소를 점으로 더한다.
+## 고른 검색 결과를 처리한다. 받은 건물·장소는 점으로 더하고, 전국 결과는 _pick_area_result에 맡긴다.
 func _select_place_result(item: int) -> void:
 	place_results.select(0)
-	if item < 1 or item > result_indices.size():
+	if item < 1 or item >= result_items.size() or result_items[item] == null:
 		return
-	_add_place(result_indices[item - 1])
+	var chosen: Dictionary = result_items[item]
+	if chosen.source == "area":
+		_pick_area_result(chosen)
+		return
+	_add_place(int(chosen.index))
 	_refresh_route()
+
+## 전국 검색 결과: 열린 지역 안이면 가까운 도로 위 점으로 더하고, 아니면 그 위치로 지도를 옮겨 도로 받기를 안내한다.
+func _pick_area_result(chosen: Dictionary) -> void:
+	var view: Vector2 = chosen.view
+	if opened_region.has_point(view):
+		var result: Dictionary = picker.call("add_search_hit", int(chosen.index))
+		feedback = "" if result.get("ok", false) else str(result.error)
+		_refresh_route()
+		return
+	var available := get_viewport_rect().size - FIT_MARGIN
+	if available.x > 0.0 and available.y > 0.0:
+		camera.zoom = Vector2.ONE * clampf(minf(available.x, available.y) / SEARCH_VIEW_M, _min_zoom(), 8.0)
+	camera.position = view
+	_clamp_camera()
+	feedback = "검색한 곳으로 옮겼습니다. '이 지역 도로 받기'를 누른 뒤 같은 결과를 다시 고르면 출발·도착 점으로 더합니다."
+	queue_redraw()
 
 ## 장소 번호의 진입 지점을 점으로 더하고, 실패하면 이유를 안내에 남긴다.
 func _add_place(index: int) -> void:
@@ -354,6 +409,10 @@ func _refresh_route() -> void:
 func _process(_delta: float) -> void:
 	if picker != null:
 		for event in picker.call("poll"):
+			if event.type == "search_results":
+				if search_request != 0 and int(event.request_id) == search_request:
+					_show_area_results(event)
+				continue
 			if active_request == 0 or int(event.request_id) != active_request:
 				continue
 			feedback = str(event.message)
@@ -524,17 +583,24 @@ func _set_country(outline: PackedVector2Array, bounds: Rect2) -> void:
 		for piece in Geometry2D.clip_polygons(corners, outline):
 			mask_polygons.append(piece)
 
-## 대한민국 전체가 화면에 들어오는 배율보다 더 축소하지 못하게 하는 최소 배율. 경계가 없으면 기존 한계.
+## 대한민국 범위가 화면(위 버튼 영역 제외)을 가로·세로 모두 꽉 채우는 최소 배율. 경계가 없으면 기존 한계.
 func _min_zoom() -> float:
 	if not country_bounds.has_area():
 		return 0.0005
-	var available := get_viewport_rect().size - FIT_MARGIN
-	return clampf(minf(available.x / country_bounds.size.x, available.y / country_bounds.size.y), 0.0005, 8.0)
+	var screen := get_viewport_rect().size
+	return clampf(maxf(screen.x / country_bounds.size.x, (screen.y - TOP_PANEL_PX) / country_bounds.size.y), 0.0005, 8.0)
 
-## 카메라 가운데를 대한민국 범위 안으로, 배율을 최소 배율 이상으로 묶는다.
+## 배율을 최소 배율 이상으로, 화면 가장자리를 대한민국 범위 안으로 묶는다. 위쪽은 버튼 영역만큼 더 허용한다.
 func _clamp_camera() -> void:
 	if not country_bounds.has_area():
 		return
 	if camera.zoom.x < _min_zoom():
 		camera.zoom = Vector2.ONE * _min_zoom()
-	camera.position = camera.position.clamp(country_bounds.position, country_bounds.end)
+	var half := get_viewport_rect().size * 0.5 / camera.zoom.x
+	var low := country_bounds.position + half - Vector2(0, TOP_PANEL_PX / camera.zoom.x)
+	var high := country_bounds.end - half
+	camera.position = Vector2(_clamp_or_middle(camera.position.x, low.x, high.x), _clamp_or_middle(camera.position.y, low.y, high.y))
+
+## value를 [low, high]로 묶는다. 화면이 범위보다 넓어 low > high이면 두 값의 가운데를 쓴다.
+func _clamp_or_middle(value: float, low: float, high: float) -> float:
+	return (low + high) * 0.5 if low > high else clampf(value, low, high)
