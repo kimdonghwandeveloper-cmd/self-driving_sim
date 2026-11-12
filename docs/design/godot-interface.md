@@ -16,6 +16,7 @@ Godot에 노출할 클래스·메서드·시그널·좌표 규칙·실패 처리
 | v1.4 | 항목 추가(기존 이름·인자 변경 없음, 2026-11-10 Claude, Phase 5-1 시나리오 틀): `SimVehicle.scenario` 속성, `scenario_control()`·`scenario_status()`, 시나리오 시그널 4개(2절 2-1), `SimScenario.scenario_files()`(3-2). 시나리오 파일 형식은 `docs/scenarios.md` |
 | v1.5 | 항목 추가(기존 이름·인자 변경 없음, 2026-11-11 Claude, PLAN 4-8 자동 경로·4-9 건물·장소): `SimRoutePicker.request_places()`·`load_places_file()`·`place_outlines()`·`place_at()`·`search_places()`·`add_place()`·`point_labels()`, `poll()` 이벤트 `places_loaded`(7-2). 경로 계산 규칙 변경(일방통행·회전 제한·우회·교차로 단순화)은 `route()`·`status_lines()` 형식을 바꾸지 않는다. ※ `feature/phase5-scenarios`도 v1.5를 쓰므로 나중에 병합하는 쪽을 v1.6으로 올린다 |
 | v1.6 | 항목 추가(기존 이름·인자 변경 없음, 2026-11-12 Claude, PLAN 4-10 전국 장소 검색): `SimRoutePicker.search_nationwide()`·`add_search_hit()`, `poll()` 이벤트 `search_results`(7-2). ※ `feature/phase5-scenarios`(v1.5)를 나중에 병합하면 그쪽을 v1.7로 올린다 |
+| v1.7 | **항목 제거·추가**(2026-11-12 Claude, PLAN 4-11 전국 지도 자료 내장, 사용자 결정): 네트워크 지역 받기 `request_region()`·`cancel_region()`·`request_places()`·`cached_regions()`와 `poll()` 이벤트 `progress`·`region_loaded`·`places_loaded`·`failed`를 없앴다. 대신 `open_region()`(내장 전국 자료에서 바로 열기, 동기)·`data_status()`·`use_data_dir()`·`latlon_to_view()`를 더했다. `network`는 전국 장소 검색에만 쓴다. ※ `feature/phase5-scenarios`(v1.5)를 나중에 병합하면 그쪽을 v1.8로 올린다 |
 
 > GD-5(v1.3)에서 Bevy 앱을 지웠다. 본문의 "Bevy 판과 같음"·Bevy 파일 경로는 계약을 정할 때의 기준을 기록한 것이며, 그 규칙은 지금 `sim-core`에 있다.
 
@@ -335,14 +336,15 @@ Bevy 판 `src/picker/`(4-5·4-5b)의 계산·캐시·받기 부분은 Bevy와 �
 
 | 함수·속성 | 반환 | 설명 |
 | --- | --- | --- |
-| `network: bool` (속성) | — | 기본 `true`. `false`면 캐시만 쓰고, 캐시에 없으면 `failed` 이벤트. 헤드리스 시험은 `false` |
+| `network: bool` (속성) | — | 기본 `true`. (v1.7) 전국 장소 검색에만 쓴다: `false`면 저장한 검색 결과만. 지역 열기는 네트워크를 쓰지 않는다. 헤드리스 시험은 `false` |
 | `load_snapshot(path: String)` | `{ok, error}` | 스냅샷(지역 도로) 열기. 실패 시 이전 상태 유지. (v1.1) `path`는 스냅샷 **폴더** 또는 그 안의 `graph.osm.json` 파일 경로 둘 다 받는다(같은 폴더의 meta·`connectivity.json`을 함께 읽는다) |
-| `cached_regions()` | `Array[Rect2]` | **디스크 캐시**에 있는 지역 범위(Bevy `cached_regions(map_fetch::CACHE_DIR)`), 지도 좌표 |
 | `loaded_region()` | `Rect2` | 지금 열린 지역 범위. 없으면 크기 0 |
-| `view_to_latlon(view: Vector2)` | `PackedFloat64Array` | 지도 좌표를 `[lat, lon]`으로. Bevy 판 투영(`tiles::to_view`)의 역변환. 값이 유한하지 않거나 메르카토르 유효 위도(±85.05112878°) 밖이면 **빈 배열**(Godot은 받기 버튼을 끈다) |
-| `request_region(center_latlon: PackedFloat64Array)` | `{ok, error, request_id: int}` | 가운데 1.5 × 1.5 km 받기 시작(이미 받은 범위면 캐시만). 백그라운드 처리. 받는 중이면 `ok=false, error="already loading"`, `request_id` 0 |
-| `cancel_region()` | 없음 | 받는 중인 요청 취소. 취소·이전 요청의 결과는 버린다 |
-| `poll()` | `Array[Dictionary]` | 진행 이벤트 `{type: "progress"|"region_loaded"|"failed", message: String, request_id: int}`. 매 프레임 호출. (v1.5) 장소 받기는 `places_loaded`. (v1.6) 전국 검색은 `{type: "search_results", ok: bool, message, request_id, results: Array[Dictionary]}`(`results` 항목은 `{index, name, address, kind, view: Vector2}`, 실패면 빈 배열이고 `message`는 한국어) |
+| `view_to_latlon(view: Vector2)` | `PackedFloat64Array` | 지도 좌표를 `[lat, lon]`으로. Bevy 판 투영(`tiles::to_view`)의 역변환. 값이 유한하지 않거나 메르카토르 유효 위도(±85.05112878°) 밖이면 **빈 배열** |
+| (v1.7) `latlon_to_view(latlon: PackedFloat64Array)` | `Vector2` | `[lat, lon]`을 지도 좌표로(시험·검색 결과용). 형식이 맞지 않으면 원점 |
+| (v1.7) `open_region(center_latlon: PackedFloat64Array)` | `{ok, error}` | 가운데 1.5 × 1.5 km 지역의 도로·회전 제한·건물·장소를 **내장 전국 자료**(`data/korea`)에서 연다. 함수 안에서 끝난다(측정 0.1 s 미만). 도로는 지역 스냅샷 `cache/regions/<자료 판>/<범위>.osm.json`으로 써서 저장 경로가 가리킨다. `error`는 한국어(자료 없음·형식 다름·도로 없음) |
+| (v1.7) `data_status()` | `{ok, error, data_time}` | 전국 자료를 열 수 있는지. 없으면 `ok=false`와 만드는 방법 안내(한국어). `data_time`은 원본 복제 시각(유닉스 초 문자열, 없으면 빈 문자열) |
+| (v1.7) `use_data_dir(dir: String)` | 없음 | 전국 자료 폴더를 바꾼다(저장소 루트 기준, 빈 문자열이면 `data/korea`). 시험이 작은 자료(`testdata/korea-yeosu`)를 쓸 때 부른다 |
+| `poll()` | `Array[Dictionary]` | 매 프레임 호출. (v1.7) 이벤트는 전국 검색 결과 `{type: "search_results", ok: bool, message, request_id, results: Array[Dictionary]}`뿐이다(`results` 항목은 `{index, name, address, kind, view: Vector2}`, 실패면 빈 배열이고 `message`는 한국어) |
 | `road_segments()` | `PackedVector2Array` | 그릴 도로 선분(짝수 개: from, to 반복), 지도 좌표 |
 | `road_usable()` | `PackedByteArray` | 선분별 경로 탐색 가능 여부(1/0) |
 | `add_point(view: Vector2)` | 없음 | 점 추가 |
@@ -353,7 +355,6 @@ Bevy 판 `src/picker/`(4-5·4-5b)의 계산·캐시·받기 부분은 Bevy와 �
 | `route()` | `{ok, error, line: PackedVector2Array, length_m: float, warnings: PackedStringArray}` | 현재 점에 대한 계산 결과. 항상 모든 키. 실패·2점 미만이면 `line` 빈 배열, `length_m` 0, 2점 미만은 `ok=false, error=""` |
 | `status_lines()` | `PackedStringArray` | Bevy 판 상태 문구(지역·점 수·경고·받기 진행) |
 | `save(name: String, overwrite: bool = false)` | `{ok, error, path: String}` | 경로 파일 저장(Bevy 판과 같은 형식·폴더). 실패면 `path=""` |
-| (v1.5) `request_places()` | `{ok, error, request_id: int}` | 열린 지역(지역 받기 범위, 아니면 스냅샷 도로 범위)의 건물·장소 받기 시작(4-9). `network=false`면 캐시만. 지역이 없으면 `error="open a region first"`, 받는 중이면 `"already loading"`. 결과는 `poll()`의 `places_loaded`/`failed`. 지역을 열 때 캐시(`cache/places`)에 장소 자료가 있으면 자동으로 함께 연다 |
 | (v1.5) `load_places_file(path: String)` | `{ok, error}` | 장소 파일(`places.osm.json` 형식)을 직접 연다(시험·수동 확인용). 상대 경로는 저장소 루트 기준 |
 | (v1.5) `place_outlines()` | `Array[PackedVector2Array]` | 장소 윤곽(지도 좌표, 닫는 점 중복 없음). 점 장소는 점 하나짜리 배열. 순서는 장소 번호 |
 | (v1.5) `place_at(view: Vector2)` | `int` | 그 위치의 장소 번호(윤곽 안이면 가장 작은 건물, 아니면 15 m 안의 점 장소). 없으면 -1 |
@@ -364,9 +365,9 @@ Bevy 판 `src/picker/`(4-5·4-5b)의 계산·캐시·받기 부분은 Bevy와 �
 | (v1.6) `add_search_hit(index: int)` | `{ok, error}` | 마지막 전국 검색 결과 `index`를 가장 가까운 탐색 가능 도로 위 점(100 m 이내)으로 이름과 함께 끝에 더하고 경로를 다시 계산. 열린 지역이 없거나 도로에서 멀면 실패(`error` 한국어) |
 
 - 점 편집 함수는 경로를 **동기로** 다시 계산한다(함수 안에서 끝남). 계산이 실패하면 이전 경로를 내보내지 않는다.
-- `request_region` 결과: 실패하면 기존 지역·점·경로를 그대로 둔다. 성공하면 지역을 **교체**하고 점·경로를 비운다(Bevy 판과 같음).
-- 네트워크는 `request_region`에서만 쓴다. 자료원은 Bevy 판과 같은 Overpass(4-4)다. 지도 표시·점 편집·저장으로 지역 자료를 자동으로 받지 않는다.
-- 객체가 해제되면(화면 이탈) 받기를 취소한다.
+- `open_region` 결과: 실패하면 기존 지역·점·경로를 그대로 둔다. 성공하면 지역을 **교체**하고 점·경로를 비운다.
+- (v1.7) 지역 자료는 네트워크로 받지 않는다(PLAN 4-11). 화면은 점이 없을 때 클릭한 곳·확대해 멈춘 화면 가운데·전국 검색 결과 위치로
+  `open_region`을 부르고, 점이 있으면 지역을 바꾸지 않는다(출발·도착은 한 지역 안, 4-11 2단계에서 풀 예정).
 - **신규 검사:** `save`의 `name`은 `[A-Za-z0-9_-]{1,64}`만 허용하고 `.toml`을 Rust가 붙인다(경로 구분자 금지).
   같은 이름이 있고 `overwrite=false`면 실패. 유효한 현재 경로가 없으면 `"no valid route to save"`.
 
@@ -556,7 +557,7 @@ v1 본문(1~8절)이 기준이다. 아래는 합의 과정 기록이며, 본문�
    - `request_visible(min, max, meters_per_px)`로 이름을 바꾼다(v0.1의 `scale`). `meters_per_px`는 화면 1 px에 해당하는 지도 m(Bevy `ortho.scale`과 같음, Godot `1 / Camera2D.zoom.x`).
      `min`은 북서(작은 x, 작은 y), `max`는 남동. 줌 선택은 Bevy `tiles::zoom_for_scale`과 같고 범위는 5..=19. 결과의 `rect`도 같은 지도 좌표다.
 
-7. **지역 요청 수명**
+7. **지역 요청 수명** — v1.7(PLAN 4-11)에서 네트워크 지역 받기를 없애 아래 내용은 지난 기록이다. 지금 규칙은 7-2 `open_region`을 따른다.
    - `request_region`은 `{ok, error, request_id: int}`. 받는 중에 다시 부르면 `ok=false, error="already loading"`(Bevy 판도 받는 중엔 무시). `cancel_region()`으로 취소하고, 취소·이전 요청의 결과는 버린다.
      `poll()` 이벤트에 `request_id`를 넣는다.
    - 실패하면 기존 지역·점·경로를 그대로 둔다. 성공하면 지역을 **교체**하고 점·경로를 비운다(Bevy 판과 같음).
