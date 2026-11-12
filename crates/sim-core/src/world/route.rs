@@ -16,8 +16,10 @@
 //! 경로가 지나는 쪽만 그린다(진행 방향 검사는 경로 계획 [`super::route_plan`]이 한다).
 //! 교차로 때문에 거부되면 [`BuildFailure::node`]에 그 교차로 노드를 담아, 경로 계획이 그 교차로를 피해 다시 찾게 한다.
 //!
-//! 단순화(PLAN 4-8 규칙에서만): 교차로 형상 규칙(좁은 팔 각도, 교차로 근처 굽음, 짧은 팔)에 걸리는 교차로는 경로에 없는 팔을
-//! 그리지 않고 보통 굽은 길처럼 잇는다([`RouteCourse::simplified`]). 그렇게 이은 조각을 만들 수 없으면(돌 수 없는
+//! 단순화(PLAN 4-8 규칙에서만): 교차로 형상 규칙(좁은 팔 각도, 교차로 근처 굽음, 짧은 팔, 별 모양 아님)에 걸리는 경로 중간의
+//! 교차로는 경로에 없는 팔을 그리지 않고 보통 굽은 길처럼 잇는다([`RouteCourse::simplified`]). 처음(4-8)에는 30° 안으로 곧게
+//! 지날 때만 단순화했으나, 긴 경로(PLAN 4-11 2단계)에서 도심 교차로 거부가 잦아 꺾어 도는 교차로도 단순화한다. 출발·도착
+//! 가까이의 교차로 때문에 시작·목표 자세 자리가 모자라도 그 교차로를 단순화한다. 그렇게 이은 조각을 만들 수 없으면(돌 수 없는
 //! 꺾임 등) 그 교차로 노드를 원인으로 돌려준다.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -81,8 +83,6 @@ const MIN_PIECE_LENGTH_M: f32 = 1.0;
 const SAME_NODE_TOLERANCE_DEG: f64 = 1.0e-7;
 /// 교차로 접합 허용 원 반경에 더하는 여유(m).
 const CONTACT_MARGIN_M: f32 = 0.05;
-/// 교차로를 단순화할 수 있는 경로 꺾임 각 상한(deg). 이보다 꺾어 돌면 단순화하지 않는다. 임시값.
-pub const SIMPLIFY_MAX_TURN_DEG: f32 = 30.0;
 /// 교차로를 건너는 안내선의 표본 수.
 const GUIDE_SAMPLES: usize = 16;
 /// 교차로에서 꺾는 안내선 원호 반경의 하한을 차량 최소 회전 반경의 몇 배로 둘지. 임시값.
@@ -479,20 +479,44 @@ pub fn build_route_course_detailed(
             Ok(build) => {
                 builds.insert(i, build);
             }
-            // 경로가 거의 곧게 지나는 교차로만 단순화한다. 경로 끝이거나 꺾어 도는 교차로는 원인으로 돌려준다.
+            // 경로 중간의 교차로는 꺾어 돌아도 단순화한다(PLAN 4-11 2단계, 처음 4-8에서는 30° 안으로 곧게 지날 때만).
+            // 그렇게 이은 굽은 길을 만들 수 없으면(돌 수 없는 꺾임) 아래 조각 만들기에서 이 교차로를 원인으로 돌려준다.
+            // 경로 끝 교차로나 단순화를 쓰지 않는 예전 규칙이면 원인으로 돌려준다.
             Err(message) => {
-                let straight = simplify
-                    && route.get(i + 1).is_some_and(|&next| {
-                        let (before, here, after) = (at(route[i - 1]), at(id), at(next));
-                        (here - before).angle_to(after - here).abs()
-                            <= SIMPLIFY_MAX_TURN_DEG.to_radians()
-                    });
-                if !straight {
+                if !simplify || i + 1 >= route.len() {
                     return Err(BuildFailure::at(id, message));
                 }
                 simplified.push(i);
             }
         }
+    }
+    // 출발·도착 가까이의 교차로 때문에 첫·마지막 조각이 시작·목표 자세보다 짧으면 그 교차로를 단순화해 조각을 늘린다.
+    if simplify {
+        let length_to = |from: usize, to: usize| -> f32 {
+            route[from..=to]
+                .windows(2)
+                .map(|pair| at(pair[0]).distance(at(pair[1])))
+                .sum()
+        };
+        while let Some((&first, build)) = builds.first_key_value() {
+            if length_to(0, first) - build.cut[&route[first - 1]] >= map::start_pose_length_m() {
+                break;
+            }
+            builds.remove(&first);
+            simplified.push(first);
+        }
+        let last_index = route.len() - 1;
+        while let Some((&last, build)) = builds.last_key_value() {
+            if last == last_index
+                || length_to(last, last_index) - build.cut[&route[last + 1]]
+                    >= map::goal_pose_length_m()
+            {
+                break;
+            }
+            builds.remove(&last);
+            simplified.push(last);
+        }
+        simplified.sort_unstable();
     }
 
     // 경로 조각: 시작·교차로·끝으로 나눈다. 단순화한 교차로는 조각 안의 보통 노드다.

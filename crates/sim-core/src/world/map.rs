@@ -339,6 +339,19 @@ pub fn road_piece(points: &[Vec2], spec: &RoadSpec, walls: [bool; 2]) -> Result<
     })
 }
 
+/// 시작 자세에 필요한 첫 도로 조각 길이 하한(m, [`start_pose`]와 같은 계산). 경로 코스가 출발·도착 가까이의 교차로를
+/// 단순화할지 정할 때 쓴다(PLAN 4-11 2단계).
+pub fn start_pose_length_m() -> f32 {
+    START_REAR_CLEARANCE_M + VEHICLE_FOOTPRINT.length_m
+}
+
+/// 목표 자세에 필요한 마지막 도로 조각 길이 하한(m, [`goal_pose`]와 같은 계산).
+pub fn goal_pose_length_m() -> f32 {
+    START_REAR_CLEARANCE_M
+        + VEHICLE_FOOTPRINT.rear_axle_to_center_m
+        + VEHICLE_FOOTPRINT.length_m / 2.0
+}
+
 /// 중심선 시작 쪽 끝 벽에서 차체 뒤끝까지 [`START_REAR_CLEARANCE_M`]인 곳의 시작 자세를 만든다. 짧으면 오류.
 pub fn start_pose(center: &[Vec2]) -> Result<Motion, String> {
     let rear_overhang = VEHICLE_FOOTPRINT.length_m / 2.0 - VEHICLE_FOOTPRINT.rear_axle_to_center_m;

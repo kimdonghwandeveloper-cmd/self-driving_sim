@@ -1537,13 +1537,23 @@ mod tests {
         assert!(body.restrictions.is_empty(), "{:?}", body.restrictions);
     }
 
-    /// 우회: 직통로 가운데 교차로(노드 30)는 팔 사이 각이 좁아 만들 수 없으므로 그 교차로를 피해 북쪽으로 돌아간다.
+    /// 단순화와 우회: 직통로 가운데 교차로(노드 30)는 팔 사이 각이 좁아 교차로 면을 만들 수 없다. 지금 규칙(PLAN 4-11 2단계)은
+    /// 꺾어 도는 그 교차로를 곁가지 없이 굽은 길로 이어 지나고, 단순화를 쓰지 않는 예전 규칙은 그 교차로를 피해 북쪽으로 돌아간다.
     #[test]
-    fn unbuildable_junctions_are_avoided() {
+    fn unbuildable_junctions_are_simplified_or_avoided() {
         let ways = parse(ladder(&[], true));
-        let config = RoadGraphConfig::default();
         let points = [at(-80.0, 0.0), at(200.0, 40.0)];
-        let planned = plan_route_detailed(&ways, None, "s", &points, &config).unwrap();
+        let planned =
+            plan_route_detailed(&ways, None, "s", &points, &RoadGraphConfig::default()).unwrap();
+        assert!(planned.avoided.is_empty(), "{:?}", planned.avoided);
+        assert_eq!(planned.course.simplified, vec![30]);
+        let result = follow_path(&planned.course.course, &planned.course.guide, 4.0);
+        assert_eq!(result.impacts, 0, "{result:?}");
+        let legacy = RoadGraphConfig {
+            nav_rules: false,
+            ..RoadGraphConfig::default()
+        };
+        let planned = plan_route_detailed(&ways, None, "s", &points, &legacy).unwrap();
         assert_eq!(planned.avoided, vec![30]);
         assert!(planned.file.nodes.contains(&20), "{:?}", planned.file.nodes);
         let result = follow_path(&planned.course.course, &planned.course.guide, 4.0);
@@ -1551,7 +1561,7 @@ mod tests {
         // 돌아갈 길이 없으면 피한 교차로 수와 함께 실패한다.
         let mut blocked = ladder(&[], true);
         blocked.retain(|way| way.0 != 202);
-        let error = plan_route_detailed(&parse(blocked), None, "s", &points, &config).unwrap_err();
+        let error = plan_route_detailed(&parse(blocked), None, "s", &points, &legacy).unwrap_err();
         assert!(error.contains("no detour around 1"), "{error}");
     }
 
