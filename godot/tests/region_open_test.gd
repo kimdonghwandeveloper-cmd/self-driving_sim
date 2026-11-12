@@ -80,6 +80,7 @@ func _run() -> void:
 	_check(absf(float(route.length_m) - clicked_length) < clicked_length * 0.2, "선 그리기 경로가 같은 길이 아님: %.0f m / %.0f m (%s)" % [route.length_m, clicked_length, ends])
 
 	# 손떨림 보정: 오른쪽으로 곧게 그으면서 위아래로 ±5 m(배율 2에서 10 px) 떨어도, 보정한 선은 거의 곧고 놓은 곳에서 끝난다.
+	# 끝 점은 놓은 곳(떨림 포함) 그대로이므로 흔들림은 끝 15 m를 빼고 잰다.
 	var shaky_start := start + Vector2(0, -2000)
 	map._start_line(shaky_start)
 	var last_at := shaky_start
@@ -89,7 +90,8 @@ func _run() -> void:
 	var steady: PackedVector2Array = map._finished_line()
 	var wobble := 0.0
 	for i in range(1, steady.size() - 1):
-		wobble = maxf(wobble, absf(steady[i].y - shaky_start.y))
+		if steady[i].x < last_at.x - 15.0:
+			wobble = maxf(wobble, absf(steady[i].y - shaky_start.y))
 	_check(wobble < 2.0, "손떨림 보정 뒤에도 선이 %.1f m 흔들림(입력 5 m)" % wobble)
 	_check(steady[steady.size() - 1] == last_at, "보정한 선이 놓은 곳에서 끝나지 않음")
 	map.drawing = false
