@@ -1,4 +1,4 @@
-# Godot ↔ Rust 인터페이스 계약 (v1.8)
+# Godot ↔ Rust 인터페이스 계약 (v1.9)
 
 작성: 2026-11-08 Claude 초안, 2026-11-09 v1 고정(Codex가 동의한 v0.2와 Codex 추가 요청 2건 반영).
 목적: Claude(Rust, `crates/`)와 Codex(Godot, `godot/`)가 동시에 개발할 때 서로 기다리지 않도록
@@ -17,7 +17,8 @@ Godot에 노출할 클래스·메서드·시그널·좌표 규칙·실패 처리
 | v1.5 | 항목 추가(기존 이름·인자 변경 없음, 2026-11-11 Claude, PLAN 4-8 자동 경로·4-9 건물·장소): `SimRoutePicker.request_places()`·`load_places_file()`·`place_outlines()`·`place_at()`·`search_places()`·`add_place()`·`point_labels()`, `poll()` 이벤트 `places_loaded`(7-2). 경로 계산 규칙 변경(일방통행·회전 제한·우회·교차로 단순화)은 `route()`·`status_lines()` 형식을 바꾸지 않는다. ※ `feature/phase5-scenarios`도 v1.5를 쓰므로 나중에 병합하는 쪽을 v1.6으로 올린다 |
 | v1.6 | 항목 추가(기존 이름·인자 변경 없음, 2026-11-12 Claude, PLAN 4-10 전국 장소 검색): `SimRoutePicker.search_nationwide()`·`add_search_hit()`, `poll()` 이벤트 `search_results`(7-2). ※ `feature/phase5-scenarios`(v1.5)를 나중에 병합하면 그쪽을 v1.7로 올린다 |
 | v1.7 | **항목 제거·추가**(2026-11-12 Claude, PLAN 4-11 전국 지도 자료 내장, 사용자 결정): 네트워크 지역 받기 `request_region()`·`cancel_region()`·`request_places()`·`cached_regions()`와 `poll()` 이벤트 `progress`·`region_loaded`·`places_loaded`·`failed`를 없앴다. 대신 `open_region()`(내장 전국 자료에서 바로 열기, 동기)·`data_status()`·`use_data_dir()`·`latlon_to_view()`를 더했다. `network`는 전국 장소 검색에만 쓴다. ※ `feature/phase5-scenarios`(v1.5)를 나중에 병합하면 그쪽을 v1.8로 올린다 |
-| v1.8 | 항목 추가(기존 이름·인자 변경 없음, 2026-11-12 Claude, PLAN 2-7 충돌 물리 반응): `SimVehicle.last_impact()`(2절 읽기 함수, 마지막 충돌의 틱·닿는 속도·충격량·속도 변화·접촉점), `scenario_status()`의 `max_impact_delta_v_mps`(2-1). `collided` 시그널은 인자 없이 그대로다. 충돌하면 바로 서지 않고 튕기거나 미끄러지므로 `in_contact()`는 "접촉 거리 안"이라는 뜻만 남는다. ※ `feature/phase5-scenarios`(v1.5)를 나중에 병합하면 그쪽을 v1.9로 올린다 |
+| v1.8 | 항목 추가(기존 이름·인자 변경 없음, 2026-11-12 Claude, PLAN 2-7 충돌 물리 반응): `SimVehicle.last_impact()`(2절 읽기 함수, 마지막 충돌의 틱·닿는 속도·충격량·속도 변화·접촉점), `scenario_status()`의 `max_impact_delta_v_mps`(2-1). `collided` 시그널은 인자 없이 그대로다. 충돌하면 바로 서지 않고 튕기거나 미끄러지므로 `in_contact()`는 "접촉 거리 안"이라는 뜻만 남는다. ※ `feature/phase5-scenarios`(v1.5)를 나중에 병합하면 그쪽을 v1.9로 올린다(v1.9가 먼저 들어가면 v1.10) |
+| v1.9 | 항목 추가(기존 이름·인자 변경 없음, 2026-11-13 Claude, PLAN 2-8 차체 서스펜션 움직임): `SimVehicle.body_pose()`(2절 읽기 함수, 차체 피치·롤·상하), `operator_view()`의 `body_follow`(카메라 설정, 입석 카메라가 차체 기울기를 따라가는 정도). 보이는 움직임만이며 주행·충돌·재생 결과는 바뀌지 않는다. ※ `feature/phase5-scenarios`(v1.5)를 나중에 병합하면 그쪽을 v1.10으로 올린다 |
 
 > GD-5(v1.3)에서 Bevy 앱을 지웠다. 본문의 "Bevy 판과 같음"·Bevy 파일 경로는 계약을 정할 때의 기준을 기록한 것이며, 그 규칙은 지금 `sim-core`에 있다.
 
@@ -79,6 +80,7 @@ Godot 쪽은 이 노드의 **자식**으로 차체 메시·실내·카메라를 
 | `emergency_active()` | `bool` | 비상 정지 중 |
 | `steer_angle_deg()` | `float` | 현재 바퀴 조향각(오른쪽 양수) |
 | `in_contact()` | `bool` | 장애물·연석과 접촉 거리 안에 있음. (v1.8) 충돌해도 바로 서지 않으므로 정지를 뜻하지 않는다 |
+| (v1.9) `body_pose()` | `Dictionary` | 차체 움직임(2-8) `{pitch_rad`(앞이 내려가면 양수)`, roll_rad`(오른쪽이 내려가면 양수)`, heave_m`(위가 양수)`}`. 평면 주행의 가속도로 계산한 **보이는 움직임만**이며 주행 경로·충돌·재생 결과에 영향이 없다. 강성·감쇠·무게중심 높이는 `config/vehicle.toml` `[suspension]` 임시값. 1차는 노면 높이 입력이 없어(4-7) `heave_m`은 0이다. `reset_course` 성공 시 0. 화면은 차체 메시만 기울이고 바퀴는 노면에 둔다 |
 | (v1.8) `last_impact()` | `Dictionary` | 마지막 충돌. 없거나 `reset_course` 성공 뒤면 빈 사전. `{tick: int`(충돌한 틱, `collided`를 보낸 틱)`, speed_mps`(닿기 직전 부호 있는 속도)`, normal_speed_mps`(접촉점이 장애물로 다가오던 속도, 0 이상)`, impulse_ns`(법선 충격량 N·s)`, delta_v_mps`(무게중심 속도 변화 크기)`, point: Vector3`(접촉점, y=0)`}`. 크기는 질량·관성·반발 계수 **임시값**으로 계산한 값이며 실제 충돌 거동이 아니다. 화면은 충돌 뒤 3초 동안 속도 변화·충격량을 HUD에 보인다 |
 | (v1.3) `calibration_lines()` | `PackedStringArray` | 보정 측정 한국어 5줄: 회전반경(후륜축)·최대 조향 최소 반경, 최대 제동 예상 정지거리, 진행 중 시험, 마지막 제동·가속 시험(회차 포함). 모두 시뮬레이터 임시값. 시험은 매 틱 측정하고 `reset_course` 성공 시 진행 중 시험만 버린다. 준비 전에는 빈 배열. 주행 화면은 `calibration` 코스에서만 표시한다 |
 | `view()` | `String` | `"front"`, `"rear"`, `"left"`, `"right"` (입석 시점 방향) |
@@ -146,8 +148,10 @@ Godot 쪽은 이 노드의 **자식**으로 차체 메시·실내·카메라를 
 `operator_view() -> Dictionary`: `config/camera.toml` 값. 읽기 실패 항목은 기본값으로 채우고 `config_warnings()`에 적는다.
 
 ```
-{ "eye_m": Vector3, "pitch_deg": float, "vertical_fov_deg": float, "near_clip_m": float }
+{ "eye_m": Vector3, "pitch_deg": float, "vertical_fov_deg": float, "near_clip_m": float, "body_follow": float }
 ```
+
+(v1.9) `body_follow`(0..=1, 기본 0.5)는 입석 카메라가 `body_pose()`의 기울기·상하를 따라가는 비율이다. 0이면 카메라는 기울지 않는다(멀미 대비). 외부 디버그 카메라는 따라가지 않는다.
 
 네 방향 시점은 같은 눈 위치에서 yaw만 바꾼다: front 0, left +π/2, rear π, right -π/2(+Y축 기준, Bevy 판 `ViewDirection`과 같음).
 Godot 카메라 리그가 `view_changed`를 받아 yaw를 바꾼다. 시점 전환은 주행 입력에 영향을 주지 않는다.

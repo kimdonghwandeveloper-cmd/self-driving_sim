@@ -44,6 +44,12 @@ const SCENARIO_HELP := {
 const SCENARIO_MESSAGE_COLOR := Color("ffd27a")
 var vehicle: Node3D
 var rig: Node3D
+## 차체 외관·실내(서스펜션 움직임을 받는다, 2-8).
+var visual: Node3D
+## 입석 카메라를 얹는 받침. 차체 기울기를 `body_follow`만큼 따라간다(외부 시점에서는 따라가지 않음).
+var camera_mount := Node3D.new()
+## 카메라가 차체 기울기를 따라가는 정도(계약 v1.9 `operator_view().body_follow`, 0 = 끔).
+var body_follow := 0.0
 var hud := Label.new()
 var warnings_label := Label.new()
 var notice := Label.new()
@@ -92,10 +98,15 @@ func start(course_name: String, force_preview: bool = false) -> void:
 	if course_name == YEOSU_COURSE and not is_preview and fallback_notice.is_empty():
 		bounds = _add_yeosu_background(bounds)
 	_fit_ground(bounds)
-	vehicle.add_child(Visual.new())
+	visual = Visual.new()
+	vehicle.add_child(visual)
+	camera_mount.name = "CameraMount"
+	vehicle.add_child(camera_mount)
 	rig = Rig.new()
-	vehicle.add_child(rig)
-	rig.configure(vehicle.call("operator_view"))
+	camera_mount.add_child(rig)
+	var view_settings: Dictionary = vehicle.call("operator_view")
+	body_follow = clampf(float(view_settings.get("body_follow", 0.0)), 0.0, 1.0)
+	rig.configure(view_settings)
 	if not is_preview:
 		vehicle.connect("view_changed", rig.apply_view)
 		vehicle.connect("debug_camera_toggled", rig.set_external)
@@ -267,6 +278,7 @@ func _process(_delta: float) -> void:
 	if not bool(vehicle.call("is_ready")):
 		_fail(str(vehicle.call("last_error")))
 		return
+	_apply_body_pose(vehicle.call("body_pose"))
 	var emergency: bool = vehicle.call("emergency_active")
 	var source := str(vehicle.call("input_source"))
 	hud.text = "%5.1f km/h    기어 %s    시동 %s    비상 정지 %s\n입력 %s    접촉 %s    시점 %s" % [
@@ -290,6 +302,11 @@ func _process(_delta: float) -> void:
 		calibration_label.text = CALIBRATION_TITLE + "\n" + "\n".join(vehicle.call("calibration_lines"))
 	if scenario_box.visible:
 		_update_scenario(vehicle.call("scenario_status"))
+
+## 차체 움직임(`SimVehicle.body_pose`, 계약 v1.9)으로 차체를 기울이고, 입석 카메라는 `body_follow`만큼 따라가게 한다.
+func _apply_body_pose(pose: Dictionary) -> void:
+	visual.set_body_pose(pose)
+	camera_mount.transform = Transform3D.IDENTITY if rig.external else Visual.pose_transform(pose, body_follow)
 
 ## 마지막 충돌 사전(`SimVehicle.last_impact`, 계약 v1.8)으로 충격 크기 줄을 만든다.
 ## 충돌이 없거나 [constant IMPACT_SHOW_TICKS]보다 오래됐으면 빈 문자열.

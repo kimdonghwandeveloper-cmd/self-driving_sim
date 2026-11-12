@@ -15,6 +15,7 @@ use crate::vehicle::collision::{ContactState, Impact, VEHICLE_FOOTPRINT};
 use crate::vehicle::collision::{ObstacleGrid, step_with_grid};
 use crate::vehicle::dynamics::{DynamicsParams, Motion};
 use crate::vehicle::state::{EngineState, Gear, VehicleCommand, VehicleInput, VehicleState};
+use crate::vehicle::suspension::{BodyMotion, SuspensionParams};
 use crate::world::CourseDef;
 
 /// 고정 시간 간격(s). Bevy `FixedUpdate` 64 Hz와 같다.
@@ -149,6 +150,10 @@ pub struct DriveSession {
     calibration: CalibrationLog,
     /// 마지막 충돌과 그 틱 번호(2-7). 화면이 충격 크기를 잠시 보이는 데 쓴다.
     last_impact: Option<(u64, Impact)>,
+    /// 서스펜션 설정(2-8).
+    suspension: SuspensionParams,
+    /// 차체 움직임(2-8). 보이는 움직임만이며 주행 결과에 영향을 주지 않는다.
+    body: BodyMotion,
 }
 
 impl DriveSession {
@@ -171,6 +176,8 @@ impl DriveSession {
             tick: 0,
             calibration,
             last_impact: None,
+            suspension: config.suspension.clone(),
+            body: BodyMotion::default(),
         }
     }
 
@@ -192,6 +199,11 @@ impl DriveSession {
     /// 장애물 접촉 상태를 반환한다.
     pub fn contact(&self) -> &ContactState {
         &self.contact
+    }
+
+    /// 차체 움직임(피치·롤·상하, 2-8)을 반환한다.
+    pub fn body(&self) -> &BodyMotion {
+        &self.body
     }
 
     /// 마지막 충돌(틱 번호, 충돌 정보)을 반환한다. 아직 없거나 시작 위치로 복귀한 뒤면 `None`.
@@ -317,6 +329,13 @@ impl DriveSession {
             self.contact.blocked,
             DT,
         );
+        self.body.update(
+            &self.suspension,
+            &self.params,
+            self.state.speed_mps(),
+            &self.motion,
+            DT,
+        );
         self.tick += 1;
         report.tick = self.tick;
         if let Some(hit) = report.collided {
@@ -369,7 +388,7 @@ impl DriveSession {
         }
     }
 
-    /// 정지 상태면 자세·속도·조향각·접촉·마지막 충돌을 코스 시작값으로 되돌리고 진행 중인 보정 시험을 버린다.
+    /// 정지 상태면 자세·속도·조향각·접촉·마지막 충돌·차체 움직임을 코스 시작값으로 되돌리고 진행 중인 보정 시험을 버린다.
     /// 끝난 보정 결과·기어·시동·비상 정지·수동 입력·대기열은 그대로 둔다.
     fn reset_to_start(&mut self) -> Result<(), String> {
         if !self.state.is_stopped() {
@@ -379,6 +398,7 @@ impl DriveSession {
         self.motion = self.course.start;
         self.contact = ContactState::default();
         self.last_impact = None;
+        self.body.reset();
         self.calibration.restart_from(&self.state, &self.motion);
         Ok(())
     }
@@ -476,6 +496,67 @@ mod tests {
         let report = drive_into_obstacle(&mut session);
         assert_eq!(report.emergency_changed, None);
         assert!(!session.emergency_active());
+    }
+
+    /// 서스펜션(2-8)을 켜도 끈 것과 평면 주행 결과(자세·속도·충돌)가 틱마다 비트 단위로 같고,
+    /// 켠 쪽만 차체가 움직이며 제동하면 앞이 숙여지는지 확인한다.
+    #[test]
+    fn suspension_does_not_change_driving() {
+        let mut off = VehicleConfig::default();
+        off.suspension.enabled = false;
+        let mut sessions = [
+            DriveSession::new(CourseId::Training.build(), &VehicleConfig::default()),
+            DriveSession::new(CourseId::Training.build(), &off),
+        ];
+        let inputs = [
+            (64 * 3, throttle(1.0)),
+            (
+                64,
+                VehicleInput {
+                    steering: 0.6,
+                    throttle: 0.5,
+                    ..VehicleInput::default()
+                },
+            ),
+            (
+                32,
+                VehicleInput {
+                    brake: 1.0,
+                    ..VehicleInput::default()
+                },
+            ),
+            (64 * 20, throttle(1.0)),
+        ];
+        let mut braking_pitch = 0.0f32;
+        let mut collided = false;
+        for session in &mut sessions {
+            for command in [
+                VehicleCommand::ToggleEngine,
+                VehicleCommand::RequestGear(Gear::Drive),
+            ] {
+                session.enqueue(DriveCommand::Vehicle(command)).unwrap();
+            }
+        }
+        for (ticks, input) in inputs {
+            for session in &mut sessions {
+                session.set_manual_input(input);
+            }
+            for _ in 0..ticks {
+                let reports = sessions
+                    .each_mut()
+                    .map(|session| session.tick(&DeviceTick::default()));
+                assert_eq!(reports[0], reports[1]);
+                assert_eq!(sessions[0].motion(), sessions[1].motion());
+                assert_eq!(sessions[0].state(), sessions[1].state());
+                collided |= reports[0].collided.is_some();
+                if input.brake > 0.0 {
+                    braking_pitch = braking_pitch.max(sessions[0].body().pitch_rad);
+                }
+            }
+        }
+        assert!(collided, "the run should include a collision");
+        assert!(braking_pitch > 0.005, "{braking_pitch}");
+        assert_eq!(*sessions[1].body(), BodyMotion::default());
     }
 
     /// 계약 이름과 명령이 서로 바뀌고, 모르는 이름은 거부하는지 확인한다.

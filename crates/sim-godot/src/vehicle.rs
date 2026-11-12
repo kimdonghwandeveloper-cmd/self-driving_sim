@@ -504,6 +504,22 @@ impl SimVehicle {
             .collect()
     }
 
+    /// 차체 움직임(계약 v1.9, 2-8): `pitch_rad`(앞이 내려가면 양수), `roll_rad`(오른쪽이 내려가면 양수),
+    /// `heave_m`(위가 양수). 보이는 움직임만이며 값은 시뮬레이터 임시값으로 계산한다. 준비 전에는 모두 0.
+    #[func]
+    fn body_pose(&self) -> VarDictionary {
+        let body = self
+            .session
+            .as_ref()
+            .map(|session| *session.body())
+            .unwrap_or_default();
+        vdict! {
+            "pitch_rad" => f64::from(body.pitch_rad),
+            "roll_rad" => f64::from(body.roll_rad),
+            "heave_m" => f64::from(body.heave_m),
+        }
+    }
+
     /// 마지막 충돌(계약 v1.8, 2-7). 없거나 시작 위치 복귀 뒤면 빈 사전.
     /// `tick`은 충돌한 틱 번호, 크기(`normal_speed_mps`·`impulse_ns`·`delta_v_mps`)는 시뮬레이터 임시값으로 계산한 값,
     /// `point`는 접촉점(높이 0)이다.
@@ -554,7 +570,7 @@ impl SimVehicle {
         GString::from(name)
     }
 
-    /// `config/camera.toml`의 입석 시점 값(`eye_m`, `pitch_deg`, `vertical_fov_deg`, `near_clip_m`).
+    /// `config/camera.toml`의 입석 시점 값(`eye_m`, `pitch_deg`, `vertical_fov_deg`, `near_clip_m`, (v1.9) `body_follow`).
     #[func]
     fn operator_view(&self) -> VarDictionary {
         let view = &self.operator_view;
@@ -564,6 +580,7 @@ impl SimVehicle {
             "pitch_deg" => view.pitch_deg,
             "vertical_fov_deg" => view.vertical_fov_deg,
             "near_clip_m" => view.near_clip_m,
+            "body_follow" => view.body_follow,
         }
     }
 

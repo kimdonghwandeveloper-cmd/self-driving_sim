@@ -10,20 +10,46 @@ const SHUTTLE_ROTATION_DEG := Vector3(-90, 180, 0)
 const SHUTTLE_OFFSET := Vector3(0, 0, -1.27)
 ## 외부 카메라만 보는 외관 시각 레이어.
 const EXTERIOR_LAYER := 2
+## 셔틀 모델에서 바퀴로 보는 부품 이름 머리. 차체가 기울어도 이 부품은 노면에 남는다(2-8).
+const WHEEL_PREFIXES := ["tire", "tread", "wheel_hub", "wheel_lug", "hub_ridge"]
+## 차체가 기울 때 도는 점(차량 로컬, m). 두 차축 가운데, 롤 중심 높이로 본 임시값.
+const BODY_PIVOT := Vector3(0, 0.4, -1.4)
 
-## 후륜축 원점에 외부 차체와 최소 실내를 조립한다.
+## 서스펜션(2-8)에 따라 기우는 차체(외관·실내). 바퀴 부품은 넣지 않는다.
+var body := Node3D.new()
+## 기울지 않는 바퀴 부품.
+var wheels := Node3D.new()
+
+## 후륜축 원점에 외부 차체와 최소 실내를 조립한다. 차체는 `body`, 셔틀 바퀴 부품은 `wheels` 아래에 둔다.
 func _ready() -> void:
+	body.name = "Body"
+	wheels.name = "Wheels"
+	add_child(body)
+	add_child(wheels)
 	if not _add_shuttle():
-		_box(self, Vector3(1.8, 2.2, 4.2), Vector3(0, 1.1, -1.4), Color("c9cbd0"), EXTERIOR_LAYER)
-	_box(self, Vector3(1.7, 0.05, 4.1), Vector3(0, 0.325, -1.4), Color("202123"))
+		_box(body, Vector3(1.8, 2.2, 4.2), Vector3(0, 1.1, -1.4), Color("c9cbd0"), EXTERIOR_LAYER)
+	_box(body, Vector3(1.7, 0.05, 4.1), Vector3(0, 0.325, -1.4), Color("202123"))
 	for side in [-1.0, 1.0]:
-		_box(self, Vector3(0.05, 0.8, 4.1), Vector3(side * 0.875, 0.75, -1.4), Color("4c4c4f"))
+		_box(body, Vector3(0.05, 0.8, 4.1), Vector3(side * 0.875, 0.75, -1.4), Color("4c4c4f"))
 	for yaw in [0.0, PI]:
 		var end := Node3D.new()
 		end.position.z = -1.4
 		end.rotation.y = yaw
-		add_child(end)
+		body.add_child(end)
 		_window_end(end)
+
+## 차체 움직임 사전(`SimVehicle.body_pose`, 계약 v1.9)을 `follow` 비율(0..=1)만큼 적용한 변환을 만든다.
+## 피치(앞이 내려가면 양수)는 X축, 롤(오른쪽이 내려가면 양수)은 Z축으로 [constant BODY_PIVOT]을 중심으로 돌리고 상하만큼 올린다.
+static func pose_transform(pose: Dictionary, follow: float) -> Transform3D:
+	var pitch := float(pose.get("pitch_rad", 0.0)) * follow
+	var roll := float(pose.get("roll_rad", 0.0)) * follow
+	var heave := float(pose.get("heave_m", 0.0)) * follow
+	var turn := Basis(Vector3.RIGHT, -pitch) * Basis(Vector3.BACK, -roll)
+	return Transform3D(Basis.IDENTITY, BODY_PIVOT + Vector3.UP * heave) * Transform3D(turn, Vector3.ZERO) * Transform3D(Basis.IDENTITY, -BODY_PIVOT)
+
+## 차체만 기울인다. 바퀴 부품은 그대로 둔다.
+func set_body_pose(pose: Dictionary) -> void:
+	body.transform = pose_transform(pose, 1.0)
 
 ## 셔틀 모델이 있으면 외관 레이어에 붙이고 `true`를 돌려준다. 파일이 없거나 읽지 못하면 `false`(상자 외관을 쓴다).
 func _add_shuttle() -> bool:
@@ -37,9 +63,25 @@ func _add_shuttle() -> bool:
 	model.name = "ShuttleExterior"
 	model.rotation_degrees = SHUTTLE_ROTATION_DEG
 	model.position = SHUTTLE_OFFSET
-	add_child(model)
+	body.add_child(model)
 	_to_exterior_layer(model)
+	_split_wheels(model)
 	return true
+
+## 모델에서 바퀴 부품([constant WHEEL_PREFIXES])을 `wheels` 아래로 옮긴다. 옮긴 뒤에도 보이는 자리는 같다.
+func _split_wheels(model: Node3D) -> void:
+	var parts: Array[Node3D] = []
+	_collect_wheels(model, parts)
+	for part in parts:
+		part.reparent(wheels, true)
+
+## `node` 아래에서 이름이 바퀴 부품 머리로 시작하는 표시 노드를 모은다.
+func _collect_wheels(node: Node, parts: Array[Node3D]) -> void:
+	for child in node.get_children():
+		if child is Node3D and WHEEL_PREFIXES.any(func(prefix): return str(child.name).begins_with(prefix)):
+			parts.append(child)
+		else:
+			_collect_wheels(child, parts)
 
 ## 모델 안의 모든 표시 노드를 외관 레이어로 옮기고 그림자를 끈다(입석 카메라에 보이지 않게).
 func _to_exterior_layer(node: Node) -> void:

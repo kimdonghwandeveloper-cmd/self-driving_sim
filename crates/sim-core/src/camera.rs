@@ -13,6 +13,8 @@ pub const FOV_RANGE_DEG: std::ops::RangeInclusive<f32> = 30.0..=110.0;
 pub const NEAR_CLIP_RANGE_M: std::ops::RangeInclusive<f32> = 0.01..=0.5;
 /// 시선 pitch 허용 범위(deg). 음수는 아래를 본다.
 pub const PITCH_RANGE_DEG: std::ops::RangeInclusive<f32> = -45.0..=45.0;
+/// 차체 기울기를 카메라가 따라가는 정도 허용 범위(0 = 끔, 1 = 차체와 똑같이).
+pub const BODY_FOLLOW_RANGE: std::ops::RangeInclusive<f32> = 0.0..=1.0;
 
 /// 차량 기준 시선 방향. 같은 눈 위치에서 yaw만 바꾼다.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
@@ -66,6 +68,8 @@ pub struct OperatorView {
     pub vertical_fov_deg: f32,
     /// near clip 거리(m).
     pub near_clip_m: f32,
+    /// 차체 기울기·상하 움직임(2-8)을 카메라가 따라가는 정도(0..=1). 0이면 카메라는 기울지 않는다(멀미 대비).
+    pub body_follow: f32,
 }
 
 impl Default for OperatorView {
@@ -76,6 +80,7 @@ impl Default for OperatorView {
             pitch_deg: -3.0,
             vertical_fov_deg: 62.0,
             near_clip_m: 0.05,
+            body_follow: 0.5,
         }
     }
 }
@@ -107,7 +112,8 @@ impl OperatorView {
         }
         check("vertical_fov_deg", self.vertical_fov_deg, &FOV_RANGE_DEG)?;
         check("near_clip_m", self.near_clip_m, &NEAR_CLIP_RANGE_M)?;
-        check("pitch_deg", self.pitch_deg, &PITCH_RANGE_DEG)
+        check("pitch_deg", self.pitch_deg, &PITCH_RANGE_DEG)?;
+        check("body_follow", self.body_follow, &BODY_FOLLOW_RANGE)
     }
 
     /// 눈 위치를 `Vec3`로 반환한다.
@@ -148,7 +154,7 @@ mod tests {
         assert_eq!(OperatorView::default().validate(), Ok(()));
     }
 
-    /// NaN·무한대 눈 위치와 범위를 벗어난 FOV·near clip·pitch를 거부하는지 확인한다.
+    /// NaN·무한대 눈 위치와 범위를 벗어난 FOV·near clip·pitch·차체 따라가기를 거부하는지 확인한다.
     #[test]
     fn invalid_view_values_are_rejected() {
         let base = OperatorView::default();
@@ -175,6 +181,10 @@ mod tests {
             },
             OperatorView {
                 pitch_deg: -60.0,
+                ..base.clone()
+            },
+            OperatorView {
+                body_follow: 1.5,
                 ..base.clone()
             },
         ];
