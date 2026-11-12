@@ -72,7 +72,10 @@ func _run() -> void:
 	route = picker.call("route")
 	_check(route.ok, "선 그리기 경로 계산 실패: " + str(route.error) + " / " + map.feedback)
 	_check(map.start_box.edit.text == "(그린 선의 처음)", "선 그리기 뒤 출발 칸 안내: " + map.start_box.edit.text)
-	_check(absf(float(route.length_m) - clicked_length) < clicked_length * 0.2, "선 그리기 경로가 같은 길이 아님: %.0f m / %.0f m" % [route.length_m, clicked_length])
+	var ends := ""
+	if map.route_line.size() > 1 and clicked_line.size() > 1:
+		ends = "처음 %.0f m·끝 %.0f m 떨어짐, 선 점 %d개, 경로 점 %d개" % [map.route_line[0].distance_to(clicked_line[0]), map.route_line[map.route_line.size() - 1].distance_to(clicked_line[clicked_line.size() - 1]), clicked_line.size(), map.points.size()]
+	_check(absf(float(route.length_m) - clicked_length) < clicked_length * 0.2, "선 그리기 경로가 같은 길이 아님: %.0f m / %.0f m (%s)" % [route.length_m, clicked_length, ends])
 
 	# 도로에서 멀리 떨어진 선은 안내만 하고 기존 경로를 둔다.
 	var far := PackedVector2Array([start + Vector2(0, -3000), start + Vector2(300, -3000), start + Vector2(600, -3000)])

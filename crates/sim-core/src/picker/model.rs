@@ -985,6 +985,45 @@ mod tests {
         );
     }
 
+    /// 실제 자료 조각(`testdata/korea-yeosu`): 출발·도착으로 만든 경로를 그대로 선으로 그리면 같은 길이의 경로가 된다.
+    #[test]
+    fn drawn_line_matches_clicked_route_on_real_data() {
+        let root = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."));
+        let data =
+            crate::world::korea_data::KoreaData::open(&root.join("testdata/korea-yeosu")).unwrap();
+        let [start, end] = yeosu_ends();
+        let area = region::route_area(&[start, end]).unwrap();
+        let cache = std::env::temp_dir().join(format!("sds-line-real-{}", std::process::id()));
+        let path = data.route_snapshot(&area, &cache).unwrap();
+        let snapshot = crate::world::road_snapshot::load_road_snapshot(&path).unwrap();
+        let mut model = PickerModel::new(path, snapshot.ways, RoadGraphConfig::default())
+            .unwrap()
+            .with_restrictions(snapshot.restrictions);
+        let point = |at| Endpoint::Point {
+            name: String::new(),
+            at,
+        };
+        model.set_endpoints([point(start), point(end)]).unwrap();
+        let Some(Ok(clicked)) = model.planned.clone() else {
+            panic!("{:?}", model.planned);
+        };
+        let line = region::resample_line(&clicked.path, region::LINE_STEP_M);
+        model.clear();
+        model.set_line(&line, region::LINE_SNAP_M).unwrap();
+        let Some(Ok(drawn)) = &model.planned else {
+            panic!("{:?}", model.planned);
+        };
+        assert!(
+            (drawn.length_m - clicked.length_m).abs() < clicked.length_m * 0.2,
+            "{} vs {} (points {:?}, line {} samples)",
+            drawn.length_m,
+            clicked.length_m,
+            model.points,
+            line.len()
+        );
+        let _ = std::fs::remove_dir_all(&cache);
+    }
+
     /// 선으로 그리기: 도로를 따라 그린 선은 그 도로로 경로가 되고, 도로에서 먼 점은 건너뛰어 개수를 알린다.
     /// 도로를 전혀 따르지 않는 선은 오류다.
     #[test]
