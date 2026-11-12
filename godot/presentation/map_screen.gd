@@ -38,8 +38,20 @@ var still_time := 0.0
 var place_search := LineEdit.new()
 var place_results := OptionButton.new()
 var place_outlines: Array = []
-## 윤곽별로 면을 칠할 수 있는지(실제 OSM 윤곽 중 꼬이거나 겹친 것은 삼각형으로 나눌 수 없어 테두리만 그린다).
-var place_fillable: Array[bool] = []
+## 도로·건물·경로·점을 그리는 층(4-11 렉 수정). 카메라가 움직여도 다시 그리지 않고, 자료나 배율이 바뀔 때만 다시 그린다.
+var overlay_layer := Node2D.new()
+## 층을 마지막으로 그린 배율(선 굵기가 배율에 따라 바뀌므로 배율이 바뀌면 다시 그린다).
+var overlay_zoom := 0.0
+## 윤곽이 바뀔 때 한 번만 만드는 건물 그리기 자료: 면 삼각형(점·번호·색), 테두리 선분, 점 장소.
+## 꼬이거나 겹친 실제 OSM 윤곽은 삼각형으로 나눌 수 없어 테두리만 그린다.
+var place_fill_points := PackedVector2Array()
+var place_fill_indices := PackedInt32Array()
+var place_fill_colors := PackedColorArray()
+var place_edges := PackedVector2Array()
+var place_dots := PackedVector2Array()
+## 도로 선분을 탐색 가능·불가로 나눠 둔 것(한 번에 그리기용).
+var road_open := PackedVector2Array()
+var road_closed := PackedVector2Array()
 ## 검색 결과 상자 항목별 내용 {source: "place"(열린 지역의 건물·장소)|"area"(전국 검색), index, view}. 안내문·구분선은 null.
 var result_items: Array = []
 ## 열린 지역의 건물·장소 검색 결과와 마지막 전국 검색 결과(4-10).
@@ -72,6 +84,8 @@ func _ready() -> void:
 	camera.zoom = Vector2.ONE * 0.001
 	add_child(camera)
 	camera.make_current()
+	add_child(overlay_layer)
+	overlay_layer.draw.connect(_draw_overlay)
 	get_viewport().size_changed.connect(queue_redraw)
 	var canvas := CanvasLayer.new()
 	add_child(canvas)
@@ -97,13 +111,45 @@ func _ready() -> void:
 	overlay.add_child(attribution)
 	queue_redraw()
 
-## 도로·점·경로의 표시 스냅샷을 받아 복사한다. 계산이나 편집은 하지 않는다.
+## 도로·점·경로의 표시 스냅샷을 받아 복사하고, 도로 선분을 탐색 가능·불가로 나눠 그리기 층을 다시 그린다.
 func display_geometry(segments: PackedVector2Array, flags: PackedByteArray, selected: PackedVector2Array, line: PackedVector2Array) -> void:
-	roads = segments.duplicate()
-	usable = flags.duplicate()
+	if segments != roads or flags != usable:
+		roads = segments.duplicate()
+		usable = flags.duplicate()
+		road_open.clear()
+		road_closed.clear()
+		for i in range(roads.size() / 2):
+			var target := road_open if i < usable.size() and usable[i] == 1 else road_closed
+			target.append(roads[i * 2])
+			target.append(roads[i * 2 + 1])
 	points = selected.duplicate()
 	route_line = line.duplicate()
+	overlay_layer.queue_redraw()
 	queue_redraw()
+
+## 건물 윤곽으로 그리기 자료(면 삼각형·테두리 선분·점 장소)를 한 번 만든다. 윤곽이 바뀔 때만 부른다.
+func _rebuild_places() -> void:
+	place_fill_points.clear()
+	place_fill_indices.clear()
+	place_edges.clear()
+	place_dots.clear()
+	for outline in place_outlines:
+		if outline.size() == 1:
+			place_dots.append(outline[0])
+			continue
+		if outline.size() < 3:
+			continue
+		for i in range(outline.size()):
+			place_edges.append(outline[i])
+			place_edges.append(outline[(i + 1) % outline.size()])
+		var triangles := Geometry2D.triangulate_polygon(outline)
+		var base := place_fill_points.size()
+		place_fill_points.append_array(outline)
+		for index in triangles:
+			place_fill_indices.append(base + index)
+	place_fill_colors.resize(place_fill_points.size())
+	place_fill_colors.fill(Color(PLACE_COLOR, 0.18))
+	overlay_layer.queue_redraw()
 
 ## 디코딩된 타일과 지도상의 사각형을 표시할 자리를 제공한다. 다운로드는 하지 않는다.
 func display_tiles(layers: Array) -> void:
@@ -145,7 +191,8 @@ func _notification(what: int) -> void:
 	if what == NOTIFICATION_APPLICATION_FOCUS_OUT:
 		dragging = false
 
-## 현재 뷰의 회색 칸, 타일, 열린 지역 테두리, 자동 열기 기준 십자선, 도로, 경로, 선택 점을 순서대로 표시한다.
+## 현재 뷰의 회색 칸, 타일, 바깥 바다색, 열린 지역 테두리, 자동 열기 기준 십자선을 그린다(가볍다, 매 프레임).
+## 도로·건물·경로·점은 _draw_overlay가 따로 그린다.
 func _draw() -> void:
 	var scale_m := maxf(camera.zoom.x, 0.0005)
 	var span := get_viewport_rect().size / scale_m
@@ -169,23 +216,31 @@ func _draw() -> void:
 	var center := camera.position
 	draw_line(center - Vector2(10, 0) / scale_m, center + Vector2(10, 0) / scale_m, Color.WHITE, 1.0 / scale_m)
 	draw_line(center - Vector2(0, 10) / scale_m, center + Vector2(0, 10) / scale_m, Color.WHITE, 1.0 / scale_m)
-	for i in range(place_outlines.size()):
-		var outline: PackedVector2Array = place_outlines[i]
-		if outline.size() == 1:
-			draw_circle(outline[0], 4.0 / scale_m, PLACE_COLOR)
-		elif outline.size() > 2:
-			var closed: PackedVector2Array = outline.duplicate()
-			closed.append(outline[0])
-			if i < place_fillable.size() and place_fillable[i]:
-				draw_colored_polygon(outline, Color(PLACE_COLOR, 0.18))
-			draw_polyline(closed, PLACE_COLOR, 1.0 / scale_m, true)
-	for i in range(roads.size() / 2):
-		var allowed := i < usable.size() and usable[i] == 1
-		draw_line(roads[i * 2], roads[i * 2 + 1], Color("cbd5dd") if allowed else Color("737e88"), 2.0 / scale_m, true)
+
+## 건물 면(미리 나눈 삼각형 한 번에)·테두리·점 장소, 도로, 경로, 선택 점을 그리기 층에 그린다. 자료·배율이 바뀔 때만 불린다.
+func _draw_overlay() -> void:
+	var scale_m := maxf(camera.zoom.x, 0.0005)
+	overlay_zoom = camera.zoom.x
+	if not place_fill_indices.is_empty():
+		RenderingServer.canvas_item_add_triangle_array(overlay_layer.get_canvas_item(), place_fill_indices, place_fill_points, place_fill_colors)
+	if not place_edges.is_empty():
+		overlay_layer.draw_multiline(place_edges, PLACE_COLOR, 1.0 / scale_m)
+	if not place_dots.is_empty():
+		# 점 장소는 짧고 굵은 선분(작은 네모)으로 한 번에 그린다.
+		var dots := PackedVector2Array()
+		var half := Vector2(3.0 / scale_m, 0)
+		for dot in place_dots:
+			dots.append(dot - half)
+			dots.append(dot + half)
+		overlay_layer.draw_multiline(dots, PLACE_COLOR, 6.0 / scale_m)
+	if not road_closed.is_empty():
+		overlay_layer.draw_multiline(road_closed, Color("737e88"), 2.0 / scale_m)
+	if not road_open.is_empty():
+		overlay_layer.draw_multiline(road_open, Color("cbd5dd"), 2.0 / scale_m)
 	if route_line.size() > 1:
-		draw_polyline(route_line, Color("58c4ef"), 4.0 / scale_m, true)
+		overlay_layer.draw_polyline(route_line, Color("58c4ef"), 4.0 / scale_m, true)
 	for i in range(points.size()):
-		draw_circle(points[i], 6.0 / scale_m, Color("f3bf63") if i == 0 else Color("9ee5c2"))
+		overlay_layer.draw_circle(points[i], 6.0 / scale_m, Color("f3bf63") if i == 0 else Color("9ee5c2"))
 
 ## Rust 지도 서비스(SimRoutePicker·SimTiles)를 만들고 편집·저장·맞춤 보기·검색 버튼을 화면에 붙인다. 헤드리스·--offline이면
 ## 네트워크(배경 지도·전국 검색)를 끈다. 지역 도로·건물은 내장 전국 자료에서 열므로 네트워크가 필요 없다(PLAN 4-11).
@@ -423,9 +478,7 @@ func _refresh_route() -> void:
 	var outlines: Array = picker.call("place_outlines")
 	if outlines != place_outlines:
 		place_outlines = outlines
-		place_fillable.clear()
-		for outline in place_outlines:
-			place_fillable.append(outline.size() > 2 and not Geometry2D.triangulate_polygon(outline).is_empty())
+		_rebuild_places()
 	var result: Dictionary = picker.call("route")
 	display_geometry(picker.call("road_segments"), picker.call("road_usable"), picker.call("points"), result.line)
 
@@ -439,11 +492,16 @@ func _process(delta: float) -> void:
 		var result: Dictionary = picker.call("route")
 		save_button.disabled = not bool(result.ok)
 		var hint := "" if data_ok else "\n" + data_error
-		status.text = "우클릭: 이동 / 휠: 확대(멈추면 그 지역을 엽니다) / 클릭: 점 추가(건물을 누르면 그 건물) / Shift+클릭: 점 삭제\n" + "\n".join(picker.call("status_lines")) + "\n" + feedback + hint
+		var text := "우클릭: 이동 / 휠: 확대(멈추면 그 지역을 엽니다) / 클릭: 점 추가(건물을 누르면 그 건물) / Shift+클릭: 점 삭제\n" + "\n".join(picker.call("status_lines")) + "\n" + feedback + hint
+		# 글자가 바뀔 때만 넣는다(같은 글자를 매 프레임 넣으면 글자 배치를 다시 한다).
+		if status.text != text:
+			status.text = text
 	else:
 		save_button.disabled = true
 	if tiles != null:
 		_update_tiles()
+	if camera.zoom.x != overlay_zoom:
+		overlay_layer.queue_redraw()
 	queue_redraw()
 
 ## 보이는 범위의 타일을 요청하고 받은 PNG를 텍스처로 만든다. 디코딩 실패는 report_bad로 알린다.

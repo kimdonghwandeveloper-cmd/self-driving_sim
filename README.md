@@ -332,6 +332,8 @@ cargo.exe build --locked -p sim-godot
   F7 재시작, F8 종료와 없는 시나리오 파일의 실패 화면을 확인합니다(5-1). 출력의 `ERROR: ... 없는-시나리오.toml` 한 줄은 의도된 실패 경로입니다.
 
 프레임 시간은 실제 창에서 잽니다(헤드리스 아님, 측정만 하고 실패로 끝내지 않음).
+지도 화면은 `godot/tests/map_frame_probe.gd`로 잽니다(전국 지도 자료 필요, 기본 강남역 1.5 km 지역을 열고 가만히·끌기·확대 프레임 시간 출력):
+`& '<Godot 콘솔 실행 파일>' --path godot --script res://tests/map_frame_probe.gd -- --data=<전국 자료 폴더 절대 경로>`
 
 ```powershell
 & '<Godot 콘솔 실행 파일>' --path godot --resolution 1280x720 --script res://tests/frame_time_probe.gd -- --seconds=15
