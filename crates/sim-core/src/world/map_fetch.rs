@@ -84,6 +84,11 @@ impl Bbox {
 
     /// 유한값, 남 < 북·서 < 동, 네 모서리가 대한민국 범위 안, 한 변이 [`MAX_BBOX_SIDE_M`] 이하인지 검사한다.
     pub fn validate(&self) -> Result<(), String> {
+        self.validate_side(MAX_BBOX_SIDE_M)
+    }
+
+    /// [`Bbox::validate`]와 같고 한 변 상한만 `max_side_m`으로 바꾼다(전국 자료의 경로 범위, PLAN 4-11 2단계).
+    pub fn validate_side(&self, max_side_m: f64) -> Result<(), String> {
         let values = [self.south, self.west, self.north, self.east];
         if !values.iter().all(|value| value.is_finite()) {
             return Err(format!("bbox {values:?} has a non-finite value"));
@@ -103,9 +108,9 @@ impl Bbox {
             }
         }
         let (east_west, north_south) = self.size_m();
-        if east_west > MAX_BBOX_SIDE_M || north_south > MAX_BBOX_SIDE_M {
+        if east_west > max_side_m || north_south > max_side_m {
             return Err(format!(
-                "bbox is {east_west:.0} x {north_south:.0} m (east-west by north-south); limit is {MAX_BBOX_SIDE_M} m per side"
+                "bbox is {east_west:.0} x {north_south:.0} m (east-west by north-south); limit is {max_side_m} m per side"
             ));
         }
         Ok(())

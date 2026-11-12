@@ -34,8 +34,9 @@ use super::road_geom::{self, RoadSpec};
 pub const CORNER_RADIUS_M: f32 = 3.0;
 /// 경로에 포함되지 않은 교차로 팔(곁가지)의 길이 기본값(m). 임시값.
 pub const STUB_LENGTH_M: f32 = 10.0;
-/// 경로 코스(연석·끝 벽 포함)의 x·z 축 정렬 범위 상한(m). PLAN 4 공통 계약의 개발상 임시값 1.5 × 1.5 km.
-pub const ROUTE_MAX_EXTENT_M: (f32, f32) = (1500.0, 1500.0);
+/// 경로 코스(연석·끝 벽 포함)의 x·z 축 정렬 범위 상한(m). 처음엔 PLAN 4 공통 계약의 1.5 × 1.5 km였고, 긴 경로(PLAN 4-11
+/// 2단계)를 위해 경로 범위 상한([`super::korea_data::MAX_ROUTE_AREA_SIDE_M`])과 같은 6 × 6 km로 올렸다(임시값).
+pub const ROUTE_MAX_EXTENT_M: (f32, f32) = (6000.0, 6000.0);
 
 /// 교차로 형상 설정값(모두 임시값, 실측 아님).
 #[derive(Debug, Clone, Copy, PartialEq)]

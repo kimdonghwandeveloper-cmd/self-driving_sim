@@ -9,7 +9,7 @@ use std::path::{Component, Path, PathBuf};
 
 use glam::Vec2;
 
-use super::tiles;
+use super::{region, tiles};
 use crate::world::map::LatLon;
 use crate::world::osm_graph::{OsmGraphWay, TurnRestriction};
 use crate::world::places::{self, Place};
@@ -18,6 +18,54 @@ use crate::world::route_plan::{self, PlannedRoute, RoadGraphConfig, WidthSource}
 
 /// 이보다 좁은 폭이면 경고한다(m). 차체 폭 1.8 m + 양옆 0.6 m(개발 코스 좁은 통로와 같은 기준, 임시값).
 pub const NARROW_WIDTH_M: f32 = 3.0;
+/// 그린 선을 도로에 붙인 점끼리 이보다 가까우면 합친다(m, 같은 곳에 붙은 두 점이 경로를 끊지 않게). 임시값.
+pub const LINE_MIN_GAP_M: f64 = 20.0;
+
+/// 출발 또는 도착(PLAN 4-11 2단계).
+#[derive(Debug, Clone, PartialEq)]
+pub enum Endpoint {
+    /// 열린 건물·장소 번호(그 진입 지점을 쓴다).
+    Place(usize),
+    /// 이름과 위치(전국 검색 결과·지도에서 누른 곳). 가장 가까운 탐색 가능 도로 위 점을 쓴다.
+    Point {
+        /// 표시 이름.
+        name: String,
+        /// 위치.
+        at: LatLon,
+    },
+}
+
+/// `point`에서 `max_m` 안의 가장 가까운 도로 선분 위 점. 없으면 `None`. 거리는 `point` 기준 등장방형 근사(m)다.
+fn nearest_on_roads(roads: &[&OsmGraphWay], point: LatLon, max_m: f64) -> Option<LatLon> {
+    const RADIUS: f64 = 6_371_008.8;
+    let cos = point.lat.to_radians().cos();
+    let local = |p: LatLon| {
+        [
+            (p.lon - point.lon).to_radians() * RADIUS * cos,
+            (p.lat - point.lat).to_radians() * RADIUS,
+        ]
+    };
+    let mut best: Option<(f64, [f64; 2])> = None;
+    for pair in roads.iter().flat_map(|way| way.nodes.windows(2)) {
+        let (a, b) = (local(pair[0].pos), local(pair[1].pos));
+        let d = [b[0] - a[0], b[1] - a[1]];
+        let length2 = d[0] * d[0] + d[1] * d[1];
+        let t = if length2 == 0.0 {
+            0.0
+        } else {
+            (-(a[0] * d[0] + a[1] * d[1]) / length2).clamp(0.0, 1.0)
+        };
+        let q = [a[0] + d[0] * t, a[1] + d[1] * t];
+        let distance = q[0].hypot(q[1]);
+        if distance <= max_m && best.is_none_or(|(known, _)| distance < known) {
+            best = Some((distance, q));
+        }
+    }
+    best.map(|(_, [east, north])| LatLon {
+        lat: point.lat + (north / RADIUS).to_degrees(),
+        lon: point.lon + (east / (RADIUS * cos)).to_degrees(),
+    })
+}
 
 /// 화면에 그릴 도로 선분.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -164,6 +212,90 @@ impl PickerModel {
         self.labels.push(name.to_owned());
         self.recompute();
         Ok(())
+    }
+
+    /// 출발·도착을 정하고(기존 점은 지운다) 경로를 다시 계산한다(PLAN 4-11 2단계 출발·도착 검색). 각 끝은 장소 번호면
+    /// 그 진입 지점, 위치면 가장 가까운 탐색 가능 도로 위 점(4-9 규칙)이다. 한쪽이라도 도로에서 멀면 오류이고
+    /// 오류문 앞에 `start: `·`end: `를 붙인다. 오류면 기존 점·경로를 그대로 둔다.
+    pub fn set_endpoints(&mut self, ends: [Endpoint; 2]) -> Result<(), String> {
+        let mut points = Vec::with_capacity(2);
+        let mut labels = Vec::with_capacity(2);
+        for (side, end) in ["start", "end"].into_iter().zip(ends) {
+            let (at, label) = match end {
+                Endpoint::Place(index) => {
+                    let place = self
+                        .places
+                        .get(index)
+                        .ok_or_else(|| format!("{side}: no place #{index}"))?;
+                    let at = places::access_point(place, &self.ways, &self.config)
+                        .map_err(|error| format!("{side}: {error}"))?;
+                    (at, place.label())
+                }
+                Endpoint::Point { name, at } => {
+                    let place = Place {
+                        id: String::new(),
+                        name: name.clone(),
+                        kind: String::new(),
+                        outline: Vec::new(),
+                        center: at,
+                        entrances: Vec::new(),
+                    };
+                    let at = places::access_point(&place, &self.ways, &self.config)
+                        .map_err(|error| format!("{side}: {error}"))?;
+                    (at, name)
+                }
+            };
+            points.push([at.lat, at.lon]);
+            labels.push(label);
+        }
+        self.points = points;
+        self.labels = labels;
+        self.recompute();
+        Ok(())
+    }
+
+    /// 그린 선을 경로 점으로 바꾸고 경로를 다시 계산한다(PLAN 4-11 2단계 선으로 그리기). 선의 점(이미 일정 간격으로 나눈 것)을
+    /// 차례로 `max_m` 안의 가장 가까운 탐색 가능 도로 위 점에 붙인다. 붙일 도로가 없는 점은 건너뛰고, 앞 점과 [`LINE_MIN_GAP_M`]
+    /// 안이면 합친다(끝 점은 남긴다). 건너뛴 점 수를 돌려준다. 붙은 점이 2개 미만이면 오류이고 기존 점·경로는 그대로다.
+    pub fn set_line(&mut self, line: &[LatLon], max_m: f64) -> Result<usize, String> {
+        let allowed: std::collections::BTreeSet<&str> = self
+            .config
+            .allowed_highways
+            .iter()
+            .map(String::as_str)
+            .collect();
+        let roads: Vec<&OsmGraphWay> = self
+            .ways
+            .iter()
+            .filter(|way| route_plan::searchable(way, &allowed, self.config.nav_rules))
+            .collect();
+        let mut kept: Vec<LatLon> = Vec::new();
+        let mut skipped = 0;
+        for (index, &point) in line.iter().enumerate() {
+            let Some(on_road) = nearest_on_roads(&roads, point, max_m) else {
+                skipped += 1;
+                continue;
+            };
+            let is_last = index + 1 == line.len();
+            match kept.last() {
+                Some(&previous) if region::distance_m(previous, on_road) < LINE_MIN_GAP_M => {
+                    if is_last && kept.len() > 1 {
+                        *kept.last_mut().expect("not empty") = on_road;
+                    }
+                }
+                _ => kept.push(on_road),
+            }
+        }
+        if kept.len() < 2 {
+            return Err(format!(
+                "the drawn line does not follow a road (only {} point(s) within {max_m} m of a road)",
+                kept.len()
+            ));
+        }
+        self.points = kept.iter().map(|p| [p.lat, p.lon]).collect();
+        self.labels = vec![String::new(); kept.len()];
+        self.recompute();
+        Ok(skipped)
     }
 
     /// 경계 연결 정보를 붙인다. 이후 경로 계산은 이 정보로 경계 연결 검사를 한다.
@@ -677,5 +809,92 @@ mod tests {
         };
         assert!(model.add_named_point("먼 곳", far).is_err());
         assert_eq!(model.points.len(), 1, "failed hit must not add a point");
+    }
+
+    /// 여수 예제 경로의 출발·도착 위치.
+    fn yeosu_ends() -> [LatLon; 2] {
+        [
+            LatLon {
+                lat: 34.75264,
+                lon: 127.74712,
+            },
+            LatLon {
+                lat: 34.74972,
+                lon: 127.74816,
+            },
+        ]
+    }
+
+    /// 출발·도착을 한 번에 정하면 경로가 계산되고 이름이 붙는다. 한쪽이 도로에서 멀면 어느 쪽인지 알리고 기존 경로를 둔다.
+    #[test]
+    fn endpoints_set_start_and_end_together() {
+        let mut model = yeosu();
+        let [start, end] = yeosu_ends();
+        let point = |name: &str, at| Endpoint::Point {
+            name: name.to_owned(),
+            at,
+        };
+        model
+            .set_endpoints([point("출발", start), point("도착", end)])
+            .unwrap();
+        assert_eq!(model.labels, ["출발", "도착"]);
+        assert!(matches!(model.planned, Some(Ok(_))), "{:?}", model.planned);
+        let far = LatLon {
+            lat: end.lat + 0.05,
+            lon: end.lon,
+        };
+        let error = model
+            .set_endpoints([point("출발", start), point("먼 곳", far)])
+            .unwrap_err();
+        assert!(error.starts_with("end: "), "{error}");
+        assert_eq!(model.labels, ["출발", "도착"], "failed ends keep the route");
+        assert!(
+            model
+                .set_endpoints([Endpoint::Place(99), point("도착", end)])
+                .is_err()
+        );
+    }
+
+    /// 선으로 그리기: 도로를 따라 그린 선은 그 도로로 경로가 되고, 도로에서 먼 점은 건너뛰어 개수를 알린다.
+    /// 도로를 전혀 따르지 않는 선은 오류다.
+    #[test]
+    fn drawn_line_follows_roads() {
+        let mut model = yeosu();
+        let [start, end] = yeosu_ends();
+        model.set_points(&[[start.lat, start.lon], [end.lat, end.lon]]);
+        let Some(Ok(planned)) = model.planned.clone() else {
+            panic!("{:?}", model.planned);
+        };
+        // 계산된 경로를 사람이 따라 그린 선으로 쓰고, 가운데에 도로에서 먼 점 하나를 끼운다.
+        let mut line = region::resample_line(&planned.path, region::LINE_STEP_M);
+        let middle = line.len() / 2;
+        let off = LatLon {
+            lat: line[middle].lat + 0.01,
+            lon: line[middle].lon,
+        };
+        line.insert(middle, off);
+        model.clear();
+        let skipped = model.set_line(&line, region::LINE_SNAP_M).unwrap();
+        assert_eq!(skipped, 1);
+        let Some(Ok(drawn)) = &model.planned else {
+            panic!("{:?}", model.planned);
+        };
+        assert!(
+            (drawn.length_m - planned.length_m).abs() < planned.length_m * 0.1,
+            "{} vs {}",
+            drawn.length_m,
+            planned.length_m
+        );
+        assert!(model.points.len() > 2);
+        let away: Vec<LatLon> = line
+            .iter()
+            .map(|p| LatLon {
+                lat: p.lat + 0.02,
+                lon: p.lon,
+            })
+            .collect();
+        let before = model.points.clone();
+        assert!(model.set_line(&away, region::LINE_SNAP_M).is_err());
+        assert_eq!(model.points, before, "failed line keeps the route");
     }
 }

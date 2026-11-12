@@ -15,8 +15,8 @@ nav_rules = true
 lane_width_m = 3.0
 # 찍은 점을 도로에 붙일 수 있는 최대 거리(m).
 snap_distance_m = 30.0
-# 경로 길이 상한(m).
-max_route_length_m = 2000.0
+# 경로 길이 상한(m, 코드 절대 상한 10 km). PLAN 4-11 2단계에서 2 km → 5 km(임시값).
+max_route_length_m = 5000.0
 # 교차로 모서리 원호 반경(m)과 경로에 포함되지 않은 교차로 팔(곁가지)의 길이(m).
 corner_radius_m = 3.0
 stub_length_m = 10.0

@@ -47,8 +47,9 @@ pub const VIRTUAL_NODE_BASE: u64 = 1 << 62;
 pub const NODE_SNAP_M: f64 = 1.0;
 /// 점 붙이기 거리의 절대 상한(m). 설정·경로 파일 값이 이보다 크면 거부한다.
 pub const SNAP_DISTANCE_CAP_M: f64 = 100.0;
-/// 경로 길이의 절대 상한(m). PLAN 4 공통 계약의 2 km.
-pub const ROUTE_LENGTH_CAP_M: f64 = 2000.0;
+/// 경로 길이의 절대 상한(m). 처음엔 PLAN 4 공통 계약의 2 km였고, 전국 자료로 긴 경로를 만들면서(PLAN 4-11 2단계) 10 km로 올렸다.
+/// 실제 상한은 설정 `max_route_length_m`(기본 5 km, 임시값)이다.
+pub const ROUTE_LENGTH_CAP_M: f64 = 10_000.0;
 /// 지구 평균 반지름(m). [`map::project`]와 같은 값.
 const EARTH_RADIUS_M: f64 = 6_371_008.8;
 /// 교차로를 만들 수 없을 때 피해 다시 찾는 최대 교차로 수(임시값).
@@ -103,7 +104,7 @@ impl Default for RoadGraphConfig {
                 .map(|(kind, width)| ((*kind).to_owned(), *width))
                 .collect(),
             snap_distance_m: 30.0,
-            max_route_length_m: 2000.0,
+            max_route_length_m: 5000.0,
             corner_radius_m: route::CORNER_RADIUS_M,
             stub_length_m: route::STUB_LENGTH_M,
             nav_rules: true,
@@ -1100,6 +1101,10 @@ mod tests {
             max_route_length_m: 50.0,
             ..RoadGraphConfig::default()
         };
+        let longest = RoadGraphConfig {
+            max_route_length_m: ROUTE_LENGTH_CAP_M,
+            ..RoadGraphConfig::default()
+        };
         let straight = |length: f64| {
             parse(vec![(
                 190,
@@ -1130,11 +1135,12 @@ mod tests {
                 &short,
                 "long",
             ),
+            // 코스 범위 상한(6 km, PLAN 4-11 2단계)은 길이 상한을 절대 상한(10 km)까지 올려야 걸린다.
             (
                 "extent",
-                straight(1800.0),
-                vec![at(20.0, 0.0), at(1780.0, 0.0)],
-                &config,
+                straight(6400.0),
+                vec![at(20.0, 0.0), at(6380.0, 0.0)],
+                &longest,
                 "spans",
             ),
             (
@@ -1188,7 +1194,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             (file.snap_distance_m, file.max_route_length_m),
-            (30.0, 2000.0)
+            (30.0, 5000.0)
         );
         assert!(build_route_file_course(&file, &straight, None).is_ok());
         // 저장한 점을 약 111 m 북쪽으로 옮긴 파일(사용자 수정)은 거부한다.
@@ -1212,7 +1218,7 @@ mod tests {
             (f64::INFINITY, 2000.0),
             (0.0, 2000.0),
             (150.0, 2000.0),
-            (30.0, 5000.0),
+            (30.0, 12_000.0),
             (30.0, f64::NAN),
         ] {
             let edited = RouteFile {
@@ -1247,9 +1253,11 @@ mod tests {
         let file: RouteFile = toml::from_str(&text).unwrap();
         let ways = real_snapshot();
         // 이 파일은 4-8 이전 규칙(작은 도로만, 일방통행 제외)으로 만들었다.
+        // 길이 상한도 그때 값(2 km)이다(PLAN 4-11 2단계에서 기본값이 5 km로 바뀜).
         let legacy = RoadGraphConfig {
             allowed_highways: file.allowed_highways.clone(),
             nav_rules: false,
+            max_route_length_m: file.max_route_length_m,
             ..RoadGraphConfig::default()
         };
         let replanned = plan_route(&ways, &file.snapshot, &file.points, &legacy).unwrap();

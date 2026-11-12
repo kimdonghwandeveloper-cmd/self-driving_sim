@@ -32,6 +32,8 @@ use super::places::{self, Place};
 pub const KOREA_DATA_DIR: &str = "data/korea";
 /// 지역 스냅샷을 쓰는 캐시 폴더. 자료 판마다 하위 폴더를 둔다.
 pub const REGION_CACHE_DIR: &str = "cache/regions";
+/// 경로 범위(출발·도착이나 그린 선을 감싸는 범위, PLAN 4-11 2단계) 한 변 상한(m). 임시값.
+pub const MAX_ROUTE_AREA_SIDE_M: f64 = 6000.0;
 /// 자료 형식 이름. 바뀌면 읽지 않는다.
 pub const FORMAT: &str = "korea-data-v1";
 /// 지역 스냅샷 본문의 `generator` 값(Geofabrik 추출 접두어와 다르다: 연결 정보 없는 Overpass 형식으로 읽힌다).
@@ -740,15 +742,24 @@ impl KoreaData {
         &self.manifest.roads.sha256[..12.min(self.manifest.roads.sha256.len())]
     }
 
-    /// 범위와 겹치는 도로·회전 제한·건물·장소를 꺼낸다. 도로가 하나도 없으면 오류다.
+    /// 범위와 겹치는 도로·회전 제한·건물·장소를 꺼낸다(화면 지역, 한 변 2 km 이하). 도로가 하나도 없으면 오류다.
     pub fn region(&self, bbox: &Bbox) -> Result<Region, String> {
         bbox.validate()?;
+        let (snapshot, ways) = self.read_roads(bbox)?;
+        Ok(Region {
+            snapshot,
+            ways,
+            places: self.read_places(bbox)?,
+        })
+    }
+
+    /// 범위를 덮는 조각에서 범위와 겹치는(점이 안에 있거나 선분이 지나는) 도로 way 전체와, via 노드·양쪽 way가 들어간
+    /// 회전 제한을 꺼내 스냅샷 본문과 way 수를 돌려준다. 범위 크기는 부르는 쪽이 검사한다. 도로가 없으면 오류다.
+    fn read_roads(&self, bbox: &Bbox) -> Result<(String, usize), String> {
         let area = Area::around(bbox, 0.0);
-        let tiles = tiles_covering(bbox);
         let mut roads: BTreeMap<u64, Road> = BTreeMap::new();
         let mut restrictions: BTreeMap<u64, Restriction> = BTreeMap::new();
-        let mut found: BTreeMap<(bool, u64), PlaceRecord> = BTreeMap::new();
-        for &tile in &tiles {
+        for tile in tiles_covering(bbox) {
             if let Some(body) = self.roads.tile(tile)? {
                 let (tile_roads, tile_restrictions) = decode_roads(tile, &body)?;
                 for road in tile_roads {
@@ -759,13 +770,6 @@ impl KoreaData {
                 }
                 for restriction in tile_restrictions {
                     restrictions.insert(restriction.id, restriction);
-                }
-            }
-            if let Some(body) = self.places.tile(tile)? {
-                for place in decode_places(tile, &body)? {
-                    if area.contains(degrees(place.anchor())) || touches(&area, &place.outline) {
-                        found.insert((place.way, place.id), place);
-                    }
                 }
             }
         }
@@ -783,13 +787,25 @@ impl KoreaData {
             })
             .collect();
         let road_list: Vec<&Road> = roads.values().collect();
+        Ok((snapshot_json(&road_list, &restrictions), road_list.len()))
+    }
+
+    /// 범위를 덮는 조각에서 가운데가 범위 안이거나 윤곽이 범위와 겹치는 건물·장소를 꺼낸다(OSM 요소 이름 순).
+    fn read_places(&self, bbox: &Bbox) -> Result<Vec<Place>, String> {
+        let area = Area::around(bbox, 0.0);
+        let mut found: BTreeMap<(bool, u64), PlaceRecord> = BTreeMap::new();
+        for tile in tiles_covering(bbox) {
+            if let Some(body) = self.places.tile(tile)? {
+                for place in decode_places(tile, &body)? {
+                    if area.contains(degrees(place.anchor())) || touches(&area, &place.outline) {
+                        found.insert((place.way, place.id), place);
+                    }
+                }
+            }
+        }
         let mut places: Vec<Place> = found.values().map(PlaceRecord::to_place).collect();
         places.sort_by(|a, b| a.id.cmp(&b.id));
-        Ok(Region {
-            snapshot: snapshot_json(&road_list, &restrictions),
-            ways: road_list.len(),
-            places,
-        })
+        Ok(places)
     }
 
     /// 범위의 지역 스냅샷을 `cache_root/<자료 판>/<범위 이름>.osm.json`에 쓰고(이미 있으면 그대로 둔다) 경로와 건물·장소를
@@ -800,20 +816,45 @@ impl KoreaData {
         cache_root: &Path,
     ) -> Result<(PathBuf, Vec<Place>), String> {
         let region = self.region(bbox)?;
+        let path = self.write_snapshot(bbox, cache_root, &region.snapshot)?;
+        Ok((path, region.places))
+    }
+
+    /// 경로 범위(PLAN 4-11 2단계, 한 변 [`MAX_ROUTE_AREA_SIDE_M`] 이하)의 도로만 꺼내 지역 스냅샷과 같은 곳에 쓰고 경로를
+    /// 돌려준다. 건물·장소는 꺼내지 않는다.
+    pub fn route_snapshot(&self, bbox: &Bbox, cache_root: &Path) -> Result<PathBuf, String> {
+        bbox.validate_side(MAX_ROUTE_AREA_SIDE_M)?;
+        let path = cache_root
+            .join(self.version())
+            .join(format!("{}.osm.json", bbox.cache_name()));
+        if path.exists() {
+            return Ok(path);
+        }
+        let (snapshot, _) = self.read_roads(bbox)?;
+        self.write_snapshot(bbox, cache_root, &snapshot)
+    }
+
+    /// 스냅샷 본문을 `cache_root/<자료 판>/<범위 이름>.osm.json`에 쓴다(이미 있으면 그대로 둔다, 임시 파일 뒤 이름 바꾸기).
+    fn write_snapshot(
+        &self,
+        bbox: &Bbox,
+        cache_root: &Path,
+        body: &str,
+    ) -> Result<PathBuf, String> {
         let dir = cache_root.join(self.version());
         let path = dir.join(format!("{}.osm.json", bbox.cache_name()));
         if !path.exists() {
             std::fs::create_dir_all(&dir)
                 .map_err(|error| format!("cannot create {}: {error}", dir.display()))?;
             let staging = dir.join(format!("{}.{}.tmp", bbox.cache_name(), std::process::id()));
-            std::fs::write(&staging, region.snapshot.as_bytes())
+            std::fs::write(&staging, body.as_bytes())
                 .and_then(|()| std::fs::rename(&staging, &path))
                 .map_err(|error| {
                     let _ = std::fs::remove_file(&staging);
                     format!("cannot write {}: {error}", path.display())
                 })?;
         }
-        Ok((path, region.places))
+        Ok(path)
     }
 }
 
@@ -1466,6 +1507,42 @@ mod tests {
         let snapshot = crate::world::road_snapshot::load_road_snapshot(&path).unwrap();
         assert!(snapshot.connectivity.is_none());
         assert_eq!(snapshot.restrictions.len(), 1);
+        for dir in [dir, cache] {
+            let _ = std::fs::remove_dir_all(dir);
+        }
+    }
+
+    /// 경로 범위는 한 변 6 km까지 도로만 꺼내고(화면 지역은 2 km 상한), 그보다 크면 거부한다.
+    #[test]
+    fn route_area_reads_roads_up_to_six_km() {
+        let dir = temp_dir("route-area");
+        build_fixture(&fixture(), &dir, None);
+        let data = KoreaData::open(&dir).unwrap();
+        let cache = temp_dir("route-area-cache");
+        // 기준점(도로 100)부터 동쪽 4.6 km(도로 105)까지 감싸는 약 4.9 × 0.6 km 범위.
+        let a = fixtures::offset(-200.0, -300.0);
+        let b = fixtures::offset(4700.0, 300.0);
+        let wide = Bbox {
+            south: a.lat,
+            west: a.lon,
+            north: b.lat,
+            east: b.lon,
+        };
+        assert!(data.region(&wide).is_err());
+        let path = data.route_snapshot(&wide, &cache).unwrap();
+        let snapshot = crate::world::road_snapshot::load_road_snapshot(&path).unwrap();
+        let ids: Vec<u64> = snapshot.ways.iter().map(|w| w.id).collect();
+        assert_eq!(ids, vec![100, 101, 105]);
+        let far = fixtures::offset(6500.0, 300.0);
+        let too_wide = Bbox {
+            east: far.lon,
+            ..wide
+        };
+        assert!(
+            data.route_snapshot(&too_wide, &cache)
+                .unwrap_err()
+                .contains("6000")
+        );
         for dir in [dir, cache] {
             let _ = std::fs::remove_dir_all(dir);
         }

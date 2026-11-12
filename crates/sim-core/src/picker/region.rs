@@ -5,6 +5,8 @@
 use std::path::{Path, PathBuf};
 
 use super::model::{NARROW_WIDTH_M, PickerModel};
+use crate::world::korea_data::MAX_ROUTE_AREA_SIDE_M;
+use crate::world::map::LatLon;
 use crate::world::map_fetch::{self, Bbox};
 use crate::world::road_snapshot;
 use crate::world::route_plan::{self, PlannedRoute, RoadGraphConfig, WidthSource};
@@ -13,6 +15,75 @@ use crate::world::route_plan::{self, PlannedRoute, RoadGraphConfig, WidthSource}
 pub const FETCH_HALF_SIDE_M: f64 = 750.0;
 /// 경로 파일 저장 폴더(실행 폴더 기준, 저장소에서 제외되는 `cache/` 아래).
 pub const ROUTE_DIR: &str = "cache/routes";
+/// 경로 범위(PLAN 4-11 2단계)에 출발·도착이나 그린 선 바깥으로 더하는 여유(m). 임시값.
+pub const ROUTE_MARGIN_M: f64 = 300.0;
+/// 그린 선을 나누는 간격(m). 임시값.
+pub const LINE_STEP_M: f64 = 50.0;
+/// 그린 선의 점을 붙일 수 있는 도로까지의 거리(m). 임시값.
+pub const LINE_SNAP_M: f64 = 40.0;
+/// 지구 평균 반지름(m).
+const EARTH_RADIUS_M: f64 = 6_371_008.8;
+
+/// 두 위경도 사이 거리(m, 가운데 위도 기준 등장방형 근사. 수 km 안에서 쓴다).
+pub fn distance_m(a: LatLon, b: LatLon) -> f64 {
+    let middle = ((a.lat + b.lat) / 2.0).to_radians();
+    let north = (b.lat - a.lat).to_radians() * EARTH_RADIUS_M;
+    let east = (b.lon - a.lon).to_radians() * EARTH_RADIUS_M * middle.cos();
+    north.hypot(east)
+}
+
+/// 점들(출발·도착 또는 그린 선)을 감싸는 범위에 [`ROUTE_MARGIN_M`]을 사방으로 더한 경로 범위. 한 변이
+/// [`MAX_ROUTE_AREA_SIDE_M`]을 넘거나 대한민국 범위 밖이면 오류다.
+pub fn route_area(points: &[LatLon]) -> Result<Bbox, String> {
+    let first = points.first().ok_or("no points for a route area")?;
+    let (mut south, mut west, mut north, mut east) = (first.lat, first.lon, first.lat, first.lon);
+    for point in points {
+        south = south.min(point.lat);
+        north = north.max(point.lat);
+        west = west.min(point.lon);
+        east = east.max(point.lon);
+    }
+    let d_lat = (ROUTE_MARGIN_M / EARTH_RADIUS_M).to_degrees();
+    let d_lon = (ROUTE_MARGIN_M / (EARTH_RADIUS_M * ((south + north) / 2.0).to_radians().cos()))
+        .to_degrees();
+    let bbox = Bbox {
+        south: south - d_lat,
+        west: west - d_lon,
+        north: north + d_lat,
+        east: east + d_lon,
+    };
+    bbox.validate_side(MAX_ROUTE_AREA_SIDE_M)?;
+    Ok(bbox)
+}
+
+/// 그린 선을 처음부터 `step_m` 간격의 점으로 나눈다. 처음·끝 점은 항상 넣는다. 점이 하나뿐이면 그대로다.
+pub fn resample_line(line: &[LatLon], step_m: f64) -> Vec<LatLon> {
+    let Some(&first) = line.first() else {
+        return Vec::new();
+    };
+    let mut out = vec![first];
+    // 마지막으로 넣은 점에서 선을 따라 지난 거리.
+    let mut walked = 0.0;
+    for pair in line.windows(2) {
+        let length = distance_m(pair[0], pair[1]);
+        let mut at = step_m - walked;
+        // 선분 끝에 딱 맞는 점은 다음 선분 처음(또는 마지막 점)으로 넣는다.
+        while at < length {
+            let t = at / length;
+            out.push(LatLon {
+                lat: pair[0].lat + (pair[1].lat - pair[0].lat) * t,
+                lon: pair[0].lon + (pair[1].lon - pair[0].lon) * t,
+            });
+            at += step_m;
+        }
+        walked = (walked + length) % step_m;
+    }
+    let last = *line.last().expect("not empty");
+    if line.len() > 1 && out.last() != Some(&last) {
+        out.push(last);
+    }
+    out
+}
 
 /// 위경도를 가운데로 하는 한 변 2 × [`FETCH_HALF_SIDE_M`] 범위를 만들고 검사한다.
 pub fn bbox_around(lat: f64, lon: f64) -> Result<Bbox, String> {
@@ -130,6 +201,41 @@ pub fn snapshot_graph_path(path: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 북쪽으로 `north_m`, 동쪽으로 `east_m` 떨어진 점(기준 34.75, 127.75).
+    fn at(north_m: f64, east_m: f64) -> LatLon {
+        let lat = 34.75 + (north_m / EARTH_RADIUS_M).to_degrees();
+        LatLon {
+            lat,
+            lon: 127.75 + (east_m / (EARTH_RADIUS_M * 34.75_f64.to_radians().cos())).to_degrees(),
+        }
+    }
+
+    /// 선 나누기: 처음·끝을 넣고 간격마다 점을 둔다(꺾인 선도 선을 따라 잰다).
+    #[test]
+    fn lines_are_resampled_along_their_length() {
+        let line = [at(0.0, 0.0), at(0.0, 120.0), at(80.0, 120.0)];
+        let out = resample_line(&line, 50.0);
+        // 길이 200 m: 0, 50, 100, (꺾인 뒤) 150, 200(끝).
+        assert_eq!(out.len(), 5);
+        assert_eq!(out[0], line[0]);
+        assert_eq!(*out.last().unwrap(), line[2]);
+        assert!((distance_m(out[1], line[0]) - 50.0).abs() < 0.1);
+        assert!((distance_m(out[3], line[1]) - 30.0).abs() < 0.1);
+        assert_eq!(resample_line(&line[..1], 50.0), vec![line[0]]);
+        assert!(resample_line(&[], 50.0).is_empty());
+    }
+
+    /// 경로 범위: 점들을 감싸고 여유 300 m를 더하며, 한 변 6 km를 넘으면 오류다.
+    #[test]
+    fn route_area_adds_margin_and_caps_size() {
+        let area = route_area(&[at(0.0, 0.0), at(1000.0, 2000.0)]).unwrap();
+        let (east_west, north_south) = area.size_m();
+        assert!((east_west - 2600.0).abs() < 2.0, "{east_west}");
+        assert!((north_south - 1600.0).abs() < 2.0, "{north_south}");
+        assert!(route_area(&[at(0.0, 0.0), at(0.0, 6000.0)]).is_err());
+        assert!(route_area(&[]).is_err());
+    }
 
     /// 지역 범위는 가운데 기준 한 변 1.5 km이고, 잘못된 좌표는 오류다.
     #[test]
