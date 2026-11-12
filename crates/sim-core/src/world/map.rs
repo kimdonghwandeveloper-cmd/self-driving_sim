@@ -757,7 +757,7 @@ mod tests {
     #[test]
     fn committed_yeosu_course_is_drivable() {
         let path = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."))
-            .join("assets/maps/yeosu-expo/course.toml");
+            .join("testdata/yeosu-expo/course.toml");
         let course = load_map_course(&path).unwrap();
         assert!(
             course
@@ -954,7 +954,7 @@ mod tests {
     fn real_curved_way_is_drivable() {
         use crate::world::osm_graph::parse_overpass_graph;
         let path = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."))
-            .join("assets/maps/yeosu-expo/graph-2026-11-06.osm.json");
+            .join("testdata/yeosu-expo/graph-2026-11-06.osm.json");
         let ways = parse_overpass_graph(&std::fs::read_to_string(path).unwrap()).unwrap();
         let way = ways.iter().find(|way| way.id == 529_495_041).unwrap();
         let origin = way.nodes[0].pos;
@@ -963,7 +963,7 @@ mod tests {
         assert_strips_valid(&course);
         // 저장소의 굽은 길 확인 코스 파일도 같은 way로 읽히고 출처 안내가 붙는다.
         let file = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."))
-            .join("assets/maps/yeosu-expo/curved-course.toml");
+            .join("testdata/yeosu-expo/curved-course.toml");
         let from_file = load_map_course(&file).unwrap();
         assert!(from_file.notices.iter().any(|n| n == OSM_ATTRIBUTION));
         assert_eq!(from_file.start, course.start);

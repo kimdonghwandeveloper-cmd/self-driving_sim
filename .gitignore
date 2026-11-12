@@ -5,3 +5,5 @@
 /cache/
 # Godot 에디터 캐시 (가져오기·실행 시 자동 생성)
 /godot/.godot/
+# PLAN 4-11 전국 지도 자료(sim-tools --build-korea-data로 만들고 배포에 포함, 저장소 제외)
+/data/korea/

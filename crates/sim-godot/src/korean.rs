@@ -78,6 +78,24 @@ pub fn search_error(error: &str) -> String {
     format!("전국 검색 실패: {error}")
 }
 
+/// 전국 자료에서 지역 열기(4-11) 오류를 한국어로 바꾼다. 모르는 오류는 앞에 "지역을 열 수 없습니다:"를 붙인다.
+pub fn region_error(error: &str) -> String {
+    if error.starts_with("cannot read") && error.contains("manifest.toml") {
+        return "전국 지도 자료가 없습니다(data/korea). README의 \"전국 지도 자료 만들기\"대로 만드세요"
+            .to_owned();
+    }
+    if error.contains("rebuild the data") || error.contains("does not match manifest.toml") {
+        return "전국 지도 자료가 이 프로그램과 맞지 않습니다. 다시 만드세요".to_owned();
+    }
+    if error == "no roads in this area" {
+        return "이 지역에는 도로가 없습니다".to_owned();
+    }
+    if error.starts_with("invalid point") {
+        return "지도 밖입니다".to_owned();
+    }
+    format!("지역을 열 수 없습니다: {error}")
+}
+
 /// 경로 선택 화면 안내·경고·경로 오류 한 줄을 한국어로 바꾼다.
 pub fn picker_line(line: &str) -> String {
     if let Some(count) = line.strip_prefix("Points: ") {
@@ -347,7 +365,7 @@ mod tests {
     fn bundled_route_notices_are_korean() {
         let path = std::path::Path::new(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/../../assets/maps/yeosu-expo/route-junctions.toml"
+            "/../../testdata/yeosu-expo/route-junctions.toml"
         ));
         let course = sim_core::world::map::load_map_course(path).unwrap();
         for notice in &course.notices {
@@ -415,7 +433,6 @@ mod tests {
         );
     }
 
-    /// 시나리오 단계·끝난 방식이 모두 한국어로 바뀌는지 확인한다.
     /// 전국 검색 오류는 아는 것만 한국어로 바꾸고 나머지는 앞말을 붙인다.
     #[test]
     fn search_errors_translate() {
@@ -426,6 +443,22 @@ mod tests {
         assert_eq!(search_error("boom"), "전국 검색 실패: boom");
     }
 
+    /// 지역 열기 오류: 자료 없음·형식 다름·도로 없음은 한국어 안내, 나머지는 앞말을 붙인다.
+    #[test]
+    fn region_errors_translate() {
+        assert!(region_error("cannot read data/korea/manifest.toml: not found").contains("README"));
+        assert!(
+            region_error("x has format `y`; this program reads `z` (rebuild the data)")
+                .contains("다시 만드세요")
+        );
+        assert_eq!(
+            region_error("no roads in this area"),
+            "이 지역에는 도로가 없습니다"
+        );
+        assert_eq!(region_error("boom"), "지역을 열 수 없습니다: boom");
+    }
+
+    /// 시나리오 단계·끝난 방식이 모두 한국어로 바뀌는지 확인한다.
     #[test]
     fn scenario_phase_translates() {
         assert_eq!(scenario_phase(Phase::Briefing), "시작 전");

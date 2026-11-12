@@ -1104,7 +1104,7 @@ mod tests {
     #[test]
     fn real_route_through_junctions_is_drivable() {
         let path = std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."))
-            .join("assets/maps/yeosu-expo/graph-2026-11-06.osm.json");
+            .join("testdata/yeosu-expo/graph-2026-11-06.osm.json");
         let ways = parse_overpass_graph(&std::fs::read_to_string(path).unwrap()).unwrap();
         let ids = |id: u64| -> Vec<u64> {
             ways.iter()

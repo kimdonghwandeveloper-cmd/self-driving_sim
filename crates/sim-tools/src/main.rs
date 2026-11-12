@@ -8,13 +8,16 @@
 //! - `--compare-overpass <Overpass 스냅샷> --extract <세대 폴더> --pbf <PBF 파일> [--pick-points ...]`: 날짜가 다른
 //!   기존 Overpass 자료와의 차이를 분류해 출력한다(설명되지 않은 차이는 데이터 동등성 미확인).
 //!
-//! 상대 경로(`cache/`, `config/`)는 실행한 폴더 기준이므로 저장소 최상위에서 실행한다.
+//! - `--build-korea-data <PBF 파일> [--out <폴더>] [--clip <남,서,북,동>]`: 전국 PBF를 전국 지도 자료(`data/korea/`)로
+//!   바꾸고 개수·크기·시간을 출력한다(PLAN 4-11, 네트워크 없음). `--clip`은 시험 자료용으로 범위만 넣는다.
+//!
+//! 상대 경로(`cache/`, `config/`, `data/`)는 실행한 폴더 기준이므로 저장소 최상위에서 실행한다.
 
 use std::path::PathBuf;
 use std::process::ExitCode;
 
 use sim_core::world::map_fetch::{self, Bbox, FetchJob, FetchPolicy, FetchSettings};
-use sim_core::world::{pbf_audit, pbf_compare, pbf_extract, route_plan};
+use sim_core::world::{korea_data, pbf_audit, pbf_compare, pbf_extract, route_plan};
 
 /// 명령줄 인자를 읽어 개발 명령 하나를 실행한다. 명령이 없거나 인자가 모자라면 사용법을 출력하고 오류 종료한다.
 fn main() -> ExitCode {
@@ -69,6 +72,24 @@ fn main() -> ExitCode {
             }
         };
     }
+    if args.iter().any(|argument| argument == "--korea-region") {
+        return match value_after("--korea-region") {
+            Some(center) => korea_region_command(center),
+            None => {
+                eprintln!("--korea-region needs <lat,lon>");
+                ExitCode::FAILURE
+            }
+        };
+    }
+    if args.iter().any(|argument| argument == "--build-korea-data") {
+        return match value_after("--build-korea-data") {
+            Some(pbf) => build_korea_data_command(pbf, value_after("--out"), value_after("--clip")),
+            None => {
+                eprintln!("--build-korea-data needs a PBF file");
+                ExitCode::FAILURE
+            }
+        };
+    }
     eprintln!("{USAGE}");
     ExitCode::FAILURE
 }
@@ -77,7 +98,87 @@ fn main() -> ExitCode {
 const USAGE: &str = "usage: sim-tools --fetch-map <south,west,north,east> [--offline]
        sim-tools --extract-pbf <pbf> --bbox <south,west,north,east> [--margin <m>]
        sim-tools --audit-extract <generation folder> --pbf <pbf>
-       sim-tools --compare-overpass <overpass graph> --extract <folder> --pbf <pbf> [--pick-points <lat,lon;...>]";
+       sim-tools --compare-overpass <overpass graph> --extract <folder> --pbf <pbf> [--pick-points <lat,lon;...>]
+       sim-tools --build-korea-data <pbf> [--out <folder>] [--clip <south,west,north,east>]
+       sim-tools --korea-region <lat,lon>";
+
+/// `--korea-region` 명령: 전국 자료에서 가운데 1.5 km 지역을 꺼내 도로·장소 수와 걸린 시간을 출력한다(확인용, 파일을 쓰지 않음).
+fn korea_region_command(center: &str) -> ExitCode {
+    let result = parse_points(center).and_then(|points| {
+        let [[lat, lon]] = points[..] else {
+            return Err("give one <lat,lon>".to_owned());
+        };
+        let started = std::time::Instant::now();
+        let data = korea_data::KoreaData::open(std::path::Path::new(korea_data::KOREA_DATA_DIR))?;
+        let opened = started.elapsed().as_secs_f64();
+        let region = data.region(&sim_core::picker::region::bbox_around(lat, lon)?)?;
+        Ok((opened, started.elapsed().as_secs_f64() - opened, region))
+    });
+    match result {
+        Ok((opened, read, region)) => {
+            println!(
+                "ways {} / places {} / snapshot {:.1} KiB",
+                region.ways,
+                region.places.len(),
+                region.snapshot.len() as f64 / 1024.0
+            );
+            println!("time open: {opened:.3} s, region: {read:.3} s");
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            eprintln!("korea region failed: {error}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// `--build-korea-data` 명령: 전국 PBF로 전국 지도 자료를 만들고 개수·크기·단계별 시간·최대 메모리를 출력한다.
+fn build_korea_data_command(pbf: &str, out: Option<&String>, clip: Option<&String>) -> ExitCode {
+    let clip = match clip.map(|text| Bbox::parse(text)) {
+        None => None,
+        Some(Ok(bbox)) => Some(bbox),
+        Some(Err(error)) => {
+            eprintln!("invalid --clip: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let out = PathBuf::from(out.map_or(korea_data::KOREA_DATA_DIR, String::as_str));
+    match korea_data::build_from_file(std::path::Path::new(pbf), &out, clip.as_ref()) {
+        Ok(report) => {
+            let manifest = &report.manifest;
+            let counts = &manifest.counts;
+            println!("korea data: {}", out.display());
+            println!(
+                "roads {} / restrictions {} / places {} (buildings {}) / skipped ways {}",
+                counts.roads,
+                counts.restrictions,
+                counts.places,
+                counts.buildings,
+                counts.skipped_ways
+            );
+            for pack in [&manifest.roads, &manifest.places] {
+                println!(
+                    "{}: {:.1} MiB in {} tiles",
+                    pack.file,
+                    pack.bytes as f64 / 1_048_576.0,
+                    pack.tiles
+                );
+            }
+            for (step, seconds) in &report.timings {
+                println!("time {step}: {seconds:.2} s");
+            }
+            match pbf_extract::peak_memory_bytes() {
+                Some(bytes) => println!("peak working set: {:.1} MiB", bytes as f64 / 1_048_576.0),
+                None => println!("peak working set: not measured on this OS"),
+            }
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            eprintln!("korea data build failed: {error}");
+            ExitCode::FAILURE
+        }
+    }
+}
 
 /// `위도,경도;위도,경도;...` 형식의 점 목록을 읽는다.
 pub fn parse_points(text: &str) -> Result<Vec<[f64; 2]>, String> {

@@ -539,7 +539,7 @@ mod tests {
     /// 저장소의 여수 노드 ID 스냅샷 경로(PLAN 4 선행 자료).
     const SNAPSHOT: &str = concat!(
         concat!(env!("CARGO_MANIFEST_DIR"), "/../.."),
-        "/assets/maps/yeosu-expo/graph-2026-11-06.osm.json"
+        "/testdata/yeosu-expo/graph-2026-11-06.osm.json"
     );
     /// 교차로 판정에 쓰는 `highway` 허용 목록(시험용, 4-3에서 설정 파일로 옮긴다).
     const ALLOWED: [&str; 5] = [
@@ -605,7 +605,7 @@ mod tests {
             "course-way-532526349.osm.json",
         ] {
             let path = format!(
-                "{}/assets/maps/yeosu-expo/{file}",
+                "{}/testdata/yeosu-expo/{file}",
                 concat!(env!("CARGO_MANIFEST_DIR"), "/../..")
             );
             let json = std::fs::read_to_string(path).unwrap();

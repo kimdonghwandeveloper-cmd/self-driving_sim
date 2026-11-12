@@ -1,8 +1,11 @@
 # 여수 엑스포해양공원 일대 OSM 조사 자료
 
+> **자동 시험 전용(PLAN 4-11, 2026-11-12):** 예전에는 `assets/maps/yeosu-expo`에서 메뉴 코스로 썼다. 전국 지도 자료로 바꾸면서
+> 제품(메뉴·코스 목록)에서는 빼고 시험 자료로만 남겼다.
+
 > © OpenStreetMap contributors. 이 폴더의 데이터는 [ODbL 1.0](https://opendatacommons.org/licenses/odbl/1-0/)을 따른다.
 > 저작권·라이선스 상세: https://www.openstreetmap.org/copyright
-> 출처 표기와 라이선스 방침은 [`docs/map-data.md`](../../../docs/map-data.md)에 있다.
+> 출처 표기와 라이선스 방침은 [`docs/map-data.md`](../../docs/map-data.md)에 있다.
 
 > **예외:** `places-synthetic.osm.json`은 PLAN 4-9 시험용 **합성 자료**이며 실제 OSM 자료가 아니다(건물 2개·정류장 1개를 예제 경로 양 끝 옆에 임의로 둠).
 
@@ -52,10 +55,10 @@ out body geom;
 ```
 
 검증에 쓰는 실제 사례(노드 ID 기준, 허용 종류 service·pedestrian·residential·unclassified·tertiary만 셈)는
-[`docs/map-data.md`](../../../docs/map-data.md)의 "Phase 4 선행 자료" 절에 있다.
+[`docs/map-data.md`](../../docs/map-data.md)의 "Phase 4 선행 자료" 절에 있다.
 
 ## 경로 파일 예제 (Phase 4-3)
 
 `route-junctions.toml`은 위 노드 ID 스냅샷과 찍은 점 두 개로 계획한 **경로 파일**이다. 실제 운행 경로가 아니다.
-Godot 메인 메뉴 코스 목록에서 고른다(코스 이름 `map:assets/maps/yeosu-expo/route-junctions.toml`). 저장소 테스트가 같은 점으로 다시 계획한 결과와
-이 파일이 같은지 확인한다. 형식은 [`docs/map-data.md`](../../../docs/map-data.md)의 "도로 그래프와 경로 탐색" 절에 있다.
+메뉴에는 나오지 않고 자동 시험이 `map:testdata/yeosu-expo/route-junctions.toml`로 연다. 저장소 테스트가 같은 점으로 다시 계획한 결과와
+이 파일이 같은지 확인한다. 형식은 [`docs/map-data.md`](../../docs/map-data.md)의 "도로 그래프와 경로 탐색" 절에 있다.
