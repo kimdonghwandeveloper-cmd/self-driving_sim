@@ -48,6 +48,8 @@ const PLACE_COLOR := Color("b48ead")
 const MAX_TEXTURES := 512
 ## 맞춤 보기에서 버튼·안내 영역으로 빼는 화면 크기(px). 최소 배율도 같은 영역 기준이다.
 const FIT_MARGIN := Vector2(80, 380)
+## 화면 위쪽 버튼·안내 영역 높이(px). 지도 북쪽 끝이 이 영역 아래까지 내려와 보이도록 이동 한계에 더한다.
+const TOP_PANEL_PX := 300.0
 ## 대한민국 근사 경계 밖을 덮는 색. 주변 나라는 보이지 않게 하되(사용자 결정) 이질감이 없도록 OSM 지도 바다색을 쓴다(4-10).
 const MASK_COLOR := Color("aad3df")
 ## 대한민국 근사 경계(지도 좌표). Rust SimTiles가 없으면 비어 있고 가림·제한을 하지 않는다.
@@ -581,17 +583,24 @@ func _set_country(outline: PackedVector2Array, bounds: Rect2) -> void:
 		for piece in Geometry2D.clip_polygons(corners, outline):
 			mask_polygons.append(piece)
 
-## 대한민국 전체가 화면에 들어오는 배율보다 더 축소하지 못하게 하는 최소 배율. 경계가 없으면 기존 한계.
+## 대한민국 범위가 화면(위 버튼 영역 제외)을 가로·세로 모두 꽉 채우는 최소 배율. 경계가 없으면 기존 한계.
 func _min_zoom() -> float:
 	if not country_bounds.has_area():
 		return 0.0005
-	var available := get_viewport_rect().size - FIT_MARGIN
-	return clampf(minf(available.x / country_bounds.size.x, available.y / country_bounds.size.y), 0.0005, 8.0)
+	var screen := get_viewport_rect().size
+	return clampf(maxf(screen.x / country_bounds.size.x, (screen.y - TOP_PANEL_PX) / country_bounds.size.y), 0.0005, 8.0)
 
-## 카메라 가운데를 대한민국 범위 안으로, 배율을 최소 배율 이상으로 묶는다.
+## 배율을 최소 배율 이상으로, 화면 가장자리를 대한민국 범위 안으로 묶는다. 위쪽은 버튼 영역만큼 더 허용한다.
 func _clamp_camera() -> void:
 	if not country_bounds.has_area():
 		return
 	if camera.zoom.x < _min_zoom():
 		camera.zoom = Vector2.ONE * _min_zoom()
-	camera.position = camera.position.clamp(country_bounds.position, country_bounds.end)
+	var half := get_viewport_rect().size * 0.5 / camera.zoom.x
+	var low := country_bounds.position + half - Vector2(0, TOP_PANEL_PX / camera.zoom.x)
+	var high := country_bounds.end - half
+	camera.position = Vector2(_clamp_or_middle(camera.position.x, low.x, high.x), _clamp_or_middle(camera.position.y, low.y, high.y))
+
+## value를 [low, high]로 묶는다. 화면이 범위보다 넓어 low > high이면 두 값의 가운데를 쓴다.
+func _clamp_or_middle(value: float, low: float, high: float) -> float:
+	return (low + high) * 0.5 if low > high else clampf(value, low, high)

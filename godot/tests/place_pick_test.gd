@@ -92,6 +92,18 @@ func _run() -> void:
 	_check(map.camera.position.distance_to(away) < 1.0 and map.feedback.contains("옮겼습니다"), "전국 결과로 지도 옮기기: " + map.feedback)
 	# 바깥은 바다색으로 덮는다.
 	_check(map.MASK_COLOR == Color("aad3df"), "바깥 덮는 색이 바다색이 아님")
+	# 최대로 축소해도 대한민국 범위가 화면 가로를 채우고, 구석으로 끌어도 화면 가장자리가 범위 밖으로 나가지 않는다.
+	_check(map.country_bounds.has_area(), "대한민국 범위가 없음")
+	var screen: Vector2 = map.get_viewport_rect().size
+	map.camera.zoom = Vector2.ONE * 0.00001
+	map.camera.position = map.country_bounds.position - Vector2(100000, 100000)
+	map._clamp_camera()
+	var half: Vector2 = screen * 0.5 / map.camera.zoom.x
+	_check(map.country_bounds.size.x * map.camera.zoom.x >= screen.x - 1.0, "최대 축소에서 가로를 채우지 않음")
+	_check(map.camera.position.x - half.x >= map.country_bounds.position.x - 1.0, "화면 왼쪽이 범위 밖으로 나감")
+	map.camera.position = map.country_bounds.end + Vector2(100000, 100000)
+	map._clamp_camera()
+	_check(map.camera.position.x + half.x <= map.country_bounds.end.x + 1.0 and map.camera.position.y + half.y <= map.country_bounds.end.y + 1.0, "화면 오른쪽·아래가 범위 밖으로 나감")
 	_finish(map)
 
 
@@ -99,7 +111,7 @@ func _run() -> void:
 func _finish(map: Node) -> void:
 	map.free()
 	if failures.is_empty():
-		print("PLACE PICK OK: 장소 윤곽 3개 · 이름 검색으로 출발 · 건물 클릭으로 도착 · 경로 계산 · 출발·도착 안내 · 전국 검색 오프라인 안내·지도 옮기기")
+		print("PLACE PICK OK: 장소 윤곽 3개 · 이름 검색으로 출발 · 건물 클릭으로 도착 · 경로 계산 · 출발·도착 안내 · 전국 검색 오프라인 안내·지도 옮기기 · 대한민국이 화면 채우기")
 		quit(0)
 	else:
 		for message in failures:
