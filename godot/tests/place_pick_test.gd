@@ -70,6 +70,7 @@ func _run() -> void:
 
 	# 입력할 때마다 찾기(한글 조합이 끝날 때마다 text_changed가 온다)와 빈 칸.
 	map.end_box.edit.text = ""
+	map.end_box.edit.caret_column = 0
 	map.end_box.edit.insert_text_at_caret("체육")
 	_check(map.end_box.results.item_count == 2, "입력 중 검색 결과 상자: %d" % map.end_box.results.item_count)
 	map.end_box._typed("")
@@ -91,6 +92,8 @@ func _run() -> void:
 
 	# 화면 밖·도로에서 먼 도착지(전국 검색 결과처럼 위치만 있음)를 고르면 지도를 옮기고, 어느 쪽이 왜 안 되는지 알리며 경로는 그대로 둔다.
 	var away: Vector2 = center + Vector2(4000, 0)
+	map.camera.zoom = Vector2.ONE * (map.get_viewport_rect().size.x / 1000.0)
+	map.camera.position = center
 	map._choose({"place": -1, "latlon": picker.call("view_to_latlon", away), "label": "먼 곳", "view": away}, "end")
 	_check(map.camera.position.distance_to(away) < 1.0, "고른 도착지로 지도를 옮기지 않음")
 	_check(map.feedback.begins_with("도착지:"), "먼 도착지 실패 안내: " + map.feedback)
