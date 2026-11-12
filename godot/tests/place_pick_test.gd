@@ -69,11 +69,9 @@ func _run() -> void:
 	_check(map.points.size() == 2 and map.route_line.size() > 1, "지도 화면 점·경로선이 갱신되지 않음")
 
 	# 입력할 때마다 찾기(한글 조합이 끝날 때마다 text_changed가 온다)와 빈 칸.
-	map.end_box.edit.text = ""
-	map.end_box.edit.caret_column = 0
-	map.end_box.edit.insert_text_at_caret("체육")
-	# 트리 안의 LineEdit는 text_changed를 다음 프레임에 보낸다.
-	await process_frame
+	# 헤드리스에서는 포커스 없는 칸에 글자를 넣어도 text_changed가 오지 않으므로, 입력 때 오는 신호를 직접 보내 연결까지 확인한다.
+	map.end_box.edit.text = "체육"
+	map.end_box.edit.text_changed.emit("체육")
 	_check(map.end_box.results.item_count == 2, "입력 중 검색 결과 상자: %d (칸 '%s', Rust 검색 %d곳, 안내 '%s')" % [map.end_box.results.item_count, map.end_box.edit.text, picker.call("search_places", "체육").size(), map.end_box.feedback])
 	map.end_box._typed("")
 	_check(map.end_box.results.disabled, "빈 칸인데 결과 상자가 남음")
