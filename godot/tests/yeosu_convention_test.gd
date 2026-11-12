@@ -27,13 +27,23 @@ func _run() -> void:
 			_fail(key + ": " + drive.failure + drive.fallback_notice)
 			return
 		var bg: Node3D = drive.scene_content.get_node_or_null("YeosuBackground")
-		if bg == null or bg.find_child("Convention_" + key, true, false) == null or not bg.find_children("*", "CollisionObject3D", true, false).is_empty():
+		var visual_road := bg.find_child("Convention_" + key, true, false) as MeshInstance3D if bg != null else null
+		var aerial := bg.find_child("Aerial_Context", true, false) as MeshInstance3D if bg != null else null
+		if bg == null or visual_road == null or aerial == null or not bg.find_children("*", "CollisionObject3D", true, false).is_empty():
 			_fail(key + " background missing or has collision")
 			return
 		var vehicle: Node3D = drive.vehicle
 		var course_data: Dictionary = vehicle.call("course_data")
 		if course_data.colliders.is_empty() or course_data.strips.is_empty():
 			_fail(key + " course geometry missing")
+			return
+		var visual_bounds := visual_road.global_transform * visual_road.get_aabb()
+		var aerial_bounds := aerial.global_transform * aerial.get_aabb()
+		if visual_bounds.position.y <= aerial_bounds.end.y:
+			_fail(key + " visual road is hidden below the aerial context")
+			return
+		if not visual_bounds.grow(3.0).has_point(vehicle.position):
+			_fail(key + " vehicle start is outside its aligned visual road")
 			return
 		vehicle.set("read_input", false)
 		vehicle.call("send_command", "engine_toggle")

@@ -1,5 +1,7 @@
 ﻿{
   "reference": "1794463956202_map.png (2048-pixel-wide preview coordinates)",
+  "reference_width_px": 2048,
+  "reference_content_size_px": [2710, 1696],
   "origin": [
     34.75097,
     127.7493575
