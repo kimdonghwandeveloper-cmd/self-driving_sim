@@ -11,9 +11,15 @@ use super::collision::{Contact, Footprint};
 use super::dynamics::{DynamicsParams, Motion, steering_yaw_rate, wrap_angle};
 use super::state::VehicleState;
 
-/// 충격량을 준 뒤 이보다 작은 앞뒤·옆 속도(m/s)와 추가 회전(rad/s)은 0으로 둔다. 반복 계산의 작은 나머지가
-/// 정지·미끄러짐 판정을 흔들지 않게 한다(운동 모델의 정지 처리와 같은 크기).
-const REST_EPSILON: f32 = 1.0e-3;
+/// 충격량을 준 뒤 이보다 작은 앞뒤 속도(m/s)는 계산 잔여로 보고 0으로 둔다.
+const SPEED_RESIDUE_MPS: f32 = 1.0e-5;
+
+/// 닿은 점이 이미 장애물에서 떨어지는 중인데 다시 막힌 경우에 줄 이탈 속도(m/s, 임시값).
+///
+/// 자세를 한 단계씩 근사해 옮기므로(회전한 뒤 새 방향으로 이동), 돌면서 벽을 스치는 차체는 닿은 점의 속도가 0이어도
+/// 한 단계에 수십 µm 벽 쪽으로 밀릴 수 있다. 그때마다 남은 시간을 버리면 벽에 붙은 채 앞으로 가지 못하므로
+/// 이 경우에만 아주 작은 이탈 속도를 준다. 운동 에너지를 아주 조금 더할 수 있다.
+pub const DRIFT_SEPARATION_MPS: f32 = 0.02;
 
 /// 평면 강체 속도. 무게중심 속도(x, z)와 회전 속도(rad/s, heading 증가 방향).
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -92,18 +98,17 @@ impl RigidVelocity {
         let axle = Vec2::new(motion.x_m, motion.z_m);
         let axle_velocity = self.at(axle);
         let speed = axle_velocity.dot(forward);
-        let rest = |value: f32| {
-            if value.abs() < REST_EPSILON {
-                0.0
-            } else {
-                value
-            }
+        // 정면 충돌에서 계산 순서 때문에 남는 아주 작은 앞뒤 속도(10⁻⁹ m/s 수준)는 0으로 둔다(정지 판정이 흔들리지 않게).
+        // 옆 미끄러짐·회전은 작아도 벽을 따라 미끄러지는 데 필요하므로 그대로 둔다.
+        let speed = if speed.abs() < SPEED_RESIDUE_MPS {
+            0.0
+        } else {
+            speed
         };
-        let speed = rest(speed);
         state.set_speed_mps(speed);
-        motion.lateral_mps = rest(axle_velocity.dot(right));
+        motion.lateral_mps = axle_velocity.dot(right);
         motion.slip_yaw_rate_rad_s =
-            rest(self.yaw_rate - steering_yaw_rate(params, speed, motion.steer_angle_rad));
+            self.yaw_rate - steering_yaw_rate(params, speed, motion.steer_angle_rad);
     }
 }
 
@@ -112,15 +117,19 @@ impl RigidVelocity {
 /// 법선 충격량 `j = −(1+e)·vₙ ÷ (1/m + (r×n)²/I)`로 닿는 방향 속도를 없애고 반발 계수 `e`만큼 되돌린다.
 /// 닿는 속도가 [`DynamicsParams::bounce_min_speed_mps`]보다 느리면 `e = 0`이다(벽을 밀 때 떨림 방지).
 /// 그다음 접선 방향 미끄러짐을 멈추는 충격량을 `μ·j` 안으로 잘라 준다(쿨롱 마찰).
+///
+/// `separation_mps`는 충격량을 준 뒤 닿은 점이 장애물에서 떨어지는 최소 속도(m/s)다. 보통 0이고, 이미 떨어지는 중인데도
+/// 계산 근사 때문에 다시 막힌 경우에만 [`DRIFT_SEPARATION_MPS`]를 준다.
 pub fn resolve(
     state: &mut VehicleState,
     motion: &mut Motion,
     params: &DynamicsParams,
     footprint: &Footprint,
     contact: &Contact,
+    separation_mps: f32,
 ) -> bool {
     let mut body = RigidVelocity::from_motion(state, motion, params, footprint);
-    if push(&mut body, params, contact).is_none() {
+    if push(&mut body, params, contact, separation_mps).is_none() {
         return false;
     }
     body.store(state, motion, params);
@@ -134,7 +143,12 @@ const SOLVER_ITERATIONS: usize = 8;
 ///
 /// 접촉 구간의 끝점마다 목표 법선 속도(반발 속도, 반발이 없으면 0)를 정하고, 끝점별 누적 법선 충격량을
 /// 0 이상으로 유지하며 되풀이해 맞춘다(순차 충격량 방식). 마찰은 접촉점 가운데에서 누적 법선 충격량 합 × 마찰 계수 안으로 준다.
-fn push(body: &mut RigidVelocity, params: &DynamicsParams, contact: &Contact) -> Option<f32> {
+fn push(
+    body: &mut RigidVelocity,
+    params: &DynamicsParams,
+    contact: &Contact,
+    separation_mps: f32,
+) -> Option<f32> {
     let normal = contact.normal;
     let ends: &[Vec2] = if contact.ends[0].distance(contact.ends[1]) < 1e-6 {
         &contact.ends[..1]
@@ -142,7 +156,7 @@ fn push(body: &mut RigidVelocity, params: &DynamicsParams, contact: &Contact) ->
         &contact.ends
     };
     let approach: Vec<f32> = ends.iter().map(|&end| body.at(end).dot(normal)).collect();
-    if !approach.iter().any(|&speed| speed < 0.0) {
+    if !approach.iter().any(|&speed| speed < separation_mps) {
         return None;
     }
     let targets: Vec<f32> = approach
@@ -153,7 +167,7 @@ fn push(body: &mut RigidVelocity, params: &DynamicsParams, contact: &Contact) ->
             } else {
                 0.0
             };
-            (-restitution * speed).max(0.0)
+            (-restitution * speed).max(separation_mps)
         })
         .collect();
     let mut pushed = vec![0.0f32; ends.len()];
@@ -290,7 +304,8 @@ mod tests {
             &mut motion,
             &params,
             &VEHICLE_FOOTPRINT,
-            &front_wall()
+            &front_wall(),
+            0.0
         ));
         assert!((state.speed_mps() + 5.0 * params.restitution).abs() < 1e-4);
         assert!(motion.lateral_mps.abs() < 1e-5);
@@ -308,7 +323,8 @@ mod tests {
             &mut motion,
             &params,
             &VEHICLE_FOOTPRINT,
-            &front_wall()
+            &front_wall(),
+            0.0
         ));
         assert_eq!(state.speed_mps(), 0.0);
 
@@ -319,7 +335,8 @@ mod tests {
             &mut still,
             &params,
             &VEHICLE_FOOTPRINT,
-            &front_wall()
+            &front_wall(),
+            0.0
         ));
         assert_eq!(leaving.speed_mps(), -0.3);
         assert_eq!(still, Motion::default());
@@ -339,6 +356,7 @@ mod tests {
             &params,
             &VEHICLE_FOOTPRINT,
             &corner,
+            0.0,
         );
         assert!(motion.slip_yaw_rate_rad_s < -0.1, "{motion:?}");
         // 닿은 점은 벽 쪽으로 더 들어가지 않는다.
@@ -365,7 +383,7 @@ mod tests {
         for friction in [0.0, params.body_friction_coeff] {
             params.body_friction_coeff = friction;
             let mut body = start;
-            push(&mut body, &params, &touch).unwrap();
+            push(&mut body, &params, &touch, 0.0).unwrap();
             slid.push(body.linear.dot(along));
         }
         let before = start.linear.dot(along);
@@ -408,7 +426,7 @@ mod tests {
                         RigidVelocity::from_motion(&state, &motion, &params, &VEHICLE_FOOTPRINT);
                     let energy = body.energy(&params);
                     let touch = contact(point, normal);
-                    if push(&mut body, &params, &touch).is_none() {
+                    if push(&mut body, &params, &touch, 0.0).is_none() {
                         continue;
                     }
                     checked += 1;

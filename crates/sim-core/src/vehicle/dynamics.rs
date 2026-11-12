@@ -375,6 +375,7 @@ fn steer_target(steering: f32, current_rad: f32, params: &DynamicsParams) -> Opt
 /// - 제동·관성·비상 정지·구름/공기 저항 감속은 각 성분을 더한 값으로, 항상 속도를 0 쪽으로만 당기며
 ///   0을 넘지 않는다. 저항 때문에 차가 반대로 움직이지 않는다.
 /// - 최고 속도 상한은 감속을 적용한 뒤에 자르므로, 구동이 저항보다 크면 정확히 상한을 유지한다.
+///   충돌로 튕겨 이미 상한보다 빠른 속도는 자르지 않는다(감속으로만 줄어든다, 2-7).
 fn longitudinal_speed(state: &VehicleState, params: &DynamicsParams, speed: f32, dt: f32) -> f32 {
     if state.gear() == Gear::Park {
         return 0.0;
@@ -395,8 +396,12 @@ fn longitudinal_speed(state: &VehicleState, params: &DynamicsParams, speed: f32,
     if state.engine() == EngineState::EmergencyStop {
         decel += params.emergency_decel_mps2;
     }
-    next = approach_zero(next, decel * dt)
-        .clamp(-params.max_reverse_speed_mps, params.max_forward_speed_mps);
+    // 최고 속도는 구동으로 넘지 못하게 하는 한계다. 충돌로 튕겨 이미 그보다 빠르면(2-7) 자르지 않고 감속으로만 줄인다.
+    // 평소에는 속도가 늘 범위 안이므로 결과가 예전과 같다.
+    next = approach_zero(next, decel * dt).clamp(
+        (-params.max_reverse_speed_mps).min(speed),
+        params.max_forward_speed_mps.max(speed),
+    );
     if drive_accel == 0.0 && next.abs() < REST_SPEED_MPS {
         next = 0.0;
     }
@@ -934,6 +939,23 @@ mod tests {
         }
         assert_eq!(state.speed_mps(), 2.0);
         assert!((-motion.z_m - 4.0).abs() < 1e-3, "z={}", motion.z_m);
+    }
+
+    /// 충돌로 튕겨 후진 최고 속도보다 빠르게 뒤로 움직이면 잘리지 않고 감속으로만 줄어드는지 확인한다(2-7).
+    #[test]
+    fn bounce_beyond_speed_limit_is_not_clipped() {
+        let params = DynamicsParams::default();
+        let mut state = ready_in(Gear::Drive);
+        state.set_speed_mps(-3.0);
+        let mut motion = Motion::default();
+        step(&mut state, &mut motion, &params, DT);
+        let decel = params.coast_decel_mps2 + params.resistance_decel_mps2(-3.0);
+        assert!(
+            (state.speed_mps() - (-3.0 + decel * DT)).abs() < 1e-4,
+            "{}",
+            state.speed_mps()
+        );
+        assert!(state.speed_mps() < -params.max_reverse_speed_mps);
     }
 
     /// 각도 정규화가 -π..=π 범위를 유지하는지 확인한다.

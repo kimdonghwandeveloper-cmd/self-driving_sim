@@ -748,7 +748,17 @@ fn step_filtered(
                 z_m: motion.z_m,
             },
         ));
-        impulse::resolve(state, motion, params, footprint, &touch);
+        // 닿은 점이 이미 떨어지는 중이면 근사 때문에 다시 막힌 것이므로 작은 이탈 속도를 준다(벽에 붙어 끼지 않게).
+        if !impulse::resolve(state, motion, params, footprint, &touch, 0.0) {
+            impulse::resolve(
+                state,
+                motion,
+                params,
+                footprint,
+                &touch,
+                impulse::DRIFT_SEPARATION_MPS,
+            );
+        }
         remaining *= 1.0 - result.fraction;
         if pass + 1 == MAX_CONTACT_PASSES || remaining <= 0.0 {
             break;
@@ -1665,5 +1675,66 @@ mod tests {
             64 * 2,
         );
         assert!(!motion.sliding(), "{motion:?}");
+    }
+
+    /// 오른쪽 연석에 붙은 채 앞으로 가속하면 끼지 않고 연석을 따라 나아가는지 확인한다(2-7, 사람 확인에서 찾은 문제).
+    ///
+    /// 연석 쪽으로 조금 기울었거나 연석 쪽으로 조향해도, 매 단계 막혀 남은 시간을 버리며 제자리에 서면 안 된다.
+    /// 조향을 연석 쪽으로 주면 앞바퀴 옆 마찰 때문에 느리게 긁으며 나아가는 것이 이 모델의 동작이다.
+    #[test]
+    fn hugging_curb_keeps_moving_forward() {
+        let params = DynamicsParams::default();
+        // (시작 각도°, 조향 입력, 4초 동안 최소 전진 거리 m). 연석이 없으면 4초에 약 6.85 m 간다.
+        for (angle_deg, steering, min_forward) in [
+            (0.0f32, 0.0f32, 6.8f32),
+            (-1.0, 0.0, 6.0),
+            (-3.0, 0.0, 5.0),
+            (-10.0, 0.0, 2.0),
+            (0.0, 0.2, 2.0),
+            (0.0, 1.0, 0.4),
+        ] {
+            let start = Motion {
+                heading_rad: angle_deg.to_radians(),
+                ..Motion::default()
+            };
+            let right = VEHICLE_FOOTPRINT
+                .rect_at(&start)
+                .vertices()
+                .iter()
+                .map(|vertex| vertex.x)
+                .fold(f32::MIN, f32::max);
+            let curb = [GroundRect::axis_aligned(
+                Vec2::new(right + 0.25 + 1e-4, -40.0),
+                Vec2::new(0.5, 100.0),
+            )];
+            let mut state = ready_in(Gear::Drive);
+            let mut motion = start;
+            let mut contact = ContactState::default();
+            state.set_input(VehicleInput {
+                throttle: 1.0,
+                steering,
+                ..VehicleInput::default()
+            });
+            for _ in 0..64 * 4 {
+                step_with_obstacles(
+                    &mut state,
+                    &mut motion,
+                    &params,
+                    DT,
+                    &VEHICLE_FOOTPRINT,
+                    &curb,
+                    &mut contact,
+                );
+                assert!(
+                    !hits_any(&VEHICLE_FOOTPRINT, &motion, &curb, 0.0),
+                    "penetrated at {angle_deg} {steering}: {motion:?}"
+                );
+            }
+            assert!(
+                -motion.z_m > min_forward,
+                "stuck at {angle_deg} {steering}: {motion:?} speed {}",
+                state.speed_mps()
+            );
+        }
     }
 }
