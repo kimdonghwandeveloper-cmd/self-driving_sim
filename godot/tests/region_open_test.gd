@@ -51,6 +51,7 @@ func _run() -> void:
 	var route: Dictionary = picker.call("route")
 	_check(route.ok, "클릭 두 번 경로 계산 실패: " + str(route.error) + " / " + map.feedback)
 	var clicked_line: PackedVector2Array = map.route_line.duplicate()
+	var clicked_length := float(route.length_m)
 
 	# 저장한 경로 파일은 지역 스냅샷을 가리키고 다시 코스로 만들어진다.
 	if route.ok:
@@ -71,7 +72,7 @@ func _run() -> void:
 	route = picker.call("route")
 	_check(route.ok, "선 그리기 경로 계산 실패: " + str(route.error) + " / " + map.feedback)
 	_check(map.start_box.edit.text == "(그린 선의 처음)", "선 그리기 뒤 출발 칸 안내: " + map.start_box.edit.text)
-	_check(map.points.size() > 2, "그린 선이 점 여러 개로 나뉘지 않음: %d" % map.points.size())
+	_check(absf(float(route.length_m) - clicked_length) < clicked_length * 0.2, "선 그리기 경로가 같은 길이 아님: %.0f m / %.0f m" % [route.length_m, clicked_length])
 
 	# 도로에서 멀리 떨어진 선은 안내만 하고 기존 경로를 둔다.
 	var far := PackedVector2Array([start + Vector2(0, -3000), start + Vector2(300, -3000), start + Vector2(600, -3000)])
