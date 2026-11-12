@@ -14,9 +14,10 @@ use std::path::{Path, PathBuf};
 
 use godot::prelude::*;
 use sim_core::picker::geocode::{GEOCODE_CACHE_DIR, GeocodeHit, GeocodeJob, UreqGet};
-use sim_core::picker::model::PickerModel;
+use sim_core::picker::model::{Endpoint, PickerModel};
 use sim_core::picker::region::{
-    self, ROUTE_DIR, bbox_around, load_model, snapshot_graph_path, valid_route_name,
+    self, LINE_SNAP_M, LINE_STEP_M, ROUTE_DIR, bbox_around, load_model, resample_line, route_area,
+    snapshot_graph_path, valid_route_name,
 };
 use sim_core::picker::tiles;
 use sim_core::world::korea_data::{KOREA_DATA_DIR, KoreaData, REGION_CACHE_DIR};
@@ -36,6 +37,22 @@ fn bbox_rect(bbox: &Bbox) -> Rect2 {
         Vector2::new(min.x, min.y),
         Vector2::new(max.x - min.x, max.y - min.y),
     )
+}
+
+/// 끝의 위치(장소면 열린 장소의 가운데). 경로 범위 계산용.
+fn endpoint_at(
+    end: &Endpoint,
+    picker: &SimRoutePicker,
+) -> Result<sim_core::world::map::LatLon, String> {
+    match end {
+        Endpoint::Point { at, .. } => Ok(*at),
+        Endpoint::Place(index) => picker
+            .model
+            .as_ref()
+            .and_then(|model| model.places.get(*index))
+            .map(|place| place.center)
+            .ok_or_else(|| format!("no place #{index}")),
+    }
 }
 
 /// `{ok, error}` 사전을 만든다.
@@ -191,6 +208,44 @@ impl SimRoutePicker {
         }
     }
 
+    /// 출발·도착으로 경로를 만든다 `{ok, error}`(PLAN 4-11 2단계). 각 끝은 `{place: int, latlon: [lat, lon], label: String}`이고
+    /// `place`가 0 이상이면 열린 건물·장소 번호(진입 지점), 아니면 `latlon` 위치(가까운 도로 위 점)를 쓴다. 두 끝을 감싸는 경로
+    /// 범위의 도로를 전국 자료에서 열어 계산한다(건물·장소는 그대로 둔다). 실패하면 이전 상태를 그대로 두고 `error`는 한국어다.
+    /// 경로 계산 자체의 실패(돌 수 없는 교차로 등)는 `ok = true`이고 `route()`의 `error`로 알린다.
+    #[func]
+    fn plan_endpoints(&mut self, start: VarDictionary, end: VarDictionary) -> VarDictionary {
+        let built = self.endpoint(&start).and_then(|a| {
+            let b = self.endpoint(&end)?;
+            let area = route_area(&[endpoint_at(&a, self)?, endpoint_at(&b, self)?])?;
+            let mut model = self.route_model(&area)?;
+            model.set_endpoints([a, b])?;
+            Ok((model, area))
+        });
+        self.finish_route(built.map(|(model, area)| (model, area, 0)))
+    }
+
+    /// 지도 위에 그린 선(지도 좌표)으로 경로를 만든다 `{ok, error, skipped}`(PLAN 4-11 2단계). 선을 50 m 간격으로 나눠
+    /// 40 m 안의 도로에 붙이고 그 순서대로 경로를 계산한다. `skipped`는 붙일 도로가 없어 건너뛴 점 수다. 실패하면 이전 상태를 둔다.
+    #[func]
+    fn plan_line(&mut self, line: PackedVector2Array) -> VarDictionary {
+        let drawn: Vec<sim_core::world::map::LatLon> = line
+            .as_slice()
+            .iter()
+            .map(|view| tiles::from_view(glam::Vec2::new(view.x, view.y)))
+            .collect();
+        let built = (|| {
+            if drawn.len() < 2 {
+                return Err("draw a line along roads".to_owned());
+            }
+            let samples = resample_line(&drawn, LINE_STEP_M);
+            let area = route_area(&samples)?;
+            let mut model = self.route_model(&area)?;
+            let skipped = model.set_line(&samples, LINE_SNAP_M)?;
+            Ok((model, area, skipped))
+        })();
+        self.finish_route(built)
+    }
+
     /// 장소 파일(`places.osm.json` 형식)을 직접 연다(시험·수동 확인용). 지역이 없으면 실패한다.
     #[func]
     fn load_places_file(&mut self, path: GString) -> VarDictionary {
@@ -265,6 +320,16 @@ impl SimRoutePicker {
                 &crate::korean::picker_line(&sim_core::picker::model::describe_error(&error)),
             ),
         }
+    }
+
+    /// 장소 `index`의 표시 이름(이름이 없으면 OSM 요소 이름). 없는 번호면 빈 문자열.
+    #[func]
+    fn place_label(&self, index: i64) -> GString {
+        usize::try_from(index)
+            .ok()
+            .and_then(|i| self.model.as_ref()?.places.get(i))
+            .map(|place| GString::from(place.label().as_str()))
+            .unwrap_or_default()
     }
 
     /// 점마다 표시 이름(건물·장소로 고른 점만, 나머지는 빈 문자열).
@@ -525,6 +590,73 @@ impl SimRoutePicker {
 }
 
 impl SimRoutePicker {
+    /// 출발·도착 사전(`{place, latlon, label}`)을 [`Endpoint`]로 바꾼다.
+    fn endpoint(&self, dict: &VarDictionary) -> Result<Endpoint, String> {
+        let place = dict
+            .get("place")
+            .and_then(|v| v.try_to::<i64>().ok())
+            .unwrap_or(-1);
+        if place >= 0 {
+            return Ok(Endpoint::Place(place as usize));
+        }
+        let latlon = dict
+            .get("latlon")
+            .and_then(|v| v.try_to::<PackedFloat64Array>().ok())
+            .unwrap_or_default();
+        let [lat, lon] = latlon.as_slice() else {
+            return Err("an end needs a place or [lat, lon]".to_owned());
+        };
+        let name = dict
+            .get("label")
+            .and_then(|v| v.try_to::<GString>().ok())
+            .map(|text| text.to_string())
+            .unwrap_or_default();
+        Ok(Endpoint::Point {
+            name,
+            at: sim_core::world::map::LatLon {
+                lat: *lat,
+                lon: *lon,
+            },
+        })
+    }
+
+    /// 경로 범위의 도로로 새 모델을 만든다. 지금 열린 건물·장소를 그대로 옮겨(번호 유지) 장소로 고른 끝을 쓸 수 있게 한다.
+    fn route_model(&mut self, area: &Bbox) -> Result<PickerModel, String> {
+        let cache_root = repo_path(REGION_CACHE_DIR);
+        let path = self.korea_data()?.route_snapshot(area, &cache_root)?;
+        let (mut model, warning) = load_model(&path, &repo_path(ROAD_GRAPH_CONFIG_PATH))?;
+        if let Some(warning) = warning {
+            godot_warn!("{warning}");
+        }
+        if let Some(old) = &self.model
+            && old.places_loaded
+        {
+            model.set_places(old.places.clone());
+        }
+        Ok(model)
+    }
+
+    /// 새 경로 모델을 받아들이거나(성공) 이전 상태를 두고 한국어 오류를 돌려준다. `{ok, error, skipped}`.
+    fn finish_route(&mut self, built: Result<(PickerModel, Bbox, usize), String>) -> VarDictionary {
+        match built {
+            Ok((model, area, skipped)) => {
+                self.model = Some(model);
+                self.loaded = Some(area);
+                self.message = if skipped > 0 {
+                    format!("선 위 점 {skipped}개는 가까운 도로가 없어 건너뛰었습니다")
+                } else {
+                    String::new()
+                };
+                vdict! { "ok" => true, "error" => "", "skipped" => skipped as i64 }
+            }
+            Err(error) => {
+                let error = crate::korean::route_error(&error);
+                self.message = error.clone();
+                vdict! { "ok" => false, "error" => error.as_str(), "skipped" => 0_i64 }
+            }
+        }
+    }
+
     /// 전국 자료를 연다(처음 한 번). 폴더는 `data_dir`, 비어 있으면 [`KOREA_DATA_DIR`].
     fn korea_data(&mut self) -> Result<&KoreaData, String> {
         if self.korea.is_none() {

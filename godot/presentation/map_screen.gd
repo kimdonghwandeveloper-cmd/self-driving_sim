@@ -34,9 +34,18 @@ const AUTO_OPEN_DELAY_S := 0.4
 var last_camera := Vector2.INF
 var last_zoom := 0.0
 var still_time := 0.0
-## 건물·장소(PLAN 4-9): 이름 검색 칸, 검색 결과 상자, 그릴 윤곽(점 장소는 점 하나).
-var place_search := LineEdit.new()
-var place_results := OptionButton.new()
+## 출발지·도착지 검색 칸(PLAN 4-11 2단계, 네이버 지도처럼 둘 다 검색해 정한다).
+const SearchBox = preload("res://presentation/place_search_box.gd")
+var start_box: HBoxContainer = SearchBox.new()
+var end_box: HBoxContainer = SearchBox.new()
+## 고른 출발·도착 {place, latlon, label, view, region}. 비어 있으면 아직 안 고름. 장소 번호는 고를 때 열린 지역(region)에서만 쓴다.
+var start_choice: Dictionary = {}
+var end_choice: Dictionary = {}
+## 선으로 그리기(PLAN 4-11 2단계): 켜면 왼쪽 끌기로 선을 그리고, 놓으면 그 선을 따라 경로를 만든다.
+var draw_toggle := CheckButton.new()
+var drawing := false
+var drawn := PackedVector2Array()
+## 그릴 건물·장소 윤곽(점 장소는 점 하나, PLAN 4-9).
 var place_outlines: Array = []
 ## 도로·건물·경로·점을 그리는 층(4-11 렉 수정). 카메라가 움직여도 다시 그리지 않고, 자료나 배율이 바뀔 때만 다시 그린다.
 var overlay_layer := Node2D.new()
@@ -52,23 +61,16 @@ var place_dots := PackedVector2Array()
 ## 도로 선분을 탐색 가능·불가로 나눠 둔 것(한 번에 그리기용).
 var road_open := PackedVector2Array()
 var road_closed := PackedVector2Array()
-## 검색 결과 상자 항목별 내용 {source: "place"(열린 지역의 건물·장소)|"area"(전국 검색), index, view}. 안내문·구분선은 null.
-var result_items: Array = []
-## 열린 지역의 건물·장소 검색 결과와 마지막 전국 검색 결과(4-10).
-var local_results: Array = []
-var area_results: Array = []
-## 기다리는 전국 검색 요청 번호(0이면 없음).
-var search_request := 0
-## 전국 검색 결과로 옮길 때 화면에 담을 범위(m). 지역 열기 범위(1.5 km)와 맞춘다.
+## 검색 결과로 옮길 때 화면에 담을 범위(m). 지역 열기 범위(1.5 km)와 맞춘다.
 const SEARCH_VIEW_M := 1500.0
 ## 건물 윤곽·점 장소 색.
 const PLACE_COLOR := Color("b48ead")
 ## Godot 쪽 지도 텍스처 보관 상한(계약 7-3 권장값).
 const MAX_TEXTURES := 512
 ## 맞춤 보기에서 버튼·안내 영역으로 빼는 화면 크기(px). 최소 배율도 같은 영역 기준이다.
-const FIT_MARGIN := Vector2(80, 380)
+const FIT_MARGIN := Vector2(80, 420)
 ## 화면 위쪽 버튼·안내 영역 높이(px). 지도 북쪽 끝이 이 영역 아래까지 내려와 보이도록 이동 한계에 더한다.
-const TOP_PANEL_PX := 300.0
+const TOP_PANEL_PX := 340.0
 ## 대한민국 근사 경계 밖을 덮는 색. 주변 나라는 보이지 않게 하되(사용자 결정) 이질감이 없도록 OSM 지도 바다색을 쓴다(4-10).
 const MASK_COLOR := Color("aad3df")
 ## 대한민국 근사 경계(지도 좌표). Rust SimTiles가 없으면 비어 있고 가림·제한을 하지 않는다.
@@ -89,7 +91,7 @@ func _ready() -> void:
 	get_viewport().size_changed.connect(queue_redraw)
 	var canvas := CanvasLayer.new()
 	add_child(canvas)
-	status.position = Vector2(24, 152)
+	status.position = Vector2(24, 196)
 	status.text = "지도 미리보기 · Rust 지도 서비스 미연결\n우클릭 끌기: 이동 / 휠: 확대·축소\n지역 열기·점 편집·경로 계산·저장은 연결 대기 중입니다.\n회색 칸은 실제 지도 타일이 아닙니다."
 	canvas.add_child(status)
 	_services(canvas)
@@ -156,23 +158,21 @@ func display_tiles(layers: Array) -> void:
 	tile_layers = layers.duplicate()
 	queue_redraw()
 
-## 마우스 기준 위치를 고정하며 확대하고 우클릭 끌기로 이동한다.
+## 마우스 기준 위치를 고정하며 확대하고 우클릭 끌기로 이동한다. 왼쪽 클릭은 출발·도착 고르기, "선으로 그리기"를 켜면
+## 왼쪽 끌기로 선 그리기다.
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton:
 		if event.button_index == MOUSE_BUTTON_RIGHT:
 			dragging = event.pressed
-		elif event.pressed and event.button_index == MOUSE_BUTTON_LEFT and picker != null:
+		elif event.button_index == MOUSE_BUTTON_LEFT and picker != null:
 			var at := get_global_mouse_position()
-			if event.shift_pressed:
-				picker.call("remove_near", at, 12.0 / camera.zoom.x)
-			elif _ensure_region(at):
-				# 건물·장소를 누르면 그 진입 지점(가까운 도로 위 점)을, 아니면 누른 자리를 점으로 더한다.
-				var place := int(picker.call("place_at", at))
-				if place >= 0:
-					_add_place(place)
+			if draw_toggle.button_pressed:
+				if event.pressed:
+					_start_line(at)
 				else:
-					picker.call("add_point", at)
-			_refresh_route()
+					_finish_line()
+			elif event.pressed:
+				_click(at)
 		elif event.pressed and event.button_index in [MOUSE_BUTTON_WHEEL_UP, MOUSE_BUTTON_WHEEL_DOWN]:
 			var before := get_global_mouse_position()
 			var factor := 1.25 if event.button_index == MOUSE_BUTTON_WHEEL_UP else 0.8
@@ -181,6 +181,8 @@ func _unhandled_input(event: InputEvent) -> void:
 			camera.position += before - get_global_mouse_position()
 			_clamp_camera()
 			queue_redraw()
+	elif event is InputEventMouseMotion and drawing:
+		_extend_line(get_global_mouse_position())
 	elif event is InputEventMouseMotion and dragging:
 		camera.position -= event.relative / camera.zoom.x
 		_clamp_camera()
@@ -239,8 +241,13 @@ func _draw_overlay() -> void:
 		overlay_layer.draw_multiline(road_open, Color("cbd5dd"), 2.0 / scale_m)
 	if route_line.size() > 1:
 		overlay_layer.draw_polyline(route_line, Color("58c4ef"), 4.0 / scale_m, true)
-	for i in range(points.size()):
-		overlay_layer.draw_circle(points[i], 6.0 / scale_m, Color("f3bf63") if i == 0 else Color("9ee5c2"))
+	# 출발(주황)·도착(초록)만 크게 표시한다. 그린 선의 중간 점은 경로선으로 보인다.
+	if points.size() >= 1:
+		overlay_layer.draw_circle(points[0], 6.0 / scale_m, Color("f3bf63"))
+	if points.size() >= 2:
+		overlay_layer.draw_circle(points[points.size() - 1], 6.0 / scale_m, Color("9ee5c2"))
+	if drawn.size() > 1:
+		overlay_layer.draw_polyline(drawn, Color("f39c63"), 3.0 / scale_m, true)
 
 ## Rust 지도 서비스(SimRoutePicker·SimTiles)를 만들고 편집·저장·맞춤 보기·검색 버튼을 화면에 붙인다. 헤드리스·--offline이면
 ## 네트워크(배경 지도·전국 검색)를 끈다. 지역 도로·건물은 내장 전국 자료에서 열므로 네트워크가 필요 없다(PLAN 4-11).
@@ -258,14 +265,13 @@ func _services(canvas: CanvasLayer) -> void:
 	var controls := HBoxContainer.new()
 	controls.position = Vector2(24, 64)
 	canvas.add_child(controls)
-	var undo := Button.new()
-	undo.text = "마지막 점 삭제"
-	undo.pressed.connect(_remove_last)
-	controls.add_child(undo)
 	var clear := Button.new()
-	clear.text = "점 모두 삭제"
-	clear.pressed.connect(_clear_points)
+	clear.text = "경로 지우기"
+	clear.pressed.connect(_clear_route)
 	controls.add_child(clear)
+	draw_toggle.text = "선으로 그리기"
+	draw_toggle.tooltip_text = "켜면 왼쪽 끌기로 도로를 따라 선을 그려 경로를 만듭니다"
+	controls.add_child(draw_toggle)
 	route_name.placeholder_text = "저장 이름 (영문·숫자·_-)"
 	route_name.custom_minimum_size.x = 210
 	controls.add_child(route_name)
@@ -282,20 +288,16 @@ func _services(canvas: CanvasLayer) -> void:
 		button.text = item[0]
 		button.pressed.connect(item[1])
 		navigation.add_child(button)
-	place_search.placeholder_text = "장소 이름 검색"
-	place_search.custom_minimum_size.x = 180
-	# 한글 IME는 Enter 때 조합 중인 마지막 글자가 아직 text에 없을 수 있어, 입력할 때마다 찾고 Enter·버튼은 조합 글자까지 합쳐 찾는다.
-	place_search.text_changed.connect(_search_typed)
-	place_search.text_submitted.connect(_search_submitted)
-	navigation.add_child(place_search)
-	var search_button := Button.new()
-	search_button.text = "검색"
-	search_button.pressed.connect(func(): _search_submitted(place_search.text))
-	navigation.add_child(search_button)
-	place_results.custom_minimum_size.x = 220
-	place_results.item_selected.connect(_select_place_result)
-	navigation.add_child(place_results)
-	_fill_place_results([])
+	var ends := HBoxContainer.new()
+	ends.position = Vector2(24, 152)
+	canvas.add_child(ends)
+	for pair in [["출발", start_box, "출발지 검색", "start"], ["도착", end_box, "도착지 검색", "end"]]:
+		var label := Label.new()
+		label.text = pair[0]
+		ends.add_child(label)
+		pair[1].setup(picker, pair[2])
+		pair[1].picked.connect(_choose.bind(pair[3]))
+		ends.add_child(pair[1])
 	snapshot_dialog.file_mode = FileDialog.FILE_MODE_OPEN_FILE
 	snapshot_dialog.access = FileDialog.ACCESS_FILESYSTEM
 	snapshot_dialog.filters = PackedStringArray(["*.json ; OSM snapshot"])
@@ -305,8 +307,8 @@ func _services(canvas: CanvasLayer) -> void:
 	snapshot_folder_dialog.access = FileDialog.ACCESS_FILESYSTEM
 	snapshot_folder_dialog.dir_selected.connect(_load_snapshot)
 	add_child(snapshot_folder_dialog)
-	for button in [undo, clear]:
-		button.disabled = picker == null
+	clear.disabled = picker == null
+	draw_toggle.disabled = picker == null
 
 ## 전국 지도 자료가 있는지 Rust에 묻고 결과를 기억한다. 없으면 만드는 방법을 안내에 남긴다.
 func _check_data() -> void:
@@ -326,19 +328,9 @@ func _open_region_at(view: Vector2) -> bool:
 	_refresh_route()
 	return bool(result.get("ok", false))
 
-## 클릭한 곳에 점을 더할 수 있게 지역을 준비한다. 열린 지역 안이면 그대로, 점이 없으면 그곳 지역을 열고,
-## 점이 있는데 지역 밖이면 안내만 하고 false(출발·도착은 한 지역 안, 4-11 2단계에서 풀 예정).
-func _ensure_region(at: Vector2) -> bool:
-	if opened_region.has_point(at):
-		return true
-	if points.is_empty():
-		return _open_region_at(at)
-	feedback = "출발·도착은 열린 지역(1.5 km) 안에서 고르세요. 다른 곳에서 시작하려면 '점 모두 삭제' 후 누르세요."
-	return false
-
 ## 확대한 화면이 멈추면 그 가운데 지역을 자동으로 연다. 점을 찍은 뒤에는 지역을 바꾸지 않는다(찍은 점 보존).
 func _auto_open(delta: float) -> void:
-	if picker == null or not data_ok or not points.is_empty():
+	if picker == null or not data_ok or not points.is_empty() or drawing:
 		return
 	if camera.position != last_camera or camera.zoom.x != last_zoom:
 		last_camera = camera.position
@@ -355,114 +347,116 @@ func _auto_open(delta: float) -> void:
 		return
 	_open_region_at(camera.position)
 
-## 검색어로 장소를 찾아 결과 상자를 채운다.
-func _search_places(text: String) -> void:
+## 지도 클릭으로 출발·도착을 고른다(비어 있는 쪽, 출발 먼저, 둘 다 있으면 도착). 열린 지역이 없고 경로도 없으면 그곳 지역을
+## 먼저 연다. 건물·장소를 누르면 그 장소(진입 지점), 아니면 누른 곳(가까운 도로 위 점)이다.
+func _click(at: Vector2) -> void:
+	if not opened_region.has_point(at) and points.is_empty() and data_ok:
+		_open_region_at(at)
+	var place := int(picker.call("place_at", at))
+	var label: String = str(picker.call("place_label", place)) if place >= 0 else "지도에서 고른 곳"
+	var choice := {"place": place, "latlon": picker.call("view_to_latlon", at), "label": label, "view": at}
+	var side := "start" if start_choice.is_empty() else "end"
+	(start_box if side == "start" else end_box).show_label(label)
+	_choose(choice, side)
+
+## 출발(`side` = "start") 또는 도착을 정한다. 고를 때 열린 지역을 함께 기억하고(장소 번호는 그 지역에서만 쓴다),
+## 화면 밖이면 지도를 옮긴다. 둘 다 정해지면 경로를 계산한다.
+func _choose(choice: Dictionary, side: String) -> void:
+	var chosen := choice.duplicate()
+	chosen["region"] = opened_region
+	if chosen.view == Vector2.INF and int(chosen.place) >= 0 and int(chosen.place) < place_outlines.size():
+		chosen.view = _outline_center(place_outlines[int(chosen.place)])
+	if side == "start":
+		start_choice = chosen
+	else:
+		end_choice = chosen
+	if chosen.view != Vector2.INF and not _visible_rect().has_point(chosen.view):
+		_move_to(chosen.view)
+	if start_choice.is_empty() or end_choice.is_empty():
+		feedback = "도착지를 고르세요" if end_choice.is_empty() else "출발지를 고르세요"
+		return
+	_plan_endpoints()
+
+## 고른 출발·도착으로 Rust에 경로를 계산시키고, 되면 경로가 보이게 화면을 맞춘다.
+func _plan_endpoints() -> void:
+	var result: Dictionary = picker.call("plan_endpoints", _end_dict(start_choice), _end_dict(end_choice))
+	feedback = "" if result.get("ok", false) else str(result.error)
+	_refresh_route()
+	if result.get("ok", false):
+		_fit_route()
+
+## 고른 끝을 Rust에 넘길 사전으로 바꾼다. 장소 번호는 고를 때와 같은 지역이 열려 있을 때만 쓰고, 아니면 위치로 넘긴다.
+func _end_dict(choice: Dictionary) -> Dictionary:
+	if int(choice.place) >= 0 and choice.region == opened_region:
+		return {"place": int(choice.place), "latlon": PackedFloat64Array(), "label": choice.label}
+	var latlon: PackedFloat64Array = choice.latlon
+	if latlon.size() != 2:
+		latlon = picker.call("view_to_latlon", choice.view)
+	return {"place": -1, "latlon": latlon, "label": choice.label}
+
+## 윤곽 꼭짓점의 평균(점 장소는 그 점).
+func _outline_center(outline: PackedVector2Array) -> Vector2:
+	var center := Vector2.ZERO
+	for point in outline:
+		center += point / outline.size()
+	return center
+
+## 지금 화면에 보이는 지도 범위.
+func _visible_rect() -> Rect2:
+	var span := get_viewport_rect().size / camera.zoom.x
+	return Rect2(camera.position - span * 0.5, span)
+
+## 지도를 `view`로 옮기고 약 1.5 km가 보이게 확대한다.
+func _move_to(view: Vector2) -> void:
+	var available := get_viewport_rect().size - FIT_MARGIN
+	if available.x > 0.0 and available.y > 0.0:
+		camera.zoom = Vector2.ONE * clampf(minf(available.x, available.y) / SEARCH_VIEW_M, _min_zoom(), 8.0)
+	camera.position = view
+	_clamp_camera()
+	queue_redraw()
+
+## 선 그리기를 시작한다(왼쪽 누름).
+func _start_line(at: Vector2) -> void:
+	drawing = true
+	drawn = PackedVector2Array([at])
+	overlay_layer.queue_redraw()
+
+## 그리는 선에 점을 더한다(화면 4 px보다 움직였을 때만).
+func _extend_line(at: Vector2) -> void:
+	if drawn.is_empty() or at.distance_to(drawn[drawn.size() - 1]) * camera.zoom.x >= 4.0:
+		drawn.append(at)
+		overlay_layer.queue_redraw()
+
+## 선 그리기를 끝내고(왼쪽 뗌) 그 선을 따라 Rust에 경로를 계산시킨다. 출발·도착 칸에는 선의 처음·끝이라고 보인다.
+func _finish_line() -> void:
+	if not drawing:
+		return
+	drawing = false
+	var line := drawn
+	drawn = PackedVector2Array()
+	if line.size() < 2:
+		overlay_layer.queue_redraw()
+		return
+	var result: Dictionary = picker.call("plan_line", line)
+	feedback = "" if result.get("ok", false) else str(result.error)
+	if result.get("ok", false):
+		start_choice = {}
+		end_choice = {}
+		start_box.show_label("(그린 선의 처음)")
+		end_box.show_label("(그린 선의 끝)")
+	_refresh_route()
+
+## 경로와 고른 출발·도착을 모두 지운다.
+func _clear_route() -> void:
 	if picker == null:
 		return
-	var found: Array = picker.call("search_places", text)
-	_fill_place_results(found)
-	feedback = "검색 결과 %d곳" % found.size() if not found.is_empty() else "'%s' 이름의 장소가 없습니다(열린 지역 안에서만 찾습니다. Enter를 누르면 전국 검색)" % text
-
-## 입력이 바뀔 때마다(한글은 글자 조합이 끝날 때마다) 열린 지역의 건물·장소 안에서만 찾는다. 전국 검색은 하지 않는다
-## (Nominatim 이용 규칙: 입력 중 자동완성 금지). 지난 전국 결과는 지운다. 빈 칸이면 결과 상자만 비운다.
-func _search_typed(text: String) -> void:
-	area_results = []
-	if text.strip_edges().is_empty():
-		_fill_place_results([])
-		feedback = ""
-	else:
-		_search_places(text)
-
-## Enter·검색 버튼: 아직 조합 중인 한글 글자(IME)를 붙여 열린 지역의 건물·장소에서 찾고, 전국 검색도 요청한다.
-func _search_submitted(text: String) -> void:
-	var composing := DisplayServer.ime_get_text() if place_search.has_focus() else ""
-	var query := (text + composing).strip_edges()
-	if query.is_empty() or picker == null:
-		return
-	area_results = []
-	_search_places(query)
-	var result: Dictionary = picker.call("search_nationwide", query)
-	if result.get("ok", false):
-		search_request = int(result.request_id)
-		feedback = "전국 검색 중... (OpenStreetMap Nominatim)"
-	else:
-		feedback = str(result.error)
-
-## 전국 검색 결과 이벤트를 받아 결과 상자 아래쪽에 붙인다.
-func _show_area_results(event: Dictionary) -> void:
-	search_request = 0
-	area_results = event.get("results", [])
-	_fill_place_results(local_results)
-	feedback = str(event.message)
-	if not area_results.is_empty():
-		place_results.show_popup()
-
-## 결과 상자를 안내문 한 줄, 열린 지역의 건물·장소 결과(이름 · 종류), 전국 검색 결과(구분선 아래, 이름 — 주소)로 다시 만든다.
-func _fill_place_results(found: Array) -> void:
-	local_results = found
-	place_results.clear()
-	result_items.clear()
-	place_results.add_item("검색 결과에서 고르기")
-	result_items.append(null)
-	for item in found:
-		place_results.add_item("%s · %s" % [item.name, item.kind] if str(item.kind) != "" else str(item.name))
-		result_items.append({"source": "place", "index": int(item.index)})
-	if not area_results.is_empty():
-		place_results.add_separator("전국 검색")
-		result_items.append(null)
-		for item in area_results:
-			place_results.add_item("%s — %s" % [item.name, item.address])
-			result_items.append({"source": "area", "index": int(item.index), "view": item.view})
-	place_results.disabled = result_items.size() <= 1
-
-## 고른 검색 결과를 처리한다. 열린 지역의 건물·장소는 점으로 더하고, 전국 결과는 _pick_area_result에 맡긴다.
-func _select_place_result(item: int) -> void:
-	place_results.select(0)
-	if item < 1 or item >= result_items.size() or result_items[item] == null:
-		return
-	var chosen: Dictionary = result_items[item]
-	if chosen.source == "area":
-		_pick_area_result(chosen)
-		return
-	_add_place(int(chosen.index))
+	picker.call("clear_points")
+	start_choice = {}
+	end_choice = {}
+	start_box.show_label("")
+	end_box.show_label("")
+	feedback = ""
 	_refresh_route()
-
-## 전국 검색 결과: 그 위치로 지도를 옮기고, 열린 지역 안이거나 점이 없어 그곳 지역을 열 수 있으면 가까운 도로 위 점으로 더한다.
-## 점이 있는데 지역 밖이면 옮기기만 하고 안내한다(출발·도착은 한 지역 안).
-func _pick_area_result(chosen: Dictionary) -> void:
-	var view: Vector2 = chosen.view
-	if not opened_region.has_point(view):
-		var available := get_viewport_rect().size - FIT_MARGIN
-		if available.x > 0.0 and available.y > 0.0:
-			camera.zoom = Vector2.ONE * clampf(minf(available.x, available.y) / SEARCH_VIEW_M, _min_zoom(), 8.0)
-		camera.position = view
-		_clamp_camera()
-		queue_redraw()
-		if not points.is_empty():
-			feedback = "검색한 곳으로 옮겼습니다. 출발·도착은 한 지역(1.5 km) 안에서 고르므로, 여기서 시작하려면 '점 모두 삭제' 후 결과를 다시 고르세요."
-			return
-		if not _open_region_at(view):
-			return
-	var result: Dictionary = picker.call("add_search_hit", int(chosen.index))
-	feedback = "" if result.get("ok", false) else str(result.error)
-	_refresh_route()
-
-## 장소 번호의 진입 지점을 점으로 더하고, 실패하면 이유를 안내에 남긴다.
-func _add_place(index: int) -> void:
-	var result: Dictionary = picker.call("add_place", index)
-	feedback = "" if result.get("ok", false) else str(result.error)
-
-## 마지막으로 찍은 점을 지우고 도로·경로 표시를 다시 받는다.
-func _remove_last() -> void:
-	if picker != null:
-		picker.call("remove_last")
-		_refresh_route()
-
-## 찍은 점을 모두 지우고 표시를 다시 받는다.
-func _clear_points() -> void:
-	if picker != null:
-		picker.call("clear_points")
-		_refresh_route()
 
 ## 입력한 이름과 덮어쓰기 선택으로 경로를 저장하고 결과(경로 또는 오류)를 안내에 남긴다.
 func _save_route() -> void:
@@ -486,13 +480,18 @@ func _refresh_route() -> void:
 func _process(delta: float) -> void:
 	if picker != null:
 		for event in picker.call("poll"):
-			if event.type == "search_results" and search_request != 0 and int(event.request_id) == search_request:
-				_show_area_results(event)
+			if event.type == "search_results" and not start_box.take_results(event):
+				end_box.take_results(event)
 		_auto_open(delta)
 		var result: Dictionary = picker.call("route")
 		save_button.disabled = not bool(result.ok)
 		var hint := "" if data_ok else "\n" + data_error
-		var text := "우클릭: 이동 / 휠: 확대(멈추면 그 지역을 엽니다) / 클릭: 점 추가(건물을 누르면 그 건물) / Shift+클릭: 점 삭제\n" + "\n".join(picker.call("status_lines")) + "\n" + feedback + hint
+		var searches := ""
+		for pair in [["출발 검색", start_box], ["도착 검색", end_box]]:
+			if pair[1].feedback != "":
+				searches += "\n%s: %s" % [pair[0], pair[1].feedback]
+		var how := "선 그리기: 왼쪽 끌기로 도로를 따라 그리세요" if draw_toggle.button_pressed else "클릭: 출발·도착 고르기(건물을 누르면 그 건물)"
+		var text := "우클릭: 이동 / 휠: 확대(멈추면 그 지역을 엽니다) / " + how + "\n" + "\n".join(picker.call("status_lines")) + "\n" + feedback + searches + hint
 		# 글자가 바뀔 때만 넣는다(같은 글자를 매 프레임 넣으면 글자 배치를 다시 한다).
 		if status.text != text:
 			status.text = text
@@ -572,7 +571,7 @@ func _fit_rect(bounds: Rect2) -> void:
 		return
 	var zoom_value := clampf(minf(available.x / bounds.size.x, available.y / bounds.size.y), 0.0005, 8.0)
 	camera.zoom = Vector2.ONE * zoom_value
-	camera.position = bounds.get_center() - Vector2(0, 150.0 / zoom_value)
+	camera.position = bounds.get_center() - Vector2(0, TOP_PANEL_PX * 0.5 / zoom_value)
 	_clamp_camera()
 
 ## 로컬 스냅샷(graph*.osm.json) 파일 선택 창을 연다.

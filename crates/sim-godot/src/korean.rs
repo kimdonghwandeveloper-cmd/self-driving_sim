@@ -96,6 +96,37 @@ pub fn region_error(error: &str) -> String {
     format!("지역을 열 수 없습니다: {error}")
 }
 
+/// 경로 만들기(4-11 2단계: 출발·도착 검색, 선으로 그리기) 오류를 한국어로 바꾼다. 출발·도착 쪽을 앞에 밝히고,
+/// 자료 오류는 [`region_error`], 나머지 경로 오류는 [`picker_line`] 규칙을 쓴다.
+pub fn route_error(error: &str) -> String {
+    for (english, korean) in [("start: ", "출발지: "), ("end: ", "도착지: ")] {
+        if let Some(rest) = error.strip_prefix(english) {
+            return format!("{korean}{}", route_error(rest));
+        }
+    }
+    if let Some(gap) = error
+        .split_once("` is ")
+        .and_then(|(_, rest)| rest.split_once(" m from the nearest drivable road"))
+        .map(|(gap, _)| gap)
+    {
+        return format!("가장 가까운 차도가 {gap} m 떨어져 있습니다(100 m 안이어야 합니다)");
+    }
+    if error.starts_with("the drawn line does not follow a road") {
+        return "그린 선이 도로를 따라가지 않습니다. 도로 위를 따라 다시 그리세요".to_owned();
+    }
+    if error == "draw a line along roads" {
+        return "도로를 따라 선을 그리세요".to_owned();
+    }
+    if error.contains("m per side") {
+        return "출발·도착이 너무 멉니다(경로 범위 한 변 6 km, 경로 5 km 이하)".to_owned();
+    }
+    let region = region_error(error);
+    if !region.starts_with("지역을 열 수 없습니다:") {
+        return region;
+    }
+    picker_line(&sim_core::picker::model::describe_error(error))
+}
+
 /// 경로 선택 화면 안내·경고·경로 오류 한 줄을 한국어로 바꾼다.
 pub fn picker_line(line: &str) -> String {
     if let Some(count) = line.strip_prefix("Points: ") {
@@ -456,6 +487,30 @@ mod tests {
             "이 지역에는 도로가 없습니다"
         );
         assert_eq!(region_error("boom"), "지역을 열 수 없습니다: boom");
+    }
+
+    /// 경로 만들기 오류: 출발·도착 쪽, 차도 거리, 그린 선, 너무 먼 범위, 자료 오류, 나머지 경로 오류.
+    #[test]
+    fn route_errors_translate() {
+        assert_eq!(
+            route_error("end: place `먼 곳` is 150 m from the nearest drivable road (limit 100 m)"),
+            "도착지: 가장 가까운 차도가 150 m 떨어져 있습니다(100 m 안이어야 합니다)"
+        );
+        assert!(
+            route_error("the drawn line does not follow a road (only 1 point(s))")
+                .contains("다시 그리세요")
+        );
+        assert!(
+            route_error(
+                "bbox is 7000 x 300 m (east-west by north-south); limit is 6000 m per side"
+            )
+            .contains("너무 멉니다")
+        );
+        assert_eq!(
+            route_error("no roads in this area"),
+            "이 지역에는 도로가 없습니다"
+        );
+        assert!(route_error("boom").starts_with("경로 오류: "));
     }
 
     /// 시나리오 단계·끝난 방식이 모두 한국어로 바뀌는지 확인한다.

@@ -1,8 +1,8 @@
-# 4-11 전국 지도 자료로 지역 열기 확인(오프라인). 네트워크를 쓰지 않는다. 성공 0 / 실패 1.
+# 4-11 전국 지도 자료로 지역 열기와 경로 고르기(1·2단계) 확인(오프라인). 네트워크를 쓰지 않는다. 성공 0 / 실패 1.
 # 작은 시험 자료(testdata/korea-yeosu: 실제 전국 자료에서 여수 엑스포 주변 2 km만 잘라 만든 것)를 쓴다.
-# 받기 버튼 없이 클릭한 곳의 지역이 열리는지, 도로·건물이 오는지, 점 두 개로 경로를 계산해 저장하면 경로 파일이 지역 스냅샷
-# (cache/regions)을 가리키고 다시 코스로 만들어지는지, 점이 있을 때 지역 밖 클릭은 안내만 하는지, 확대한 화면이 멈추면
-# 그 가운데 지역이 자동으로 열리는지, 자료가 없을 때 만드는 방법을 안내하는지 본다.
+# 받기 버튼 없이 클릭한 곳의 지역이 열리는지, 도로·건물이 오는지, 클릭 두 번(출발·도착)으로 경로를 계산해 저장하면 경로 파일이
+# 지역 스냅샷(cache/regions)을 가리키고 다시 코스로 만들어지는지, 같은 경로를 선으로 그려도 경로가 되는지, 도로를 벗어난 선은
+# 안내만 하고 경로를 두는지, 확대한 화면이 멈추면 그 가운데 지역이 자동으로 열리는지, 자료가 없을 때 만드는 방법을 안내하는지 본다.
 # 실행(워크트리 최상위): godot --headless --path godot --import 후
 #                        godot --headless --fixed-fps 64 --path godot --script res://tests/region_open_test.gd
 extends SceneTree
@@ -28,7 +28,7 @@ func _init() -> void:
 	call_deferred("_run")
 
 
-## 지도 화면에서 시험 자료로 지역을 열고 점·경로·저장·자동 열기·자료 없음 안내를 확인한다.
+## 지도 화면에서 시험 자료로 지역을 열고 출발·도착·저장·선 그리기·자동 열기·자료 없음 안내를 확인한다.
 func _run() -> void:
 	var map: Node2D = Map.new()
 	root.add_child(map)
@@ -37,20 +37,20 @@ func _run() -> void:
 	picker.call("use_data_dir", DATA)
 	map._check_data()
 	_check(map.data_ok, "시험 자료를 열지 못함: " + map.data_error)
+	map.camera.zoom = Vector2.ONE * (map.get_viewport_rect().size.x / 2000.0)
 
-	# 점이 없으면 클릭한 곳 지역을 연다.
+	# 경로가 없으면 클릭한 곳 지역을 열고 그곳이 출발이 된다. 두 번째 클릭이 도착이고 경로가 계산된다.
 	var start: Vector2 = picker.call("latlon_to_view", PackedFloat64Array(START))
 	var finish: Vector2 = picker.call("latlon_to_view", PackedFloat64Array(END))
-	_check(map._ensure_region(start), "클릭한 곳 지역 열기 실패: " + map.feedback)
-	_check(map.opened_region.has_point(start), "열린 지역이 클릭한 곳을 담지 않음")
+	map._click(start)
+	_check(map.opened_region.has_point(start), "클릭한 곳 지역이 열리지 않음: " + map.feedback)
 	_check(map.roads.size() > 100, "도로 선분이 너무 적음: %d" % (map.roads.size() / 2))
 	_check(map.place_outlines.size() > 100, "건물·장소가 너무 적음: %d" % map.place_outlines.size())
-	picker.call("add_point", start)
-	_check(map._ensure_region(finish), "같은 지역 안 도착 클릭이 거부됨")
-	picker.call("add_point", finish)
-	map._refresh_route()
+	_check(not map.start_choice.is_empty() and map.end_choice.is_empty(), "첫 클릭이 출발이 아님")
+	map._click(finish)
 	var route: Dictionary = picker.call("route")
-	_check(route.ok, "경로 계산 실패: " + str(route.error))
+	_check(route.ok, "클릭 두 번 경로 계산 실패: " + str(route.error) + " / " + map.feedback)
+	var clicked_line: PackedVector2Array = map.route_line.duplicate()
 
 	# 저장한 경로 파일은 지역 스냅샷을 가리키고 다시 코스로 만들어진다.
 	if route.ok:
@@ -63,13 +63,25 @@ func _run() -> void:
 			_check(built.get("ok", false), "저장 경로로 코스 만들기 실패: " + str(built.get("error", "")))
 			DirAccess.remove_absolute(str(saved.path))
 
-	# 점이 있을 때 지역 밖 클릭은 안내만 한다.
-	_check(not map._ensure_region(start + Vector2(5000, 0)) and map.feedback.contains("점 모두 삭제"), "지역 밖 클릭 안내: " + map.feedback)
+	# 같은 길을 선으로 그리면 그 선을 따라 경로가 된다.
+	map._clear_route()
+	_check(map.points.is_empty() and map.start_box.edit.text == "", "경로 지우기가 점·칸을 비우지 않음")
+	map.draw_toggle.button_pressed = true
+	_draw_line(map, clicked_line)
+	route = picker.call("route")
+	_check(route.ok, "선 그리기 경로 계산 실패: " + str(route.error) + " / " + map.feedback)
+	_check(map.start_box.edit.text == "(그린 선의 처음)", "선 그리기 뒤 출발 칸 안내: " + map.start_box.edit.text)
+	_check(map.points.size() > 2, "그린 선이 점 여러 개로 나뉘지 않음: %d" % map.points.size())
 
-	# 점을 지우고 확대한 화면을 다른 곳에 멈추면 그 가운데 지역이 자동으로 열린다.
-	map._clear_points()
+	# 도로에서 멀리 떨어진 선은 안내만 하고 기존 경로를 둔다.
+	var far := PackedVector2Array([start + Vector2(0, -3000), start + Vector2(300, -3000), start + Vector2(600, -3000)])
+	_draw_line(map, far)
+	_check(map.feedback.contains("도로") and bool(picker.call("route").ok), "도로 밖 선 안내: " + map.feedback)
+	map.draw_toggle.button_pressed = false
+
+	# 경로를 지우고 확대한 화면을 다른 곳에 멈추면 그 가운데 지역이 자동으로 열린다.
+	map._clear_route()
 	var moved := start + Vector2(600, -400)
-	map.camera.zoom = Vector2.ONE * (map.get_viewport_rect().size.x / 2000.0)
 	map.camera.position = moved
 	for i in range(60):
 		await process_frame
@@ -83,11 +95,22 @@ func _run() -> void:
 	_finish(map)
 
 
+## 선 그리기를 흉내 낸다: 첫 점에서 누르고, 점들을 따라 끌고, 마지막에 뗀다.
+func _draw_line(map: Node2D, line: PackedVector2Array) -> void:
+	if line.is_empty():
+		_check(false, "그릴 선이 비어 있음")
+		return
+	map._start_line(line[0])
+	for point in line:
+		map._extend_line(point)
+	map._finish_line()
+
+
 ## 지도 화면을 지우고 결과를 출력한 뒤 끝낸다.
 func _finish(map: Node) -> void:
 	map.free()
 	if failures.is_empty():
-		print("REGION OPEN OK: 클릭한 곳 지역 열기 · 도로·건물 · 경로 계산·저장·다시 코스 · 지역 밖 안내 · 멈춘 화면 자동 열기 · 자료 없음 안내")
+		print("REGION OPEN OK: 클릭한 곳 지역 열기 · 도로·건물 · 클릭 두 번 출발·도착 경로·저장·다시 코스 · 선 그리기 경로 · 도로 밖 선 안내 · 멈춘 화면 자동 열기 · 자료 없음 안내")
 		quit(0)
 	else:
 		for message in failures:
