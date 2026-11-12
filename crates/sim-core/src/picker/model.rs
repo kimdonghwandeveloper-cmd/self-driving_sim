@@ -28,6 +28,8 @@ pub const LINE_GAPS_M: [f64; 3] = [200.0, 400.0, 800.0];
 pub const LINE_MAX_ANGLE_DEG: f64 = 45.0;
 /// 경유점은 교차로 노드에서 이만큼 떨어진 곳에만 둔다(m, 교차로 바로 너머 다른 팔에 붙는 것 방지). 임시값.
 pub const LINE_JUNCTION_CLEAR_M: f64 = 20.0;
+/// 그린 선의 출발·도착은 교차로 노드에서 이만큼 떨어진 점으로 한다(m, 코스는 교차로에서 시작·끝날 수 없음). 임시값.
+pub const LINE_END_CLEAR_M: f64 = 5.0;
 /// 그린 선을 따른 경로가 (선 길이 × 이 배수 + 200 m)보다 길면 돌아간 것으로 보고 경유점을 줄여 다시 찾는다. 임시값.
 pub const LINE_DETOUR_FACTOR: f64 = 1.5;
 
@@ -350,7 +352,21 @@ impl PickerModel {
             .collect();
         let skipped = snapped.iter().filter(|p| p.is_none()).count();
         let found: Vec<usize> = (0..line.len()).filter(|&i| snapped[i].is_some()).collect();
-        let (Some(&first), Some(&last)) = (found.first(), found.last()) else {
+        // 코스는 교차로에서 시작·끝날 수 없으므로 출발·도착은 교차로에서 [`LINE_END_CLEAR_M`] 떨어진 처음·마지막 점으로 한다
+        // (그런 점이 없으면 처음·마지막 점).
+        let away_from_junctions = |i: &&usize| {
+            let p = snapped[**i].expect("found");
+            junctions
+                .iter()
+                .all(|&j| region::distance_m(j, p) >= LINE_END_CLEAR_M)
+        };
+        let first = found.iter().find(away_from_junctions).or(found.first());
+        let last = found
+            .iter()
+            .rev()
+            .find(away_from_junctions)
+            .or(found.last());
+        let (Some(&first), Some(&last)) = (first, last) else {
             return Err(format!(
                 "the drawn line does not follow a road (no point within {max_m} m of a road in the drawn direction)"
             ));
@@ -359,7 +375,7 @@ impl PickerModel {
             snapped[first].expect("found"),
             snapped[last].expect("found"),
         );
-        if first == last || region::distance_m(start, end) < LINE_MIN_GAP_M {
+        if first >= last || region::distance_m(start, end) < LINE_MIN_GAP_M {
             return Err(format!(
                 "the drawn line does not follow a road (only 1 point(s) within {max_m} m of a road in the drawn direction)"
             ));
