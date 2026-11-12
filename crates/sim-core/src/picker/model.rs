@@ -11,15 +11,25 @@ use glam::Vec2;
 
 use super::{region, tiles};
 use crate::world::map::LatLon;
-use crate::world::osm_graph::{OsmGraphWay, TurnRestriction};
+use crate::world::osm_graph::{OsmGraphWay, TurnRestriction, node_degrees};
 use crate::world::places::{self, Place};
 use crate::world::road_snapshot::Connectivity;
+use crate::world::route::Travel;
 use crate::world::route_plan::{self, PlannedRoute, RoadGraphConfig, WidthSource};
 
 /// 이보다 좁은 폭이면 경고한다(m). 차체 폭 1.8 m + 양옆 0.6 m(개발 코스 좁은 통로와 같은 기준, 임시값).
 pub const NARROW_WIDTH_M: f32 = 3.0;
 /// 그린 선을 도로에 붙인 점끼리 이보다 가까우면 합친다(m, 같은 곳에 붙은 두 점이 경로를 끊지 않게). 임시값.
 pub const LINE_MIN_GAP_M: f64 = 20.0;
+/// 그린 선에서 경유점을 두는 간격(m, 선을 따라 잼). 처음 값으로 안 되면(경로 실패·크게 돌아감) 다음 값으로 넓히고, 끝까지 안 되면
+/// 출발·도착만으로 찾는다. 경유점이 촘촘하면 손떨림 때문에 경로가 되돌아가거나 블록을 돈다(2026-11-12 측정). 임시값.
+pub const LINE_GAPS_M: [f64; 3] = [200.0, 400.0, 800.0];
+/// 그린 선 방향과 도로 방향이 이보다 다르면 그 도로에 붙이지 않는다(deg, 옆길·건너편 일방통행 차로 방지). 임시값.
+pub const LINE_MAX_ANGLE_DEG: f64 = 45.0;
+/// 경유점은 교차로 노드에서 이만큼 떨어진 곳에만 둔다(m, 교차로 바로 너머 다른 팔에 붙는 것 방지). 임시값.
+pub const LINE_JUNCTION_CLEAR_M: f64 = 20.0;
+/// 그린 선을 따른 경로가 (선 길이 × 이 배수 + 200 m)보다 길면 돌아간 것으로 보고 경유점을 줄여 다시 찾는다. 임시값.
+pub const LINE_DETOUR_FACTOR: f64 = 1.5;
 
 /// 출발 또는 도착(PLAN 4-11 2단계).
 #[derive(Debug, Clone, PartialEq)]
@@ -35,36 +45,75 @@ pub enum Endpoint {
     },
 }
 
+/// 지구 평균 반지름(m).
+const EARTH_RADIUS_M: f64 = 6_371_008.8;
+
+/// `origin` 기준 등장방형 근사 지역 좌표 [동쪽 m, 북쪽 m].
+fn local_m(origin: LatLon, point: LatLon) -> [f64; 2] {
+    [
+        (point.lon - origin.lon).to_radians() * EARTH_RADIUS_M * origin.lat.to_radians().cos(),
+        (point.lat - origin.lat).to_radians() * EARTH_RADIUS_M,
+    ]
+}
+
 /// `point`에서 `max_m` 안의 가장 가까운 도로 선분 위 점. 없으면 `None`. 거리는 `point` 기준 등장방형 근사(m)다.
-fn nearest_on_roads(roads: &[&OsmGraphWay], point: LatLon, max_m: f64) -> Option<LatLon> {
-    const RADIUS: f64 = 6_371_008.8;
+///
+/// `heading`(선의 진행 방향 단위 벡터 [동, 북])을 주면 그 방향과 [`LINE_MAX_ANGLE_DEG`] 안으로 달리는 선분만 쓴다. 양방향 도로는
+/// 앞뒤 어느 쪽이든, 일방통행은 통행 방향만 맞으면 된다.
+fn nearest_on_roads(
+    roads: &[(&OsmGraphWay, Travel)],
+    point: LatLon,
+    heading: Option<[f64; 2]>,
+    max_m: f64,
+) -> Option<LatLon> {
     let cos = point.lat.to_radians().cos();
-    let local = |p: LatLon| {
-        [
-            (p.lon - point.lon).to_radians() * RADIUS * cos,
-            (p.lat - point.lat).to_radians() * RADIUS,
-        ]
-    };
+    let local = |p: LatLon| local_m(point, p);
+    let min_cos = LINE_MAX_ANGLE_DEG.to_radians().cos();
     let mut best: Option<(f64, [f64; 2])> = None;
-    for pair in roads.iter().flat_map(|way| way.nodes.windows(2)) {
-        let (a, b) = (local(pair[0].pos), local(pair[1].pos));
-        let d = [b[0] - a[0], b[1] - a[1]];
-        let length2 = d[0] * d[0] + d[1] * d[1];
-        let t = if length2 == 0.0 {
-            0.0
-        } else {
-            (-(a[0] * d[0] + a[1] * d[1]) / length2).clamp(0.0, 1.0)
-        };
-        let q = [a[0] + d[0] * t, a[1] + d[1] * t];
-        let distance = q[0].hypot(q[1]);
-        if distance <= max_m && best.is_none_or(|(known, _)| distance < known) {
-            best = Some((distance, q));
+    for (way, travel) in roads {
+        for pair in way.nodes.windows(2) {
+            let (a, b) = (local(pair[0].pos), local(pair[1].pos));
+            let d = [b[0] - a[0], b[1] - a[1]];
+            let length = d[0].hypot(d[1]);
+            if let Some(h) = heading {
+                if length == 0.0 {
+                    continue;
+                }
+                let along = (d[0] * h[0] + d[1] * h[1]) / length;
+                let fits = match travel {
+                    Travel::Forward => along >= min_cos,
+                    Travel::Backward => -along >= min_cos,
+                    Travel::Both => along.abs() >= min_cos,
+                    Travel::Closed => false,
+                };
+                if !fits {
+                    continue;
+                }
+            }
+            if let Some(q) = closest_on_segment(a, d) {
+                let distance = q[0].hypot(q[1]);
+                if distance <= max_m && best.is_none_or(|(known, _)| distance < known) {
+                    best = Some((distance, q));
+                }
+            }
         }
     }
     best.map(|(_, [east, north])| LatLon {
-        lat: point.lat + (north / RADIUS).to_degrees(),
-        lon: point.lon + (east / (RADIUS * cos)).to_degrees(),
+        lat: point.lat + (north / EARTH_RADIUS_M).to_degrees(),
+        lon: point.lon + (east / (EARTH_RADIUS_M * cos)).to_degrees(),
     })
+}
+
+/// 원점에서 가장 가까운 선분(시작 `a`, 방향·길이 `d`) 위 점. 값이 유한하지 않으면 `None`.
+fn closest_on_segment(a: [f64; 2], d: [f64; 2]) -> Option<[f64; 2]> {
+    let length2 = d[0] * d[0] + d[1] * d[1];
+    let t = if length2 == 0.0 {
+        0.0
+    } else {
+        (-(a[0] * d[0] + a[1] * d[1]) / length2).clamp(0.0, 1.0)
+    };
+    let q = [a[0] + d[0] * t, a[1] + d[1] * t];
+    (q[0].is_finite() && q[1].is_finite()).then_some(q)
 }
 
 /// 화면에 그릴 도로 선분.
@@ -254,9 +303,16 @@ impl PickerModel {
         Ok(())
     }
 
-    /// 그린 선을 경로 점으로 바꾸고 경로를 다시 계산한다(PLAN 4-11 2단계 선으로 그리기). 선의 점(이미 일정 간격으로 나눈 것)을
-    /// 차례로 `max_m` 안의 가장 가까운 탐색 가능 도로 위 점에 붙인다. 붙일 도로가 없는 점은 건너뛰고, 앞 점과 [`LINE_MIN_GAP_M`]
-    /// 안이면 합친다(끝 점은 남긴다). 건너뛴 점 수를 돌려준다. 붙은 점이 2개 미만이면 오류이고 기존 점·경로는 그대로다.
+    /// 그린 선을 경로 점으로 바꾸고 경로를 다시 계산한다(PLAN 4-11 2단계 선으로 그리기). `line`은 이미 일정 간격으로 나눈 점이다.
+    ///
+    /// 1. 점마다 선 진행 방향과 [`LINE_MAX_ANGLE_DEG`] 안으로 달리는(일방통행은 통행 방향이 맞는) `max_m` 안의 가장 가까운 도로
+    ///    위 점을 찾는다. 없는 점은 건너뛰고 그 수를 돌려준다.
+    /// 2. 처음·끝 점을 출발·도착으로, 그 사이는 선을 따라 [`LINE_GAPS_M`]의 첫 간격마다(교차로에서 [`LINE_JUNCTION_CLEAR_M`] 떨어진 점만)
+    ///    경유점으로 두고 계산한다.
+    /// 3. 경로가 안 되거나 (선 길이 × [`LINE_DETOUR_FACTOR`] + 200 m)보다 길면 간격을 넓혀 다시, 끝까지 안 되면 출발·도착만으로
+    ///    찾는다. 모두 안 되면 처음 계산된(돌아간) 경로를, 그것도 없으면 마지막 실패를 남긴다.
+    ///
+    /// 붙은 점이 2개 미만이면 오류이고 기존 점·경로는 그대로다.
     pub fn set_line(&mut self, line: &[LatLon], max_m: f64) -> Result<usize, String> {
         let allowed: std::collections::BTreeSet<&str> = self
             .config
@@ -264,37 +320,95 @@ impl PickerModel {
             .iter()
             .map(String::as_str)
             .collect();
-        let roads: Vec<&OsmGraphWay> = self
+        let nav_rules = self.config.nav_rules;
+        let roads: Vec<(&OsmGraphWay, Travel)> = self
             .ways
             .iter()
-            .filter(|way| route_plan::searchable(way, &allowed, self.config.nav_rules))
+            .filter(|way| route_plan::searchable(way, &allowed, nav_rules))
+            .map(|way| (way, route_plan::way_travel(way, nav_rules)))
             .collect();
-        let mut kept: Vec<LatLon> = Vec::new();
-        let mut skipped = 0;
-        for (index, &point) in line.iter().enumerate() {
-            let Some(on_road) = nearest_on_roads(&roads, point, max_m) else {
-                skipped += 1;
-                continue;
-            };
-            let is_last = index + 1 == line.len();
-            match kept.last() {
-                Some(&previous) if region::distance_m(previous, on_road) < LINE_MIN_GAP_M => {
-                    if is_last && kept.len() > 1 {
-                        *kept.last_mut().expect("not empty") = on_road;
-                    }
-                }
-                _ => kept.push(on_road),
-            }
-        }
-        if kept.len() < 2 {
+        let positions: std::collections::BTreeMap<u64, LatLon> = self
+            .ways
+            .iter()
+            .flat_map(|way| way.nodes.iter().map(|node| (node.id, node.pos)))
+            .collect();
+        let junctions: Vec<LatLon> = node_degrees(&self.ways, &allowed)
+            .into_iter()
+            .filter(|&(_, degree)| degree >= 3)
+            .filter_map(|(id, _)| positions.get(&id).copied())
+            .collect();
+        let snapped: Vec<Option<LatLon>> = (0..line.len())
+            .map(|i| {
+                let (from, to) = (line[i.saturating_sub(1)], line[(i + 1).min(line.len() - 1)]);
+                let d = local_m(line[i], to);
+                let back = local_m(line[i], from);
+                let h = [d[0] - back[0], d[1] - back[1]];
+                let length = h[0].hypot(h[1]);
+                let heading = (length > 0.0).then(|| [h[0] / length, h[1] / length]);
+                nearest_on_roads(&roads, line[i], heading, max_m)
+            })
+            .collect();
+        let skipped = snapped.iter().filter(|p| p.is_none()).count();
+        let found: Vec<usize> = (0..line.len()).filter(|&i| snapped[i].is_some()).collect();
+        let (Some(&first), Some(&last)) = (found.first(), found.last()) else {
             return Err(format!(
-                "the drawn line does not follow a road (only {} point(s) within {max_m} m of a road)",
-                kept.len()
+                "the drawn line does not follow a road (no point within {max_m} m of a road in the drawn direction)"
+            ));
+        };
+        let (start, end) = (
+            snapped[first].expect("found"),
+            snapped[last].expect("found"),
+        );
+        if first == last || region::distance_m(start, end) < LINE_MIN_GAP_M {
+            return Err(format!(
+                "the drawn line does not follow a road (only 1 point(s) within {max_m} m of a road in the drawn direction)"
             ));
         }
-        self.points = kept.iter().map(|p| [p.lat, p.lon]).collect();
-        self.labels = vec![String::new(); kept.len()];
-        self.recompute();
+        let line_length: f64 = line
+            .windows(2)
+            .map(|pair| region::distance_m(pair[0], pair[1]))
+            .sum();
+        let clear_of_junctions = |p: LatLon| {
+            junctions
+                .iter()
+                .all(|&j| region::distance_m(j, p) >= LINE_JUNCTION_CLEAR_M)
+        };
+        let mut fallback: Option<Vec<LatLon>> = None;
+        for gap in LINE_GAPS_M.into_iter().chain([f64::INFINITY]) {
+            let mut kept = vec![start];
+            let mut since = 0.0;
+            for i in first + 1..last {
+                since += region::distance_m(line[i - 1], line[i]);
+                let Some(p) = snapped[i] else {
+                    continue;
+                };
+                if since >= gap
+                    && clear_of_junctions(p)
+                    && region::distance_m(*kept.last().expect("start"), p) >= LINE_MIN_GAP_M
+                    && region::distance_m(p, end) >= LINE_MIN_GAP_M
+                {
+                    kept.push(p);
+                    since = 0.0;
+                }
+            }
+            kept.push(end);
+            self.points = kept.iter().map(|p| [p.lat, p.lon]).collect();
+            self.labels = vec![String::new(); kept.len()];
+            self.recompute();
+            if let Some(Ok(planned)) = &self.planned {
+                if planned.length_m <= line_length * LINE_DETOUR_FACTOR + 200.0 {
+                    return Ok(skipped);
+                }
+                if fallback.is_none() {
+                    fallback = Some(kept);
+                }
+            }
+        }
+        if let Some(kept) = fallback {
+            self.points = kept.iter().map(|p| [p.lat, p.lon]).collect();
+            self.labels = vec![String::new(); kept.len()];
+            self.recompute();
+        }
         Ok(skipped)
     }
 
@@ -875,7 +989,8 @@ mod tests {
         line.insert(middle, off);
         model.clear();
         let skipped = model.set_line(&line, region::LINE_SNAP_M).unwrap();
-        assert_eq!(skipped, 1);
+        // 먼 점과, 그 점 때문에 진행 방향이 틀어진 앞뒤 점이 건너뛰어진다.
+        assert!((1..=3).contains(&skipped), "{skipped}");
         let Some(Ok(drawn)) = &model.planned else {
             panic!("{:?}", model.planned);
         };
@@ -886,6 +1001,30 @@ mod tests {
             planned.length_m
         );
         assert!(model.points.len() > 2);
+        // 손떨림처럼 좌우로 8 m 흔들린 선도(예전 방식은 5 m에서 되돌아감·고리로 실패) 같은 길로 경로가 된다.
+        let samples = region::resample_line(&planned.path, region::LINE_STEP_M);
+        let shaky: Vec<LatLon> = samples
+            .iter()
+            .enumerate()
+            .map(|(i, p)| {
+                let north = 8.0 * ((i as f64) * 1.3).sin();
+                LatLon {
+                    lat: p.lat + (north / EARTH_RADIUS_M).to_degrees(),
+                    lon: p.lon,
+                }
+            })
+            .collect();
+        model.clear();
+        model.set_line(&shaky, region::LINE_SNAP_M).unwrap();
+        let Some(Ok(wobbly)) = &model.planned else {
+            panic!("{:?}", model.planned);
+        };
+        assert!(
+            (wobbly.length_m - planned.length_m).abs() < planned.length_m * 0.1,
+            "{} vs {}",
+            wobbly.length_m,
+            planned.length_m
+        );
         let away: Vec<LatLon> = line
             .iter()
             .map(|p| LatLon {
