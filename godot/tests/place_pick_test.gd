@@ -8,8 +8,8 @@ extends SceneTree
 
 const Map = preload("res://presentation/map_screen.gd")
 ## 저장소에 들어 있는 여수 노드 ID 스냅샷과 그 옆 합성 장소 자료.
-const SNAPSHOT := "assets/maps/yeosu-expo/graph-2026-11-06.osm.json"
-const PLACES := "assets/maps/yeosu-expo/places-synthetic.osm.json"
+const SNAPSHOT := "testdata/yeosu-expo/graph-2026-11-06.osm.json"
+const PLACES := "testdata/yeosu-expo/places-synthetic.osm.json"
 
 var failures := PackedStringArray()
 

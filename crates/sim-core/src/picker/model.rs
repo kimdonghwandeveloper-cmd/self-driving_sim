@@ -441,7 +441,7 @@ mod tests {
     /// 저장소의 실제 스냅샷 경로.
     fn snapshot_path() -> PathBuf {
         Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."))
-            .join("assets/maps/yeosu-expo/graph-2026-11-06.osm.json")
+            .join("testdata/yeosu-expo/graph-2026-11-06.osm.json")
     }
 
     /// 실제 스냅샷으로 상태를 만든다.
@@ -504,7 +504,7 @@ mod tests {
         let example: route_plan::RouteFile = toml::from_str(
             &std::fs::read_to_string(
                 Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."))
-                    .join("assets/maps/yeosu-expo/route-junctions.toml"),
+                    .join("testdata/yeosu-expo/route-junctions.toml"),
             )
             .unwrap(),
         )
@@ -620,7 +620,7 @@ mod tests {
                 .any(|l| l == "Places: not loaded")
         );
         let path = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."))
-            .join("assets/maps/yeosu-expo/places-synthetic.osm.json");
+            .join("testdata/yeosu-expo/places-synthetic.osm.json");
         model.set_places(places::load_places(&path).unwrap());
         let found = places::search(&model.places, "도서관");
         assert_eq!(found.len(), 1);
@@ -664,7 +664,7 @@ mod tests {
         let mut model = yeosu();
         let gym = {
             let path = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."))
-                .join("assets/maps/yeosu-expo/places-synthetic.osm.json");
+                .join("testdata/yeosu-expo/places-synthetic.osm.json");
             let list = places::load_places(&path).unwrap();
             let index = places::search(&list, "체육관")[0];
             list[index].center

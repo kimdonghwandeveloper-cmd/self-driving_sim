@@ -998,7 +998,7 @@ mod tests {
     /// 저장소의 실제 스냅샷을 읽는다.
     fn real_snapshot() -> Vec<OsmGraphWay> {
         let path = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."))
-            .join("assets/maps/yeosu-expo/graph-2026-11-06.osm.json");
+            .join("testdata/yeosu-expo/graph-2026-11-06.osm.json");
         parse_overpass_graph(&std::fs::read_to_string(path).unwrap()).unwrap()
     }
 
@@ -1242,7 +1242,7 @@ mod tests {
     #[test]
     fn committed_route_file_is_reproducible_and_drivable() {
         let dir =
-            Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../..")).join("assets/maps/yeosu-expo");
+            Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../..")).join("testdata/yeosu-expo");
         let text = std::fs::read_to_string(dir.join("route-junctions.toml")).unwrap();
         let file: RouteFile = toml::from_str(&text).unwrap();
         let ways = real_snapshot();
@@ -1344,7 +1344,7 @@ mod tests {
     #[test]
     fn snapshot_without_node_ids_is_rejected() {
         let dir =
-            Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../..")).join("assets/maps/yeosu-expo");
+            Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../..")).join("testdata/yeosu-expo");
         let text = std::fs::read_to_string(dir.join("route-junctions.toml")).unwrap();
         let mut file: RouteFile = toml::from_str(&text).unwrap();
         file.snapshot = "survey-2026-11-06.osm.json".to_owned();

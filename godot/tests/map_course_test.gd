@@ -7,7 +7,7 @@ extends SceneTree
 const Drive = preload("res://presentation/drive_screen.gd")
 const CourseMesh = preload("res://presentation/course_mesh.gd")
 ## 저장소에 들어 있는 여수 교차로 경로 코스(Bevy `--course map:...`과 같은 파일).
-const ROUTE := "map:assets/maps/yeosu-expo/route-junctions.toml"
+const ROUTE := "map:testdata/yeosu-expo/route-junctions.toml"
 ## 차량을 몰아 볼 틱 수(64 Hz로 4초).
 const DRIVE_TICKS := 256
 

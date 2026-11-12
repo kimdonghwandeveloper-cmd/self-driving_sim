@@ -6,7 +6,7 @@
 extends SceneTree
 
 ## 저장소에 들어 있는 여수 노드 ID 스냅샷.
-const SNAPSHOT := "assets/maps/yeosu-expo/graph-2026-11-06.osm.json"
+const SNAPSHOT := "testdata/yeosu-expo/graph-2026-11-06.osm.json"
 
 var failures := PackedStringArray()
 ## 이번 실행에서만 쓰는 저장 이름(같은 이름 파일이 남아 있어도 겹치지 않게 프로세스 번호를 붙인다).

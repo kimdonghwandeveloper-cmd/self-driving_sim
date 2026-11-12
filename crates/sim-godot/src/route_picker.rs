@@ -1,10 +1,11 @@
 //! 경로 선택 `SimRoutePicker`(Godot 인터페이스 계약 v1 7-2).
 //!
-//! 지역 받기(4-4 `FetchJob`)·스냅샷 읽기·점 편집·경로 계산·저장은 Bevy 판과 같은 `sim_core` 코드를 쓴다.
-//! 경로는 모두 저장소 루트 기준이다(`cache/maps`, `cache/places`, `cache/routes`, `config/road_graph.toml`).
+//! 스냅샷 읽기·점 편집·경로 계산·저장은 `sim_core` 코드를 쓴다. 경로는 모두 저장소 루트 기준이다
+//! (`data/korea`, `cache/regions`, `cache/routes`, `config/road_graph.toml`).
 //!
-//! 건물·장소(PLAN 4-9): "건물·장소 받기"로 열린 지역의 장소 자료를 받고(도로와 같은 받기 규칙, 동시 1개),
-//! 지역을 열 때 캐시에 장소 자료가 있으면 함께 연다. 건물 클릭·이름 검색으로 고른 장소의 진입 지점을 점으로 더한다.
+//! 지역 열기(PLAN 4-11): 네트워크로 받지 않고 내장 전국 자료([`KoreaData`])에서 가운데 1.5 km 지역의 도로·건물·장소를
+//! 바로 꺼낸다(1 s 미만이라 같은 프레임에서 끝낸다). 도로는 지역 스냅샷 파일로 써서 경로 파일이 가리키게 한다.
+//! 건물 클릭·이름 검색으로 고른 장소의 진입 지점을 점으로 더한다(PLAN 4-9).
 //!
 //! 전국 장소 검색(PLAN 4-10): Nominatim에 묻는 검색은 백그라운드에서 하나씩 하고(`cache/geocode`에 저장),
 //! 결과는 `poll()`의 `search_results` 이벤트로 돌려준다.
@@ -15,13 +16,12 @@ use godot::prelude::*;
 use sim_core::picker::geocode::{GEOCODE_CACHE_DIR, GeocodeHit, GeocodeJob, UreqGet};
 use sim_core::picker::model::PickerModel;
 use sim_core::picker::region::{
-    self, ROUTE_DIR, cached_regions, load_model, region_to_load, snapshot_graph_path,
-    valid_route_name,
+    self, ROUTE_DIR, bbox_around, load_model, snapshot_graph_path, valid_route_name,
 };
 use sim_core::picker::tiles;
-use sim_core::world::map::LatLon;
-use sim_core::world::map_fetch::{self, Bbox, FetchJob, FetchPolicy, FetchSettings, UreqTransport};
-use sim_core::world::places::{self, PLACES, PLACES_CACHE_DIR, PLACES_FILE};
+use sim_core::world::korea_data::{KOREA_DATA_DIR, KoreaData, REGION_CACHE_DIR};
+use sim_core::world::map_fetch::Bbox;
+use sim_core::world::places;
 use sim_core::world::route_plan::ROAD_GRAPH_CONFIG_PATH;
 
 use crate::paths::{repo_path, resolve_user_path};
@@ -48,27 +48,21 @@ fn event(kind: &str, message: &str, request_id: i64) -> VarDictionary {
     vdict! { "type" => kind, "message" => message, "request_id" => request_id }
 }
 
-/// 받는 중인 지역 요청.
-struct Loading {
-    job: FetchJob,
-    bbox: Bbox,
-    request_id: i64,
-}
-
 /// 경로 선택 상태. 화면(Godot)은 표시·입력만 하고 계산은 여기서 한다.
 #[derive(GodotClass)]
 #[class(init, base = RefCounted)]
 pub struct SimRoutePicker {
-    /// `false`면 캐시만 쓰고 캐시에 없으면 `failed` 이벤트를 보낸다. 헤드리스 시험은 `false`.
+    /// `false`면 전국 장소 검색이 저장한 결과만 쓴다. 헤드리스 시험은 `false`. 지역 열기는 네트워크를 쓰지 않는다.
     #[var]
     #[init(val = true)]
     network: bool,
+    /// 전국 자료 폴더(저장소 루트 기준). 비어 있으면 [`KOREA_DATA_DIR`]. 시험이 작은 자료를 가리킬 때 바꾼다.
+    data_dir: String,
+    /// 열어 둔 전국 자료(처음 지역을 열 때 연다).
+    korea: Option<KoreaData>,
     model: Option<PickerModel>,
-    /// 지금 열린 지역 범위(지역 받기로 연 경우).
+    /// 지금 열린 지역 범위(전국 자료에서 연 경우).
     loaded: Option<Bbox>,
-    loading: Option<Loading>,
-    /// 받는 중인 장소 자료 요청.
-    places_loading: Option<Loading>,
     /// 진행 중인 전국 검색(작업, 요청 번호).
     searching: Option<(GeocodeJob, i64)>,
     /// 마지막 전국 검색 결과.
@@ -90,23 +84,40 @@ impl SimRoutePicker {
         match self.open_model(&path) {
             Ok(()) => {
                 self.loaded = None;
-                self.open_cached_places();
                 result(true, "")
             }
             Err(error) => result(false, &error),
         }
     }
 
-    /// 디스크 캐시에 있는 지역 범위(지도 좌표).
+    /// 전국 자료 폴더를 바꾼다(저장소 루트 기준, 빈 문자열이면 기본 `data/korea`). 열어 둔 자료는 닫고 다음에 다시 연다.
     #[func]
-    fn cached_regions(&self) -> Array<Rect2> {
-        cached_regions(&repo_path(map_fetch::CACHE_DIR))
-            .iter()
-            .map(bbox_rect)
-            .collect()
+    fn use_data_dir(&mut self, dir: GString) {
+        self.data_dir = dir.to_string();
+        self.korea = None;
     }
 
-    /// 지금 열린 지역 범위. 지역 받기로 열지 않았으면 스냅샷 도로 범위, 아무것도 없으면 크기 0.
+    /// 전국 자료 상태 `{ok, error, data_time}`. 없거나 형식이 다르면 `ok = false`와 만드는 방법 안내(한국어).
+    /// `data_time`은 원본 PBF 복제 시각(유닉스 초, 없으면 빈 문자열).
+    #[func]
+    fn data_status(&mut self) -> VarDictionary {
+        match self.korea_data() {
+            Ok(data) => {
+                let time = data
+                    .manifest
+                    .source
+                    .replication_timestamp
+                    .map_or_else(String::new, |seconds| seconds.to_string());
+                vdict! { "ok" => true, "error" => "", "data_time" => time.as_str() }
+            }
+            Err(error) => {
+                let error = crate::korean::region_error(&error);
+                vdict! { "ok" => false, "error" => error.as_str(), "data_time" => "" }
+            }
+        }
+    }
+
+    /// 지금 열린 지역 범위. 전국 자료에서 열지 않았으면 스냅샷 도로 범위, 아무것도 없으면 크기 0.
     #[func]
     fn loaded_region(&self) -> Rect2 {
         if let Some(bbox) = &self.loaded {
@@ -137,104 +148,46 @@ impl SimRoutePicker {
         PackedFloat64Array::from(&[point.lat, point.lon])
     }
 
-    /// 가운데 1.5 × 1.5 km 지역 받기를 시작한다(이미 받은 범위면 캐시만). 받는 중이면 거부한다.
+    /// `[lat, lon]`을 지도 좌표로 바꾼다. 형식이 맞지 않으면 원점.
     #[func]
-    fn request_region(&mut self, center_latlon: PackedFloat64Array) -> VarDictionary {
-        let failure =
-            |error: &str| vdict! { "ok" => false, "error" => error, "request_id" => 0_i64 };
-        if self.loading.is_some() {
-            return failure("already loading");
-        }
-        let [lat, lon] = center_latlon.as_slice() else {
-            return failure("center_latlon must be [lat, lon]");
+    fn latlon_to_view(&self, latlon: PackedFloat64Array) -> Vector2 {
+        let [lat, lon] = latlon.as_slice() else {
+            return Vector2::ZERO;
         };
-        let center = LatLon {
+        let view = tiles::to_view(sim_core::world::map::LatLon {
             lat: *lat,
             lon: *lon,
-        };
-        let cache_root = repo_path(map_fetch::CACHE_DIR);
-        let (bbox, mut policy) = match region_to_load(center, &cached_regions(&cache_root)) {
-            Ok(found) => found,
-            Err(error) => return failure(&error),
-        };
-        if !self.network {
-            policy = FetchPolicy::CacheOnly;
-        }
-        match FetchJob::start(cache_root, bbox, policy, FetchSettings::default()) {
-            Ok(job) => {
-                self.next_request += 1;
-                let request_id = self.next_request;
-                self.message = match policy {
-                    FetchPolicy::CacheOnly => "이 지역의 저장된 도로를 여는 중...".to_owned(),
-                    FetchPolicy::Refresh => "Overpass에서 도로를 받는 중...".to_owned(),
-                };
-                self.events
-                    .push(event("progress", &self.message, request_id));
-                self.loading = Some(Loading {
-                    job,
-                    bbox,
-                    request_id,
-                });
-                vdict! { "ok" => true, "error" => "", "request_id" => request_id }
-            }
-            Err(error) => failure(&error),
-        }
+        });
+        Vector2::new(view.x, view.y)
     }
 
-    /// 받는 중인 요청(지역·장소)을 취소한다. 그 결과는 버린다(이미 보낸 네트워크 요청은 끝까지 간다).
+    /// 가운데 `[lat, lon]` 주변 1.5 × 1.5 km 지역의 도로·건물·장소를 전국 자료에서 연다 `{ok, error}`. 바로 끝나며
+    /// 점·경로는 비워진다. 실패하면 이전 지역을 그대로 둔다.
     #[func]
-    fn cancel_region(&mut self) {
-        for loading in [self.loading.take(), self.places_loading.take()]
-            .into_iter()
-            .flatten()
-        {
-            self.message = "받기를 취소했습니다".to_owned();
-            self.events
-                .push(event("failed", &self.message, loading.request_id));
-        }
-    }
-
-    /// 열린 지역의 건물·장소 자료 받기를 시작한다(네트워크를 끄면 캐시만). 지역이 없거나 받는 중이면 거부한다.
-    #[func]
-    fn request_places(&mut self) -> VarDictionary {
-        let failure =
-            |error: &str| vdict! { "ok" => false, "error" => error, "request_id" => 0_i64 };
-        if self.loading.is_some() || self.places_loading.is_some() {
-            return failure("already loading");
-        }
-        let Some(bbox) = self.region_bbox() else {
-            return failure("open a region first");
+    fn open_region(&mut self, center_latlon: PackedFloat64Array) -> VarDictionary {
+        let [lat, lon] = center_latlon.as_slice() else {
+            return result(false, "center_latlon must be [lat, lon]");
         };
-        let policy = if self.network {
-            FetchPolicy::Refresh
-        } else {
-            FetchPolicy::CacheOnly
-        };
-        match FetchJob::start_layer_with(
-            &PLACES,
-            repo_path(PLACES_CACHE_DIR),
-            bbox,
-            policy,
-            FetchSettings::default(),
-            Box::new(UreqTransport),
-        ) {
-            Ok(job) => {
-                self.next_request += 1;
-                let request_id = self.next_request;
-                self.message = match policy {
-                    FetchPolicy::CacheOnly => "저장된 건물·장소를 여는 중...".to_owned(),
-                    FetchPolicy::Refresh => "Overpass에서 건물·장소를 받는 중...".to_owned(),
-                };
-                self.events
-                    .push(event("progress", &self.message, request_id));
-                self.places_loading = Some(Loading {
-                    job,
-                    bbox,
-                    request_id,
-                });
-                vdict! { "ok" => true, "error" => "", "request_id" => request_id }
+        let opened = bbox_around(*lat, *lon).and_then(|bbox| {
+            let cache_root = repo_path(REGION_CACHE_DIR);
+            let (path, list) = self.korea_data()?.region_snapshot(&bbox, &cache_root)?;
+            self.open_model(&path)?;
+            if let Some(model) = self.model.as_mut() {
+                model.set_places(list);
             }
-            Err(error) => failure(&error),
+            Ok(bbox)
+        });
+        match opened {
+            Ok(bbox) => {
+                self.loaded = Some(bbox);
+                self.message = "지역 도로·건물을 열었습니다".to_owned();
+                result(true, "")
+            }
+            Err(error) => {
+                let error = crate::korean::region_error(&error);
+                self.message = error.clone();
+                result(false, &error)
+            }
         }
     }
 
@@ -358,7 +311,7 @@ impl SimRoutePicker {
             return result(false, "검색 결과가 없습니다");
         };
         let Some(model) = self.model.as_mut() else {
-            return result(false, "먼저 지역 도로를 받으세요");
+            return result(false, "먼저 지역을 여세요");
         };
         match model.add_named_point(&hit.name, hit.at) {
             Ok(()) => result(true, ""),
@@ -369,61 +322,9 @@ impl SimRoutePicker {
         }
     }
 
-    /// 진행 이벤트를 꺼낸다. 매 프레임 부른다. 받기가 끝났으면 지역을 교체하고 점·경로를 비운다.
+    /// 진행 이벤트(전국 장소 검색 결과)를 꺼낸다. 매 프레임 부른다.
     #[func]
     fn poll(&mut self) -> Array<VarDictionary> {
-        if let Some(outcome) = self.loading.as_ref().and_then(|l| l.job.try_result()) {
-            let loading = self.loading.take().expect("checked above");
-            let opened = outcome.and_then(|obtained| {
-                self.open_model(&obtained.cached.dir.join(map_fetch::SNAPSHOT_FILE))
-                    .map(|()| obtained.warning)
-            });
-            match opened {
-                Ok(warning) => {
-                    self.loaded = Some(loading.bbox);
-                    self.open_cached_places();
-                    self.message = warning.map_or_else(
-                        || "지역 도로를 열었습니다".to_owned(),
-                        |w| format!("경고: {w}"),
-                    );
-                    self.events
-                        .push(event("region_loaded", &self.message, loading.request_id));
-                }
-                Err(error) => {
-                    self.message = format!("지역을 열 수 없습니다: {error}");
-                    self.events
-                        .push(event("failed", &self.message, loading.request_id));
-                }
-            }
-        }
-        if let Some(outcome) = self
-            .places_loading
-            .as_ref()
-            .and_then(|l| l.job.try_result())
-        {
-            let loading = self.places_loading.take().expect("checked above");
-            let opened = outcome.and_then(|obtained| {
-                let list = places::load_places(&obtained.cached.dir.join(PLACES_FILE))?;
-                let model = self.model.as_mut().ok_or("the region was closed")?;
-                model.set_places(list);
-                Ok(obtained.warning)
-            });
-            match opened {
-                Ok(warning) => {
-                    self.message = warning.map_or_else(
-                        || "건물·장소를 열었습니다".to_owned(),
-                        |w| format!("경고: {w}"),
-                    );
-                    self.events
-                        .push(event("places_loaded", &self.message, loading.request_id));
-                }
-                Err(error) => {
-                    self.message = format!("건물·장소를 열 수 없습니다: {error}");
-                    self.events
-                        .push(event("failed", &self.message, loading.request_id));
-                }
-            }
-        }
         if let Some(outcome) = self
             .searching
             .as_ref()
@@ -585,7 +486,7 @@ impl SimRoutePicker {
                 .filter(|line| !line.starts_with("Press Enter"))
                 .map(|line| crate::korean::picker_line(&line))
                 .collect(),
-            None => vec!["지역 없음: 지도를 확대하고 \"이 지역 도로 받기\"를 누르세요".to_owned()],
+            None => vec!["지역 없음: 지도를 확대하거나 원하는 곳을 클릭하세요".to_owned()],
         };
         if !self.message.is_empty() {
             lines.push(self.message.clone());
@@ -624,41 +525,17 @@ impl SimRoutePicker {
 }
 
 impl SimRoutePicker {
-    /// 장소 자료를 받을 범위: 지역 받기로 연 범위, 아니면 스냅샷 도로 범위. 받기 상한(2 km)을 넘거나 없으면 `None`.
-    fn region_bbox(&self) -> Option<Bbox> {
-        if let Some(bbox) = self.loaded {
-            return Some(bbox);
+    /// 전국 자료를 연다(처음 한 번). 폴더는 `data_dir`, 비어 있으면 [`KOREA_DATA_DIR`].
+    fn korea_data(&mut self) -> Result<&KoreaData, String> {
+        if self.korea.is_none() {
+            let dir = if self.data_dir.is_empty() {
+                repo_path(KOREA_DATA_DIR)
+            } else {
+                resolve_user_path(&self.data_dir)
+            };
+            self.korea = Some(KoreaData::open(&dir)?);
         }
-        let model = self.model.as_ref()?;
-        let (mut south, mut west, mut north, mut east) =
-            (90.0_f64, 180.0_f64, -90.0_f64, -180.0_f64);
-        for node in model.ways.iter().flat_map(|way| &way.nodes) {
-            south = south.min(node.pos.lat);
-            north = north.max(node.pos.lat);
-            west = west.min(node.pos.lon);
-            east = east.max(node.pos.lon);
-        }
-        let bbox = Bbox {
-            south,
-            west,
-            north,
-            east,
-        };
-        bbox.validate().ok().map(|()| bbox)
-    }
-
-    /// 열린 지역의 장소 자료가 캐시에 있으면 연다(네트워크 없음). 없거나 읽지 못하면 그대로 둔다.
-    fn open_cached_places(&mut self) {
-        let Some(bbox) = self.region_bbox() else {
-            return;
-        };
-        let root = repo_path(PLACES_CACHE_DIR);
-        if let Ok(Some(cached)) = map_fetch::load_layer_cached(&PLACES, &root, &bbox)
-            && let Ok(list) = places::load_places(&cached.dir.join(PLACES_FILE))
-            && let Some(model) = self.model.as_mut()
-        {
-            model.set_places(list);
-        }
+        Ok(self.korea.as_ref().expect("opened above"))
     }
 
     /// 스냅샷 파일로 모델을 만들어 교체한다. 점·경로는 비워진다.

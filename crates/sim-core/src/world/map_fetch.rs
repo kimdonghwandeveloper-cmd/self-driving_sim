@@ -826,7 +826,7 @@ mod tests {
     fn real_body() -> Vec<u8> {
         std::fs::read(
             Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."))
-                .join("assets/maps/yeosu-expo/graph-2026-11-06.osm.json"),
+                .join("testdata/yeosu-expo/graph-2026-11-06.osm.json"),
         )
         .unwrap()
     }

@@ -1,16 +1,15 @@
-//! 경로 선택의 지역 범위·캐시 목록·모델 열기·저장 이름 규칙(엔진 무관, Phase GD-2d).
+//! 경로 선택의 지역 범위·모델 열기·저장 이름 규칙(엔진 무관, Phase GD-2d).
 //!
 //! Godot `SimRoutePicker`가 쓴다. 경로는 호출하는 쪽이 정한다(Godot은 저장소 루트 기준 절대 경로).
 
 use std::path::{Path, PathBuf};
 
 use super::model::{NARROW_WIDTH_M, PickerModel};
-use crate::world::map::LatLon;
-use crate::world::map_fetch::{self, Bbox, FetchPolicy};
+use crate::world::map_fetch::{self, Bbox};
 use crate::world::road_snapshot;
 use crate::world::route_plan::{self, PlannedRoute, RoadGraphConfig, WidthSource};
 
-/// 위경도 입력·"이 지역 도로 받기"로 받을 범위의 반 변(m). 한 변 1.5 km(PLAN 코스 범위 상한과 같음, 2 km 받기 상한 안).
+/// 지역 열기(전국 자료, PLAN 4-11)의 범위 반 변(m). 한 변 1.5 km(PLAN 코스 범위 상한과 같음, 2 km 범위 상한 안).
 pub const FETCH_HALF_SIDE_M: f64 = 750.0;
 /// 경로 파일 저장 폴더(실행 폴더 기준, 저장소에서 제외되는 `cache/` 아래).
 pub const ROUTE_DIR: &str = "cache/routes";
@@ -63,49 +62,6 @@ pub fn load_model(
             .with_restrictions(snapshot.restrictions);
         (model, warning)
     })
-}
-
-/// 캐시 폴더에서 이미 받은 범위 목록을 읽는다(`bbox_<남>_<서>_<북>_<동>` 폴더 중 최신 세대가 있는 것).
-pub fn cached_regions(root: &Path) -> Vec<Bbox> {
-    let Ok(entries) = std::fs::read_dir(root) else {
-        return Vec::new();
-    };
-    let mut regions: Vec<Bbox> = entries
-        .flatten()
-        .filter(|entry| entry.path().join(map_fetch::LATEST_FILE).exists())
-        .filter_map(|entry| {
-            let name = entry.file_name().to_string_lossy().into_owned();
-            let values: Vec<f64> = name
-                .strip_prefix("bbox_")?
-                .split('_')
-                .map(|part| part.parse::<f64>().ok())
-                .collect::<Option<_>>()?;
-            let [south, west, north, east] = values[..] else {
-                return None;
-            };
-            let bbox = Bbox {
-                south,
-                west,
-                north,
-                east,
-            };
-            bbox.validate().ok().map(|()| bbox)
-        })
-        .collect();
-    regions.sort_by_key(Bbox::cache_name);
-    regions
-}
-
-/// "이 지역 도로 받기"의 범위와 정책: 화면 가운데가 이미 받은 범위 안이면 그 범위를 캐시만으로, 아니면 가운데
-/// 주변 1.5 km를 새로 받는다.
-pub fn region_to_load(center: LatLon, cached: &[Bbox]) -> Result<(Bbox, FetchPolicy), String> {
-    if let Some(bbox) = cached.iter().find(|bbox| {
-        (bbox.south..=bbox.north).contains(&center.lat)
-            && (bbox.west..=bbox.east).contains(&center.lon)
-    }) {
-        return Ok((*bbox, FetchPolicy::CacheOnly));
-    }
-    Ok((bbox_around(center.lat, center.lon)?, FetchPolicy::Refresh))
 }
 
 /// 지도 화면에 보일 대한민국 영역의 **임시 근사 경계** [위도, 경도](시계 방향, 닫는 점 중복 없음).
@@ -175,50 +131,15 @@ pub fn snapshot_graph_path(path: &Path) -> PathBuf {
 mod tests {
     use super::*;
 
-    /// 캐시 폴더 이름에서 받은 범위를 읽고, 가운데가 안이면 캐시만·밖이면 새로 받기를 고르는지 확인한다.
+    /// 지역 범위는 가운데 기준 한 변 1.5 km이고, 잘못된 좌표는 오류다.
     #[test]
-    fn cached_regions_are_read_from_folder_names() {
-        let root = std::env::temp_dir().join(format!("sds-cached-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
+    fn region_bbox_is_1_5_km_around_center() {
         let bbox = bbox_around(34.75, 127.75).unwrap();
-        let dir = root.join(bbox.cache_name());
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join(map_fetch::LATEST_FILE), "generation = \"x\"\n").unwrap();
-        std::fs::create_dir_all(root.join("bbox_1_2_3_4")).unwrap();
-        std::fs::create_dir_all(root.join("other")).unwrap();
-        let found = cached_regions(&root);
-        assert_eq!(found.len(), 1);
-        assert!(
-            (found[0].south - bbox.south).abs() < 1e-6 && (found[0].east - bbox.east).abs() < 1e-6
-        );
-        // 받은 범위 안의 가운데는 캐시만, 밖은 새로 받기(1.5 km).
-        let inside = LatLon {
-            lat: 34.75,
-            lon: 127.75,
-        };
-        assert!(matches!(
-            region_to_load(inside, &found),
-            Ok((_, FetchPolicy::CacheOnly))
-        ));
-        let outside = LatLon {
-            lat: 37.5665,
-            lon: 126.978,
-        };
-        assert!(matches!(
-            region_to_load(outside, &found),
-            Ok((_, FetchPolicy::Refresh))
-        ));
-        assert!(
-            region_to_load(
-                LatLon {
-                    lat: 45.0,
-                    lon: 140.0
-                },
-                &found
-            )
-            .is_err()
-        );
-        let _ = std::fs::remove_dir_all(&root);
+        let north_south_m = (bbox.north - bbox.south).to_radians() * 6_371_008.8;
+        assert!((north_south_m - 2.0 * FETCH_HALF_SIDE_M).abs() < 1.0);
+        assert!(((bbox.south + bbox.north) / 2.0 - 34.75).abs() < 1e-9);
+        assert!(bbox_around(f64::NAN, 127.0).is_err());
+        assert!(bbox_around(89.0, 127.0).is_err());
     }
 
     /// 점이 다각형 안에 있는지 짝홀 규칙으로 판정한다(시험용).

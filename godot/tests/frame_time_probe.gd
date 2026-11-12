@@ -2,14 +2,14 @@
 # 결과는 평균·95번째 백분위·최대 프레임 시간(ms)과 평균 FPS로 출력한다. 측정이므로 목표(60 FPS) 미달이어도 exit 0이다.
 # 실행(워크트리 최상위):
 #   godot --path godot --resolution 1280x720 --script res://tests/frame_time_probe.gd -- [--course=<코스>] [--seconds=<초>] [--capture=<png 경로>]
-# 기본 코스는 저장소의 여수 교차로 경로(map:assets/maps/yeosu-expo/route-junctions.toml), 기본 측정 시간은 20초.
+# 기본 코스는 저장소의 여수 교차로 경로(map:testdata/yeosu-expo/route-junctions.toml), 기본 측정 시간은 20초.
 extends SceneTree
 
 const Drive = preload("res://presentation/drive_screen.gd")
 ## 측정 전에 버리는 프레임 수(셰이더 컴파일·첫 그림자 등).
 const WARMUP_FRAMES := 120
 
-var course := "map:assets/maps/yeosu-expo/route-junctions.toml"
+var course := "map:testdata/yeosu-expo/route-junctions.toml"
 var seconds := 20.0
 var capture := ""
 var drive: Node3D
