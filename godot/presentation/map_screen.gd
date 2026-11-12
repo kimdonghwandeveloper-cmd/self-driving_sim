@@ -48,8 +48,9 @@ var drawn := PackedVector2Array()
 ## 손떨림 보정(사용자 요청 2026-11-12): 선 끝(펜)은 커서가 이 거리(화면 px)보다 멀어질 때만 그 차이만큼 커서 쪽으로 끌려온다
 ## (그림 앱의 줄 보정). 작은 떨림은 펜을 움직이지 못한다. 임시값.
 const DRAW_STABILIZE_PX := 12.0
-## 다 그린 선을 고르게 펴는 횟수(앞뒤 점과 1:2:1 평균, 처음·끝은 그대로). 임시값.
-const DRAW_SMOOTH_PASSES := 3
+## 다 그린 선을 고르게 펴는 횟수(앞뒤 점과 1:2:1 평균, 처음·끝은 그대로). 펜 점은 화면 4 px마다 생기므로 8번이면 앞뒤 약 30 px를
+## 고르게 편다(도로에 붙이는 40 m보다 작다). 임시값.
+const DRAW_SMOOTH_PASSES := 8
 ## 보정된 펜 위치와 마지막 커서 위치(지도 좌표).
 var pen := Vector2.ZERO
 var last_cursor := Vector2.ZERO
