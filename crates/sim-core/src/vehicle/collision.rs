@@ -5,7 +5,7 @@
 //! 검사 지점 사이 구간은 "차체 위 어느 점도 장애물까지 거리보다 많이 움직이지 않았는지"로 보수적으로
 //! 확인하고, 확인되지 않으면 구간을 더 나눈다. 회전 중 모서리가 검사 지점 사이에서만 스치는 경우도 잡는다.
 //! 다만 최소 검사 구간([`MIN_CERTIFY_SPAN_M`])에 따른 근사와 부동소수점 오차가 있어 절대적인 관통 방지 보장은 아니다.
-//! 미끄러지며 벽을 따라가는 처리는 하지 않는다(접촉하면 정지).
+//! 미끄러지며 벽을 따라가는 처리는 하지 않는다(접촉하면 정지). 막힌 자세의 접촉점·법선은 [`Contact`]로 구한다(2-7).
 //! 차체 크기와 후륜축 위치는 실차 치수를 확인하지 않은 **시뮬레이터 임시값**이다.
 
 use glam::Vec2;
@@ -89,6 +89,144 @@ impl GroundRect {
     pub fn overlaps(&self, other: &GroundRect, margin: f32) -> bool {
         self.penetration(other) + margin > 0.0
     }
+
+    /// 네 꼭짓점 (x, z)를 오른쪽 앞, 왼쪽 앞, 왼쪽 뒤, 오른쪽 뒤 순서로 반환한다.
+    fn vertices(&self) -> [Vec2; 4] {
+        let [right, forward] = self.axes();
+        let (side, ahead) = (right * self.half_size.x, forward * self.half_size.y);
+        [
+            self.center + side + ahead,
+            self.center - side + ahead,
+            self.center - side - ahead,
+            self.center + side - ahead,
+        ]
+    }
+
+    /// 이 직사각형(차체)이 `obstacle`과 맞닿은 곳의 접촉점·법선·종류를 구한다(2-7).
+    ///
+    /// 법선은 분리축 판정에서 가장 얕게 겹친 축이며([`Self::penetration`]과 같은 축), 장애물에서 차체 쪽을 향한다.
+    /// 그 축을 가진 직사각형의 면이 기준 면이고, 다른 직사각형에서 기준 면에 가장 가까운 꼭짓점(들)이 닿는 곳이다.
+    /// 가까운 꼭짓점이 둘이면 면끼리 맞닿은 것이고 접촉점은 두 면이 겹치는 구간의 가운데다.
+    /// 맞닿기 직전·직후 자세(겹침 깊이가 [`FEATURE_TOLERANCE_M`]보다 훨씬 작음)에서 쓰는 것을 전제로 한다.
+    pub fn contact_with(&self, obstacle: &GroundRect) -> Contact {
+        let offset = self.center - obstacle.center;
+        let (own, others) = (self.axes(), obstacle.axes());
+        // 가장 얕게 겹친 축과, 그 축이 장애물 것인지. 같은 깊이면 장애물 축을 먼저 고른다(면끼리일 때 기준 면을 장애물로).
+        let (axis, obstacle_face) = others
+            .into_iter()
+            .map(|axis| (axis, true))
+            .chain(own.into_iter().map(|axis| (axis, false)))
+            .map(|(axis, from_obstacle)| {
+                let overlap = self.projected_radius(own, axis)
+                    + obstacle.projected_radius(others, axis)
+                    - offset.dot(axis).abs();
+                (overlap, axis, from_obstacle)
+            })
+            .fold(
+                None,
+                |best: Option<(f32, Vec2, bool)>, candidate| match best {
+                    Some(best) if best.0 <= candidate.0 => Some(best),
+                    _ => Some(candidate),
+                },
+            )
+            .map(|(_, axis, from_obstacle)| (axis, from_obstacle))
+            .expect("four separating axes");
+        let normal = if offset.dot(axis) >= 0.0 { axis } else { -axis };
+        // 기준 면의 바깥 방향(다른 직사각형 쪽)과, 기준·대상 직사각형.
+        let (reference, incident, outward) = if obstacle_face {
+            (obstacle, self, normal)
+        } else {
+            (self, obstacle, -normal)
+        };
+        let tangent = outward.perp();
+        // 기준 면은 기준 직사각형에서 바깥 방향으로 가장 먼 꼭짓점들, 닿는 곳은 대상에서 기준 면 쪽으로 가장 먼 꼭짓점들이다.
+        let face: Vec<Vec2> = nearest_vertices(reference, outward);
+        let touching: Vec<Vec2> = nearest_vertices(incident, -outward);
+        let span = |points: &[Vec2]| {
+            points
+                .iter()
+                .map(|point| point.dot(tangent))
+                .fold((f32::INFINITY, f32::NEG_INFINITY), |(low, high), value| {
+                    (low.min(value), high.max(value))
+                })
+        };
+        let (face_low, face_high) = span(&face);
+        let face_level = face[0].dot(outward);
+        // 닿는 꼭짓점(들)의 접선 방향 구간을 기준 면 구간으로 자른다. 비거나 아주 짧으면 면 끝에서 꼭짓점끼리 맞닿은 것이다.
+        let (low, high) = span(&touching);
+        let (clip_low, clip_high) = (low.max(face_low), high.min(face_high));
+        let on_face = |along: f32| {
+            along > face_low + FEATURE_TOLERANCE_M && along < face_high - FEATURE_TOLERANCE_M
+        };
+        let (point, kind) = match touching[..] {
+            [vertex] if on_face(vertex.dot(tangent)) => (
+                vertex,
+                if obstacle_face {
+                    ContactKind::BodyCorner
+                } else {
+                    ContactKind::ObstacleCorner
+                },
+            ),
+            [_, _] if clip_high - clip_low > FEATURE_TOLERANCE_M => (
+                tangent * ((clip_low + clip_high) / 2.0) + outward * face_level,
+                ContactKind::Face,
+            ),
+            _ => {
+                // 면 끝 꼭짓점과 가장 가까운 곳. 구간이 겹치지 않으면 두 끝의 가운데다.
+                let along = (clip_low + clip_high) / 2.0;
+                (
+                    tangent * along + outward * face_level,
+                    ContactKind::CornerCorner,
+                )
+            }
+        };
+        Contact {
+            point,
+            normal,
+            kind,
+        }
+    }
+}
+
+/// 접촉 종류를 가를 때 같은 높이·같은 끝으로 보는 거리(m). 꼭짓점 둘이 면에서 이 안이면 면끼리 맞닿은 것이다.
+const FEATURE_TOLERANCE_M: f32 = 1e-3;
+
+/// 직사각형 꼭짓점 중 방향 `direction` 쪽으로 가장 먼 것(들)을 반환한다.
+/// 가장 먼 꼭짓점과 [`FEATURE_TOLERANCE_M`] 안에 있는 꼭짓점은 함께 넣는다(최대 2개, 면이면 2개).
+fn nearest_vertices(rect: &GroundRect, direction: Vec2) -> Vec<Vec2> {
+    let vertices = rect.vertices();
+    let far = vertices
+        .iter()
+        .map(|vertex| vertex.dot(direction))
+        .fold(f32::NEG_INFINITY, f32::max);
+    vertices
+        .into_iter()
+        .filter(|vertex| vertex.dot(direction) > far - FEATURE_TOLERANCE_M)
+        .collect()
+}
+
+/// 차체와 장애물이 맞닿은 곳의 정보(2-7). 충격량 반응에서 접촉점·법선으로 쓴다.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Contact {
+    /// 접촉점 (x, z)(m). 면끼리 맞닿았으면 겹치는 구간의 가운데다.
+    pub point: Vec2,
+    /// 접촉면 법선(단위 벡터, x·z). 장애물에서 차체 쪽을 향한다.
+    pub normal: Vec2,
+    /// 어느 쪽 꼭짓점·면이 맞닿았는지.
+    pub kind: ContactKind,
+}
+
+/// 맞닿은 부분의 종류.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContactKind {
+    /// 차체 면과 장애물 면이 나란히 맞닿음(정면으로 벽에 닿는 경우 등).
+    Face,
+    /// 차체 모서리가 장애물 면에 닿음(비스듬히 벽에 닿는 경우 등).
+    BodyCorner,
+    /// 장애물 모서리가 차체 옆면·앞면에 닿음(기둥 모서리에 옆구리가 닿는 경우 등).
+    ObstacleCorner,
+    /// 차체 모서리와 장애물 모서리가 맞닿음. 법선은 분리축 판정 축이라 방향이 덜 정확하다.
+    CornerCorner,
 }
 
 /// 차체 충돌 박스 치수. 기준점은 운동 모델과 같은 후륜축 중심이다.
@@ -135,6 +273,8 @@ pub struct Sweep {
     pub fraction: f32,
     /// 이동을 막은 장애물의 번호(`obstacles` 순서). 막히지 않았으면 `None`.
     pub blocked_by: Option<usize>,
+    /// 막힌 자세(이동 비율 `fraction`)에서 막은 장애물과 맞닿은 곳(2-7). 막히지 않았으면 `None`.
+    pub contact: Option<Contact>,
 }
 
 impl Sweep {
@@ -462,6 +602,7 @@ pub fn sweep(footprint: &Footprint, from: &Motion, to: &Motion, obstacles: &[Gro
     let free = Sweep {
         fraction: 1.0,
         blocked_by: None,
+        contact: None,
     };
     if obstacles.is_empty() {
         return free;
@@ -475,9 +616,11 @@ pub fn sweep(footprint: &Footprint, from: &Motion, to: &Motion, obstacles: &[Gro
         let t = index as f32 / samples as f32;
         let at_t = path.probe(t);
         if let Some((fraction, obstacle)) = path.first_contact(clear, gap, t, at_t) {
+            let body = footprint.rect_at(&pose_between(from, to, fraction));
             return Sweep {
                 fraction,
                 blocked_by: Some(obstacle),
+                contact: Some(body.contact_with(&obstacles[obstacle])),
             };
         }
         clear = t;
@@ -566,6 +709,7 @@ fn step_filtered(
             Sweep {
                 fraction: found.fraction,
                 blocked_by: found.blocked_by.map(|k| indices[k]),
+                contact: found.contact,
             }
         }
     };
@@ -1249,5 +1393,130 @@ mod tests {
             assert!(impact.is_none());
         }
         assert_eq!((state, motion), (plain_state, plain));
+    }
+
+    /// 두 벡터가 `tolerance` 안으로 같은지 확인한다.
+    fn assert_near(actual: Vec2, expected: Vec2, tolerance: f32) {
+        assert!(
+            actual.distance(expected) < tolerance,
+            "{actual:?} != {expected:?}"
+        );
+    }
+
+    /// 정면으로 벽에 막히면 면끼리 맞닿은 접촉이고, 법선은 벽에서 차 쪽(+Z), 접촉점은 앞범퍼 가운데인지 확인한다(2-7).
+    #[test]
+    fn head_on_wall_contact_is_face() {
+        let wall = [wall_ahead(1.0, 0.5)];
+        let from = Motion::default();
+        let to = Motion { z_m: -3.0, ..from };
+        let result = sweep(&VEHICLE_FOOTPRINT, &from, &to, &wall);
+        let contact = result.contact.expect("blocked sweep has contact");
+        assert_eq!(contact.kind, ContactKind::Face);
+        assert_near(contact.normal, Vec2::Y, 1e-6);
+        // 앞범퍼는 후륜축에서 3.5 m 앞, 벽 면은 그 1 m 앞이다.
+        assert_near(contact.point, Vec2::new(0.0, -4.5), 1e-3);
+        assert_eq!(
+            sweep(&VEHICLE_FOOTPRINT, &from, &from, &wall).contact,
+            None,
+            "free sweep has no contact"
+        );
+    }
+
+    /// 30° 비스듬히 벽에 막히면 차체 모서리 하나가 벽 면에 닿고, 접촉점이 그 모서리인지 확인한다(2-7).
+    #[test]
+    fn oblique_wall_contact_is_body_corner() {
+        let wall = [wall_ahead(1.0, 0.5)];
+        let from = Motion {
+            heading_rad: 30f32.to_radians(),
+            ..Motion::default()
+        };
+        let (forward_x, forward_z) = from.forward();
+        let to = Motion {
+            x_m: forward_x * 3.0,
+            z_m: forward_z * 3.0,
+            ..from
+        };
+        let result = sweep(&VEHICLE_FOOTPRINT, &from, &to, &wall);
+        assert!(result.blocked());
+        let contact = result.contact.expect("blocked sweep has contact");
+        assert_eq!(contact.kind, ContactKind::BodyCorner);
+        assert_near(contact.normal, Vec2::Y, 1e-6);
+        let stopped = VEHICLE_FOOTPRINT.rect_at(&pose_between(&from, &to, result.fraction));
+        let corner = stopped
+            .vertices()
+            .into_iter()
+            .reduce(|a, b| if a.y < b.y { a } else { b })
+            .unwrap();
+        assert_near(contact.point, corner, 1e-3);
+        // 앞으로 가며 왼쪽(-X)으로 치우치므로 닿는 모서리는 왼쪽 앞이다.
+        assert!(corner.x < 0.0, "{corner:?}");
+    }
+
+    /// 45° 돌린 기둥의 모서리가 차체 오른쪽 옆면에 닿으면 장애물 모서리 접촉이고, 법선이 -X인지 확인한다(2-7).
+    #[test]
+    fn pillar_corner_on_body_side_is_obstacle_corner() {
+        let body = VEHICLE_FOOTPRINT.rect_at(&Motion::default());
+        let gap = 1e-5;
+        let reach = 0.5 * std::f32::consts::SQRT_2;
+        let pillar = GroundRect {
+            center: Vec2::new(0.9 + reach + gap, -1.4),
+            half_size: Vec2::splat(0.5),
+            heading_rad: FRAC_PI_4,
+        };
+        let contact = body.contact_with(&pillar);
+        assert_eq!(contact.kind, ContactKind::ObstacleCorner);
+        assert_near(contact.normal, Vec2::NEG_X, 1e-6);
+        assert_near(contact.point, Vec2::new(0.9 + gap, -1.4), 1e-3);
+    }
+
+    /// 차체 오른쪽 앞 모서리와 대각선으로 놓인 상자의 모서리가 맞닿으면 모서리끼리 접촉이고,
+    /// 접촉점이 맞닿은 모서리인지 확인한다(2-7).
+    #[test]
+    fn diagonal_box_contact_is_corner_corner() {
+        let body = VEHICLE_FOOTPRINT.rect_at(&Motion::default());
+        let gap = 1e-5;
+        let block =
+            GroundRect::axis_aligned(Vec2::new(0.9 + 0.5 + gap, -3.5 - 0.5 - gap), Vec2::ONE);
+        let contact = body.contact_with(&block);
+        assert_eq!(contact.kind, ContactKind::CornerCorner);
+        assert_near(contact.point, Vec2::new(0.9, -3.5), 1e-3);
+        // 법선은 분리축 판정 축 중 하나이며 장애물에서 차 쪽(-X 또는 +Z)을 향한다.
+        assert!(
+            contact.normal == Vec2::NEG_X || contact.normal == Vec2::Y,
+            "{contact:?}"
+        );
+    }
+
+    /// 격자로 거른 단계도 전체 목록 단계와 같은 접촉 정보를 내는지, 접촉 법선이 정지 자세에서 장애물 쪽 이동을 막는 방향인지 확인한다(2-7).
+    #[test]
+    fn grid_sweep_reports_same_contact() {
+        let obstacles = vec![
+            wall_ahead(2.0, 0.3),
+            GroundRect::axis_aligned(Vec2::new(30.0, 30.0), Vec2::ONE),
+        ];
+        let grid = ObstacleGrid::new(obstacles.clone());
+        let from = Motion {
+            heading_rad: 0.2,
+            ..Motion::default()
+        };
+        let (forward_x, forward_z) = from.forward();
+        let to = Motion {
+            x_m: forward_x * 4.0,
+            z_m: forward_z * 4.0,
+            ..from
+        };
+        let full = sweep(&VEHICLE_FOOTPRINT, &from, &to, &obstacles);
+        let indices = grid.candidates(
+            &VEHICLE_FOOTPRINT,
+            &from,
+            travel_between(&VEHICLE_FOOTPRINT, &from, &to),
+        );
+        let subset: Vec<GroundRect> = indices.iter().map(|&i| obstacles[i]).collect();
+        let filtered = sweep(&VEHICLE_FOOTPRINT, &from, &to, &subset);
+        assert_eq!(full.contact, filtered.contact);
+        let contact = full.contact.expect("blocked");
+        // 차가 장애물 쪽(법선 반대)으로 움직이고 있었다.
+        let travel = Vec2::new(to.x_m - from.x_m, to.z_m - from.z_m);
+        assert!(travel.dot(contact.normal) < 0.0, "{contact:?}");
     }
 }
