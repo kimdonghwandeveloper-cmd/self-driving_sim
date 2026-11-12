@@ -1,6 +1,8 @@
 extends Control
 ## 개발 코스·지도 코스(저장소 코스와 저장 경로)·교육 시나리오 선택, 지도 화면, 종료를 제공하는 메인 메뉴다.
 
+const DriveScreen = preload("res://presentation/drive_screen.gd")
+
 signal drive_requested(course: String)
 signal map_requested
 signal quit_requested
@@ -39,6 +41,8 @@ func _ready() -> void:
 	column.add_child(info)
 	_add_course("개발 코스", "training")
 	_add_course("보정 코스", "calibration")
+	if ClassDB.class_exists("SimVehicle"):
+		_add_course("여수 엑스포 · OSM 배경", DriveScreen.YEOSU_COURSE)
 	if ClassDB.class_exists("SimCourse") and ClassDB.class_has_method("SimCourse", "course_files"):
 		for file in ClassDB.class_call_static("SimCourse", "course_files"):
 			_add_course("지도: " + str(file.label), str(file.course))
