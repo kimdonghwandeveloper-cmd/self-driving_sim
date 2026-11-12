@@ -16,6 +16,7 @@ Godot에 노출할 클래스·메서드·시그널·좌표 규칙·실패 처리
 | v1.4 | 항목 추가(기존 이름·인자 변경 없음, 2026-11-10 Claude, Phase 5-1 시나리오 틀): `SimVehicle.scenario` 속성, `scenario_control()`·`scenario_status()`, 시나리오 시그널 4개(2절 2-1), `SimScenario.scenario_files()`(3-2). 시나리오 파일 형식은 `docs/scenarios.md` |
 | v1.5 | 항목 추가(기존 이름·인자 변경 없음, 2026-11-11 Claude, PLAN 4-8 자동 경로·4-9 건물·장소): `SimRoutePicker.request_places()`·`load_places_file()`·`place_outlines()`·`place_at()`·`search_places()`·`add_place()`·`point_labels()`, `poll()` 이벤트 `places_loaded`(7-2). 경로 계산 규칙 변경(일방통행·회전 제한·우회·교차로 단순화)은 `route()`·`status_lines()` 형식을 바꾸지 않는다. ※ `feature/phase5-scenarios`도 v1.5를 쓰므로 나중에 병합하는 쪽을 v1.6으로 올린다 |
 | v1.6 | 항목 추가(기존 이름·인자 변경 없음, 2026-11-12 Claude, PLAN 4-10 전국 장소 검색): `SimRoutePicker.search_nationwide()`·`add_search_hit()`, `poll()` 이벤트 `search_results`(7-2). ※ `feature/phase5-scenarios`(v1.5)를 나중에 병합하면 그쪽을 v1.7로 올린다 |
+| v1.8 | 항목 추가(기존 이름·인자 변경 없음, 2026-11-12 Claude, PLAN 4-11 2단계 경로 고르기 개편): `SimRoutePicker.plan_endpoints()`·`plan_line()`·`place_label()`(7-2). 지도 화면은 점 하나씩 찍기 대신 출발·도착 검색 칸과 선 그리기를 쓴다(`add_point`·`remove_near`·`remove_last`는 시험·호환용으로 남김). ※ `feature/phase5-scenarios`(v1.5)를 나중에 병합하면 그쪽을 v1.9로 올린다 |
 | v1.7 | **항목 제거·추가**(2026-11-12 Claude, PLAN 4-11 전국 지도 자료 내장, 사용자 결정): 네트워크 지역 받기 `request_region()`·`cancel_region()`·`request_places()`·`cached_regions()`와 `poll()` 이벤트 `progress`·`region_loaded`·`places_loaded`·`failed`를 없앴다. 대신 `open_region()`(내장 전국 자료에서 바로 열기, 동기)·`data_status()`·`use_data_dir()`·`latlon_to_view()`를 더했다. `network`는 전국 장소 검색에만 쓴다. ※ `feature/phase5-scenarios`(v1.5)를 나중에 병합하면 그쪽을 v1.8로 올린다 |
 
 > GD-5(v1.3)에서 Bevy 앱을 지웠다. 본문의 "Bevy 판과 같음"·Bevy 파일 경로는 계약을 정할 때의 기준을 기록한 것이며, 그 규칙은 지금 `sim-core`에 있다.
@@ -342,6 +343,9 @@ Bevy 판 `src/picker/`(4-5·4-5b)의 계산·캐시·받기 부분은 Bevy와 �
 | `view_to_latlon(view: Vector2)` | `PackedFloat64Array` | 지도 좌표를 `[lat, lon]`으로. Bevy 판 투영(`tiles::to_view`)의 역변환. 값이 유한하지 않거나 메르카토르 유효 위도(±85.05112878°) 밖이면 **빈 배열** |
 | (v1.7) `latlon_to_view(latlon: PackedFloat64Array)` | `Vector2` | `[lat, lon]`을 지도 좌표로(시험·검색 결과용). 형식이 맞지 않으면 원점 |
 | (v1.7) `open_region(center_latlon: PackedFloat64Array)` | `{ok, error}` | 가운데 1.5 × 1.5 km 지역의 도로·회전 제한·건물·장소를 **내장 전국 자료**(`data/korea`)에서 연다. 함수 안에서 끝난다(측정 0.1 s 미만). 도로는 지역 스냅샷 `cache/regions/<자료 판>/<범위>.osm.json`으로 써서 저장 경로가 가리킨다. `error`는 한국어(자료 없음·형식 다름·도로 없음) |
+| (v1.8) `plan_endpoints(start: Dictionary, end: Dictionary)` | `{ok, error, skipped}` | 출발·도착으로 경로를 만든다(4-11 2단계). 각 끝은 `{place: int, latlon: PackedFloat64Array, label: String}`이고 `place` ≥ 0이면 열린 건물·장소 번호(진입 지점), 아니면 `latlon` 위치(100 m 안의 가까운 차도 위 점). 두 끝을 감싸는 경로 범위(여유 300 m, 한 변 6 km 이하)의 도로를 전국 자료에서 열어 계산하고 건물·장소는 옮겨 둔다. 실패하면 이전 상태를 두고 `error`는 한국어(앞에 "출발지:"·"도착지:"). 경로 계산 자체 실패는 `ok = true`이고 `route()`의 `error`로 알린다. `skipped`는 늘 0 |
+| (v1.8) `plan_line(line: PackedVector2Array)` | `{ok, error, skipped}` | 그린 선(지도 좌표)으로 경로를 만든다. 선을 50 m 간격 점으로 나눠 40 m 안의 탐색 가능 도로에 붙이고(20 m 안 점은 합침) 그 순서대로 계산한다. `skipped`는 도로가 없어 건너뛴 점 수. 실패하면 이전 상태를 둔다 |
+| (v1.8) `place_label(index: int)` | `String` | 열린 장소의 표시 이름(이름이 없으면 OSM 요소 이름). 없는 번호면 빈 문자열 |
 | (v1.7) `data_status()` | `{ok, error, data_time}` | 전국 자료를 열 수 있는지. 없으면 `ok=false`와 만드는 방법 안내(한국어). `data_time`은 원본 복제 시각(유닉스 초 문자열, 없으면 빈 문자열) |
 | (v1.7) `use_data_dir(dir: String)` | 없음 | 전국 자료 폴더를 바꾼다(저장소 루트 기준, 빈 문자열이면 `data/korea`). 시험이 작은 자료(`testdata/korea-yeosu`)를 쓸 때 부른다 |
 | `poll()` | `Array[Dictionary]` | 매 프레임 호출. (v1.7) 이벤트는 전국 검색 결과 `{type: "search_results", ok: bool, message, request_id, results: Array[Dictionary]}`뿐이다(`results` 항목은 `{index, name, address, kind, view: Vector2}`, 실패면 빈 배열이고 `message`는 한국어) |
@@ -366,8 +370,8 @@ Bevy 판 `src/picker/`(4-5·4-5b)의 계산·캐시·받기 부분은 Bevy와 �
 
 - 점 편집 함수는 경로를 **동기로** 다시 계산한다(함수 안에서 끝남). 계산이 실패하면 이전 경로를 내보내지 않는다.
 - `open_region` 결과: 실패하면 기존 지역·점·경로를 그대로 둔다. 성공하면 지역을 **교체**하고 점·경로를 비운다.
-- (v1.7) 지역 자료는 네트워크로 받지 않는다(PLAN 4-11). 화면은 점이 없을 때 클릭한 곳·확대해 멈춘 화면 가운데·전국 검색 결과 위치로
-  `open_region`을 부르고, 점이 있으면 지역을 바꾸지 않는다(출발·도착은 한 지역 안, 4-11 2단계에서 풀 예정).
+- (v1.7) 지역 자료는 네트워크로 받지 않는다(PLAN 4-11). 화면은 경로가 없을 때 클릭한 곳·확대해 멈춘 화면 가운데로 `open_region`을
+  부른다. (v1.8) 경로는 `plan_endpoints`·`plan_line`이 화면 지역과 따로 경로 범위의 도로로 만들므로 출발·도착이 한 지역 안일 필요가 없다.
 - **신규 검사:** `save`의 `name`은 `[A-Za-z0-9_-]{1,64}`만 허용하고 `.toml`을 Rust가 붙인다(경로 구분자 금지).
   같은 이름이 있고 `overwrite=false`면 실패. 유효한 현재 경로가 없으면 `"no valid route to save"`.
 
