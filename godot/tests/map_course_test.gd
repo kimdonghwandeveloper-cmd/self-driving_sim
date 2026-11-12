@@ -1,4 +1,4 @@
-# GD-3 지도 코스 확인(계약 v1.2 `map:<파일>`). 저장소의 여수 경로 코스를 목록에서 찾아 형상을 만들고,
+# GD-3 지도 코스 확인(계약 v1.2 `map:<파일>`). 시험 자료의 여수 경로 코스(메뉴 목록에는 없음, PLAN 4-11)로 형상을 만들고,
 # Rust 차량으로 몇 초 주행하며, 주행 화면이 메시·바닥·출처 표기를 만드는지 본다. 성공 0 / 실패 1.
 # 실행(워크트리 최상위): godot --headless --path godot --import 후
 #                        godot --headless --fixed-fps 64 --path godot --script res://tests/map_course_test.gd
@@ -6,7 +6,7 @@ extends SceneTree
 
 const Drive = preload("res://presentation/drive_screen.gd")
 const CourseMesh = preload("res://presentation/course_mesh.gd")
-## 저장소에 들어 있는 여수 교차로 경로 코스(Bevy `--course map:...`과 같은 파일).
+## 시험 자료의 여수 교차로 경로 코스.
 const ROUTE := "map:testdata/yeosu-expo/route-junctions.toml"
 ## 차량을 몰아 볼 틱 수(64 Hz로 4초).
 const DRIVE_TICKS := 256
@@ -25,7 +25,7 @@ func _init() -> void:
 	var listed := false
 	for file in ClassDB.class_call_static("SimCourse", "course_files"):
 		listed = listed or file.course == ROUTE
-	_check(listed, "course_files에 " + ROUTE + " 없음")
+	_check(not listed, "시험 자료 코스가 메뉴 목록(course_files)에 나옴: " + ROUTE)
 	var data: Dictionary = ClassDB.class_call_static("SimCourse", "build", ROUTE)
 	_check(data.get("ok", false), "build 실패: " + str(data.get("error", "")))
 	if data.get("ok", false):
@@ -110,7 +110,7 @@ func _check(condition: bool, message: String) -> void:
 ## 결과를 출력하고 종료 코드를 정한다.
 func _finish() -> void:
 	if failures.is_empty():
-		print("MAP COURSE OK: %s 목록·형상·주행·화면" % ROUTE)
+		print("MAP COURSE OK: %s 메뉴 목록 제외·형상·주행·화면" % ROUTE)
 		quit(0)
 	else:
 		for message in failures:

@@ -38,6 +38,8 @@ var still_time := 0.0
 var place_search := LineEdit.new()
 var place_results := OptionButton.new()
 var place_outlines: Array = []
+## 윤곽별로 면을 칠할 수 있는지(실제 OSM 윤곽 중 꼬이거나 겹친 것은 삼각형으로 나눌 수 없어 테두리만 그린다).
+var place_fillable: Array[bool] = []
 ## 검색 결과 상자 항목별 내용 {source: "place"(열린 지역의 건물·장소)|"area"(전국 검색), index, view}. 안내문·구분선은 null.
 var result_items: Array = []
 ## 열린 지역의 건물·장소 검색 결과와 마지막 전국 검색 결과(4-10).
@@ -167,13 +169,15 @@ func _draw() -> void:
 	var center := camera.position
 	draw_line(center - Vector2(10, 0) / scale_m, center + Vector2(10, 0) / scale_m, Color.WHITE, 1.0 / scale_m)
 	draw_line(center - Vector2(0, 10) / scale_m, center + Vector2(0, 10) / scale_m, Color.WHITE, 1.0 / scale_m)
-	for outline in place_outlines:
+	for i in range(place_outlines.size()):
+		var outline: PackedVector2Array = place_outlines[i]
 		if outline.size() == 1:
 			draw_circle(outline[0], 4.0 / scale_m, PLACE_COLOR)
 		elif outline.size() > 2:
 			var closed: PackedVector2Array = outline.duplicate()
 			closed.append(outline[0])
-			draw_colored_polygon(outline, Color(PLACE_COLOR, 0.18))
+			if i < place_fillable.size() and place_fillable[i]:
+				draw_colored_polygon(outline, Color(PLACE_COLOR, 0.18))
 			draw_polyline(closed, PLACE_COLOR, 1.0 / scale_m, true)
 	for i in range(roads.size() / 2):
 		var allowed := i < usable.size() and usable[i] == 1
@@ -413,9 +417,15 @@ func _save_route() -> void:
 	feedback = "저장: " + str(result.path) if result.get("ok", false) else str(result.error)
 
 ## Rust에서 열린 지역 범위·도로 선분·사용 가능 여부·건물 윤곽·점·경로선을 받아 그리기 자료를 바꾼다.
+## 건물 윤곽이 바뀌었을 때만 면을 칠할 수 있는지 다시 판정한다(매 프레임 판정하지 않는다).
 func _refresh_route() -> void:
 	opened_region = picker.call("loaded_region")
-	place_outlines = picker.call("place_outlines")
+	var outlines: Array = picker.call("place_outlines")
+	if outlines != place_outlines:
+		place_outlines = outlines
+		place_fillable.clear()
+		for outline in place_outlines:
+			place_fillable.append(outline.size() > 2 and not Geometry2D.triangulate_polygon(outline).is_empty())
 	var result: Dictionary = picker.call("route")
 	display_geometry(picker.call("road_segments"), picker.call("road_usable"), picker.call("points"), result.line)
 
