@@ -5,6 +5,9 @@ const Preview = preload("res://preview/vehicle_preview.gd")
 const CourseMesh = preload("res://presentation/course_mesh.gd")
 const Visual = preload("res://presentation/vehicle_visual.gd")
 const Rig = preload("res://presentation/camera_rig.gd")
+## GLB의 미터 원점을 공유하는 여수 고정 코스. 저장 경로는 시작점이 달라 이 배경을 쓰지 않는다.
+const YEOSU_COURSE := "map:testdata/yeosu-expo/course.toml"
+const YEOSU_BACKGROUND = preload("res://assets/maps/yeosu-expo/background.glb")
 ## 코스 범위 밖으로 바닥을 더 까는 여백(m).
 const GROUND_MARGIN_M := 300.0
 ## HUD에 보일 입력 장치·시점 이름(계약 값 → 한국어).
@@ -81,7 +84,10 @@ func start(course_name: String, force_preview: bool = false) -> void:
 	var course_mesh := CourseMesh.new()
 	scene_content.add_child(course_mesh)
 	course_mesh.build(data)
-	_fit_ground(CourseMesh.ground_bounds(data))
+	var bounds := CourseMesh.ground_bounds(data)
+	if course_name == YEOSU_COURSE and not is_preview and fallback_notice.is_empty():
+		bounds = _add_yeosu_background(bounds)
+	_fit_ground(bounds)
 	vehicle.add_child(Visual.new())
 	rig = Rig.new()
 	vehicle.add_child(rig)
@@ -115,7 +121,18 @@ func _make_vehicle(course_name: String) -> Node3D:
 	add_child(node)
 	return node
 
-## 절차 생성 하늘·태양광(그림자)·보조광·옅은 안개와 바닥을 만든다. 외부 애셋은 쓰지 않는다.
+## 시각 배경을 원점에 배치하고, 바닥이 배경 도로를 덮지 않도록 높이와 범위를 맞춘다.
+func _add_yeosu_background(bounds: Rect2) -> Rect2:
+	var background := YEOSU_BACKGROUND.instantiate() as Node3D
+	background.name = "YeosuBackground"
+	scene_content.add_child(background)
+	ground.position.y = -0.10
+	for mesh_node: MeshInstance3D in background.find_children("*", "MeshInstance3D", true, false):
+		var box: AABB = mesh_node.global_transform * mesh_node.get_aabb()
+		bounds = bounds.merge(Rect2(Vector2(box.position.x, box.position.z), Vector2(box.size.x, box.size.z)))
+	return bounds
+
+## 절차 생성 하늘·태양광(그림자)·보조광·옅은 안개와 바닥을 만든다.
 func _environment() -> void:
 	var sky_material := ProceduralSkyMaterial.new()
 	sky_material.sky_top_color = Color("5d8fc4")

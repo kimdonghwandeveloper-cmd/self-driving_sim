@@ -62,7 +62,8 @@ Godot 확장(`crates/sim-godot`, godot-rust)으로 연결합니다. 처음에 �
 | --- | --- |
 | `training` | 폭 6 m 직선 차로(z=+6 ~ -66), 양옆 연석(충돌 경계), 가장자리 흰 선(표시만), 정지선 z=-20, 차로 오른쪽 고정 장애물 z=-32, 좁은 통로 z=-42 ~ -54(폭 3.0 m = 차체 폭 1.8 m + 양옆 0.6 m), 앞·뒤 끝 벽 |
 | `calibration` | 넓은 평지와 장애물 4개(회전반경·제동 시험용, 아래 보정 측정 표시) |
-| 지도 코스 `map:<파일>` | OSM 중심선·경로 파일로 만든 가상 교육 코스. 메뉴에는 지도 화면이 저장한 경로(`cache/routes/`)가 나옵니다. 예전 여수 고정 코스는 4-11에서 메뉴에서 빼고 시험 자료(`testdata/yeosu-expo/`)로만 남겼습니다. 형식과 제약은 `docs/map-data.md` 참고. 읽지 못하면 사유를 띄우고 `training`으로 대체 |
+| 여수 엑스포 · OSM 배경 | 여수 고정 교육 코스(way 532526349)에 Blender/Blosm으로 만든 OSM 배경을 겹쳐 주행합니다. 배경에는 충돌체가 없으며 기존 노면·연석·충돌 판정을 사용합니다. |
+| 지도 코스 `map:<파일>` | OSM 중심선·경로 파일로 만든 가상 교육 코스. 메뉴에는 지도 화면이 저장한 경로(`cache/routes/`)가 나옵니다. 여수 고정 코스 자료(`testdata/yeosu-expo/`)는 위의 전용 메뉴 항목에서만 엽니다. 형식과 제약은 `docs/map-data.md` 참고. 읽지 못하면 사유를 띄우고 `training`으로 대체 |
 
 - 화면 메시와 충돌 판정은 `crates/sim-core/src/world/`의 같은 정의에서 만들어서 어긋나지 않습니다. 흰 선은 시각 표시일 뿐이고 실제 경계는 연석입니다.
 - 지도 코스에는 경로 끝 목표 표시(체크무늬 띠와 "도착")가 있습니다. 도착 판정·점수는 아직 없습니다(Phase 5).
@@ -287,9 +288,9 @@ cargo run --locked -p sim-tools -- --compare-overpass testdata/yeosu-expo/graph-
 - `crates/sim-tools/`: 창 없는 개발 명령(전국 지도 자료 만들기, 지도 받기, PBF 추출·대조)
 - `godot/`: Godot 프로젝트(메뉴·주행·지도 화면 `presentation/`, 헤드리스 시험 `tests/`). 구현 메모는 `godot/IMPLEMENTATION.md`
 - `config/{vehicle,input,camera,road_graph}.toml`: 시뮬레이터 임시 설정값
-- `assets/maps/`: 저장소에 넣는 지도 코스(지금은 비어 있음. 여수 고정 코스는 4-11에서 시험 자료로 옮김)
+- `assets/maps/`: 저장소에 넣는 지도 코스(현재 비어 있음). 여수 고정 코스는 `testdata/yeosu-expo/`에 있음
 - `data/korea/`: 전국 지도 자료(저장소 제외, 배포에 포함)
-- `testdata/`: 자동 시험 전용 자료(여수 스냅샷·경로, 작은 전국 지도 자료 조각). 메뉴에는 나오지 않음
+- `testdata/`: 자동 시험 자료(여수 스냅샷·경로, 작은 전국 지도 자료 조각). 여수 고정 코스만 OSM 배경 전용 메뉴에서 재사용
 - `assets/scenarios/`: 교육 시나리오 파일(5-1, 메뉴 목록 끝에 나옴). 형식은 [docs/scenarios.md](docs/scenarios.md)
 - [docs/development.md](docs/development.md): 선정 버전, 개발 PC, 검증 결과
 - [docs/vehicle-assumptions.md](docs/vehicle-assumptions.md): 실차 사양 가정과 미확인 위험(사륜 조향·특수 구동 등)
