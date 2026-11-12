@@ -5,12 +5,13 @@
 //! 검사 지점 사이 구간은 "차체 위 어느 점도 장애물까지 거리보다 많이 움직이지 않았는지"로 보수적으로
 //! 확인하고, 확인되지 않으면 구간을 더 나눈다. 회전 중 모서리가 검사 지점 사이에서만 스치는 경우도 잡는다.
 //! 다만 최소 검사 구간([`MIN_CERTIFY_SPAN_M`])에 따른 근사와 부동소수점 오차가 있어 절대적인 관통 방지 보장은 아니다.
-//! 미끄러지며 벽을 따라가는 처리는 하지 않는다(접촉하면 정지). 막힌 자세의 접촉점·법선은 [`Contact`]로 구한다(2-7).
+//! 막히면 접촉점·법선([`Contact`])에 충격량을 줘 튕기거나 벽을 따라 미끄러지게 한다([`super::impulse`], 2-7).
 //! 차체 크기와 후륜축 위치는 실차 치수를 확인하지 않은 **시뮬레이터 임시값**이다.
 
 use glam::Vec2;
 
 use super::dynamics::{self, DynamicsParams, Motion, wrap_angle};
+use super::impulse;
 use super::state::VehicleState;
 
 /// 경로 기본 검사 간격(m, 차체 위 점이 움직이는 최대 거리 기준). 구간 안은 보수 검사로 다시 확인한다.
@@ -22,6 +23,9 @@ const MIN_CERTIFY_SPAN_M: f32 = 1e-4;
 const BOUNDARY_RESOLUTION_M: f32 = 1e-5;
 /// 차체와 장애물 사이가 이 거리(m) 안이면 접촉으로 본다.
 pub const CONTACT_MARGIN_M: f32 = 0.02;
+/// 충돌을 보고한 장애물에서 이만큼(m) 떨어져야 다시 닿을 때 새 충돌로 본다(2-7, 임시값).
+/// 충돌로 튕겨 조금 물러났다 다시 닿는 것을 새 충돌로 세지 않기 위한 거리다.
+pub const REPORT_RELEASE_M: f32 = 0.3;
 /// 장애물 격자([`ObstacleGrid`]) 한 칸의 크기(m).
 const GRID_CELL_M: f32 = 8.0;
 /// 격자 후보에서 뺄 장애물의 최소 여유(m). 분리축 거리는 실제 거리의 1/√2까지 작을 수 있으므로
@@ -91,7 +95,7 @@ impl GroundRect {
     }
 
     /// 네 꼭짓점 (x, z)를 오른쪽 앞, 왼쪽 앞, 왼쪽 뒤, 오른쪽 뒤 순서로 반환한다.
-    fn vertices(&self) -> [Vec2; 4] {
+    pub(crate) fn vertices(&self) -> [Vec2; 4] {
         let [right, forward] = self.axes();
         let (side, ahead) = (right * self.half_size.x, forward * self.half_size.y);
         [
@@ -158,9 +162,11 @@ impl GroundRect {
         let on_face = |along: f32| {
             along > face_low + FEATURE_TOLERANCE_M && along < face_high - FEATURE_TOLERANCE_M
         };
-        let (point, kind) = match touching[..] {
+        let on_level = |along: f32| tangent * along + outward * face_level;
+        let (point, ends, kind) = match touching[..] {
             [vertex] if on_face(vertex.dot(tangent)) => (
                 vertex,
+                [vertex; 2],
                 if obstacle_face {
                     ContactKind::BodyCorner
                 } else {
@@ -168,20 +174,19 @@ impl GroundRect {
                 },
             ),
             [_, _] if clip_high - clip_low > FEATURE_TOLERANCE_M => (
-                tangent * ((clip_low + clip_high) / 2.0) + outward * face_level,
+                on_level((clip_low + clip_high) / 2.0),
+                [on_level(clip_low), on_level(clip_high)],
                 ContactKind::Face,
             ),
             _ => {
                 // 면 끝 꼭짓점과 가장 가까운 곳. 구간이 겹치지 않으면 두 끝의 가운데다.
-                let along = (clip_low + clip_high) / 2.0;
-                (
-                    tangent * along + outward * face_level,
-                    ContactKind::CornerCorner,
-                )
+                let point = on_level((clip_low + clip_high) / 2.0);
+                (point, [point; 2], ContactKind::CornerCorner)
             }
         };
         Contact {
             point,
+            ends,
             normal,
             kind,
         }
@@ -210,6 +215,9 @@ fn nearest_vertices(rect: &GroundRect, direction: Vec2) -> Vec<Vec2> {
 pub struct Contact {
     /// 접촉점 (x, z)(m). 면끼리 맞닿았으면 겹치는 구간의 가운데다.
     pub point: Vec2,
+    /// 접촉 구간의 양 끝 (x, z)(m). 면끼리 맞닿았으면 겹치는 구간의 두 끝, 모서리 접촉이면 둘 다 `point`다.
+    /// 면 접촉에서 차가 돌 때 한쪽 끝이 파고들지 않게 두 끝 모두에 충격량을 준다.
+    pub ends: [Vec2; 2],
     /// 접촉면 법선(단위 벡터, x·z). 장애물에서 차체 쪽을 향한다.
     pub normal: Vec2,
     /// 어느 쪽 꼭짓점·면이 맞닿았는지.
@@ -292,8 +300,8 @@ pub struct ContactState {
     /// 마지막 단계에서 장애물에 막혀 이동이 잘렸는지. 이미 충돌을 보고한 장애물을 계속 미는 경우도 포함한다.
     /// 근접(`touching`)과 달리 실제 이동 막힘만 뜻하며, 보정 시험의 유효성 판정에 쓴다.
     pub blocked: bool,
-    /// 현재 접촉 중이며 이미 충돌을 보고한 장애물 번호(`obstacles` 순서).
-    /// 그 장애물의 접촉 거리 밖으로 벗어나면 빠지므로, 다른 장애물 옆에 붙어 있어도 재충돌을 놓치지 않는다.
+    /// 이미 충돌을 보고했고 아직 [`REPORT_RELEASE_M`] 안에 있는 장애물 번호(`obstacles` 순서).
+    /// 그 장애물에서 이 거리 밖으로 벗어나면 빠지므로, 다른 장애물 옆에 붙어 있어도 재충돌을 놓치지 않는다.
     /// 장애물 목록의 순서는 단계마다 같다고 가정한다.
     pub reported: Vec<usize>,
 }
@@ -631,12 +639,12 @@ pub fn sweep(footprint: &Footprint, from: &Motion, to: &Motion, obstacles: &[Gro
 
 /// 운동 모델을 한 단계 적분하고 장애물 관통을 막는다.
 ///
-/// 경로가 장애물에 막히면 닿기 직전 자세에서 세우고 속도를 0으로 만든다.
+/// 경로가 장애물에 막히면 닿기 직전 자세로 옮기고 접촉점에 충격량을 줘(2-7) 튕기거나 벽을 따라 미끄러지게 한다.
 /// `contact`는 직전 단계까지의 접촉 상태이며 이번 단계 결과로 갱신된다.
 ///
 /// 충돌([`Impact`])은 이동이 실제로 막힌 단계에서만 반환한다. 장애물 가까이(접촉 거리 안)에
-/// 멈추거나 스쳐 지나가기만 하면 충돌이 아니다. 같은 장애물을 계속 밀어도 한 번만 반환하고,
-/// 그 장애물의 접촉 거리 밖으로 떨어진 뒤 다시 막히면 새 충돌로 반환한다. 중복 판정은 장애물마다
+/// 멈추거나 스쳐 지나가기만 하면 충돌이 아니다. 같은 장애물을 계속 밀거나 튕겼다 다시 닿아도 한 번만 반환하고,
+/// 그 장애물에서 [`REPORT_RELEASE_M`] 밖으로 떨어진 뒤 다시 막히면 새 충돌로 반환한다. 중복 판정은 장애물마다
 /// 따로 하므로, 다른 장애물에 붙어 있거나 다른 장애물에 새로 막혀도 각각 기록된다.
 pub fn step_with_obstacles(
     state: &mut VehicleState,
@@ -678,7 +686,35 @@ pub fn step_with_grid(
     )
 }
 
-/// 한 단계 적분과 관통 방지. `grid`가 있으면 그 후보만 검사하고 장애물 번호는 원래 목록 번호로 되돌린다.
+/// 한 단계 안에서 막힌 뒤 남은 시간을 다시 적분하는 최대 횟수(2-7, 임시값). 넘으면 남은 시간은 버린다.
+const MAX_CONTACT_PASSES: usize = 4;
+
+/// `from`→`to` 경로를 검사한다. `grid`가 있으면 그 후보만 검사하고 장애물 번호는 원래 목록 번호로 되돌린다.
+fn sweep_filtered(
+    footprint: &Footprint,
+    from: &Motion,
+    to: &Motion,
+    obstacles: &[GroundRect],
+    grid: Option<&ObstacleGrid>,
+) -> Sweep {
+    let Some(grid) = grid else {
+        return sweep(footprint, from, to, obstacles);
+    };
+    let indices = grid.candidates(footprint, from, travel_between(footprint, from, to));
+    let subset: Vec<GroundRect> = indices.iter().map(|&i| obstacles[i]).collect();
+    let found = sweep(footprint, from, to, &subset);
+    Sweep {
+        fraction: found.fraction,
+        blocked_by: found.blocked_by.map(|k| indices[k]),
+        contact: found.contact,
+    }
+}
+
+/// 한 단계 적분과 관통 방지, 충돌 반응(2-7). `grid`가 있으면 그 후보만 검사한다.
+///
+/// 경로가 막히면 닿기 직전 자세로 옮기고 접촉점에 충격량을 줘 속도·옆 미끄러짐·회전을 바꾼 뒤([`impulse::resolve`]),
+/// 남은 시간 동안 바뀐 속도로 다시 움직여 본다([`impulse::coast`], 최대 [`MAX_CONTACT_PASSES`]번).
+/// 벽을 비스듬히 밀면 이렇게 벽을 따라 미끄러진다. 관통 방지는 매번 같은 경로 검사로 한다.
 #[allow(clippy::too_many_arguments)]
 fn step_filtered(
     state: &mut VehicleState,
@@ -690,33 +726,38 @@ fn step_filtered(
     grid: Option<&ObstacleGrid>,
     contact: &mut ContactState,
 ) -> Option<Impact> {
-    let before = *motion;
     let speed_before = state.speed_mps();
+    let mut from = *motion;
     dynamics::step(state, motion, params, dt);
-    let speed_at_contact = state.speed_mps();
-    let candidates: Option<Vec<usize>> = grid.map(|grid| {
-        grid.candidates(
-            footprint,
-            &before,
-            travel_between(footprint, &before, motion),
-        )
-    });
-    let result = match &candidates {
-        None => sweep(footprint, &before, motion, obstacles),
-        Some(indices) => {
-            let subset: Vec<GroundRect> = indices.iter().map(|&i| obstacles[i]).collect();
-            let found = sweep(footprint, &before, motion, &subset);
-            Sweep {
-                fraction: found.fraction,
-                blocked_by: found.blocked_by.map(|k| indices[k]),
-                contact: found.contact,
-            }
+    let mut to = *motion;
+    let mut remaining = dt;
+    // 이번 단계에서 막은 장애물마다 (번호, 닿기 직전 충돌 정보).
+    let mut hits: Vec<(usize, Impact)> = Vec::new();
+    for pass in 0..MAX_CONTACT_PASSES {
+        let result = sweep_filtered(footprint, &from, &to, obstacles, grid);
+        let (Some(index), Some(touch)) = (result.blocked_by, result.contact) else {
+            *motion = to;
+            break;
+        };
+        *motion = pose_between(&from, &to, result.fraction);
+        hits.push((
+            index,
+            Impact {
+                speed_mps: state.speed_mps(),
+                x_m: motion.x_m,
+                z_m: motion.z_m,
+            },
+        ));
+        impulse::resolve(state, motion, params, footprint, &touch);
+        remaining *= 1.0 - result.fraction;
+        if pass + 1 == MAX_CONTACT_PASSES || remaining <= 0.0 {
+            break;
         }
-    };
-    if result.blocked() {
-        *motion = pose_between(&before, motion, result.fraction);
-        state.set_speed_mps(0.0);
-        motion.accel_mps2 = -speed_before / dt;
+        from = *motion;
+        to = impulse::coast(state, motion, params, remaining);
+    }
+    if !hits.is_empty() {
+        motion.accel_mps2 = (state.speed_mps() - speed_before) / dt;
     }
     let body = footprint.rect_at(motion);
     let near = |index: usize| {
@@ -724,24 +765,27 @@ fn step_filtered(
             .get(index)
             .is_some_and(|obstacle| body.overlaps(obstacle, CONTACT_MARGIN_M))
     };
-    contact.touching = match &candidates {
+    contact.touching = match grid {
         None => (0..obstacles.len()).any(near),
-        Some(indices) => indices.iter().any(|&index| near(index)),
+        Some(grid) => grid
+            .candidates(footprint, motion, 0.0)
+            .into_iter()
+            .any(near),
     };
-    contact.blocked = result.blocked();
-    contact.reported.retain(|&index| near(index));
-    let new_impact = match result.blocked_by {
-        Some(index) if !contact.reported.contains(&index) => {
+    contact.blocked = !hits.is_empty();
+    contact.reported.retain(|&index| {
+        obstacles
+            .get(index)
+            .is_some_and(|obstacle| body.overlaps(obstacle, REPORT_RELEASE_M))
+    });
+    let mut impact = None;
+    for (index, hit) in hits {
+        if !contact.reported.contains(&index) {
             contact.reported.push(index);
-            true
+            impact.get_or_insert(hit);
         }
-        _ => false,
-    };
-    new_impact.then_some(Impact {
-        speed_mps: speed_at_contact,
-        x_m: motion.x_m,
-        z_m: motion.z_m,
-    })
+    }
+    impact
 }
 
 #[cfg(test)]
@@ -860,11 +904,13 @@ mod tests {
         );
         let mut fast = full.clone();
         let mut impacts = 0;
+        // 충돌 뒤 멈출 때까지 제동하고 반대 기어로 바꾼다(2-7부터 충돌해도 바로 서지 않고 튕긴다).
+        let mut switch_gear = false;
         for tick in 0..64 * 90 {
             let input = VehicleInput {
-                throttle: 0.6,
+                throttle: if switch_gear { 0.0 } else { 0.6 },
+                brake: if switch_gear { 1.0 } else { 0.0 },
                 steering: (tick as f32 * 0.011).sin(),
-                ..VehicleInput::default()
             };
             full.0.set_input(input);
             fast.0.set_input(input);
@@ -892,7 +938,10 @@ mod tests {
             assert_eq!(full.0.speed_mps(), fast.0.speed_mps(), "tick {tick}");
             if a.is_some() {
                 impacts += 1;
-                // 막히면 반대 기어로 바꿔 계속 움직인다.
+                switch_gear = true;
+            }
+            if switch_gear && full.0.is_stopped() {
+                switch_gear = false;
                 let gear = if full.0.gear() == Gear::Drive {
                     Gear::Reverse
                 } else {
@@ -1082,10 +1131,15 @@ mod tests {
             throttle(),
             64 * 15,
         );
-        assert_eq!(impacts.len(), 1);
+        // 처음 부딪힌 속도는 최고 속도다. 튕겨 물러났다가 계속 가속해 다시 부딪히면(2-7) 그보다 느린 충돌로 더 센다.
+        assert!(!impacts.is_empty());
         assert_eq!(
             impacts[0].speed_mps,
             DynamicsParams::default().max_forward_speed_mps
+        );
+        assert!(
+            impacts[1..].iter().all(|impact| impact.speed_mps < 2.0),
+            "{impacts:?}"
         );
         assert!(motion.z_m > -31.0);
     }
@@ -1219,7 +1273,8 @@ mod tests {
         };
         let impacts = drive(&mut state, &mut motion, &mut contact, &pillar, driver, 640);
         assert_eq!(impacts.len(), 1);
-        assert_eq!(state.speed_mps(), 0.0);
+        // 기둥에 눌려 거의 멈춘다(충격량 반응 뒤 남는 아주 작은 속도는 정지 판정 안이다, 2-7).
+        assert!(state.is_stopped(), "speed {}", state.speed_mps());
     }
 
     /// 회전 중 검사 지점 사이에서만 모서리가 기둥을 스치는 경우도 막는지 확인한다(검토 지적 사례).
@@ -1518,5 +1573,97 @@ mod tests {
         // 차가 장애물 쪽(법선 반대)으로 움직이고 있었다.
         let travel = Vec2::new(to.x_m - from.x_m, to.z_m - from.z_m);
         assert!(travel.dot(contact.normal) < 0.0, "{contact:?}");
+    }
+
+    /// 5 m/s로 30° 비스듬히 벽에 부딪히면 그 자리에 서지 않고 벽을 따라 조금 미끄러진 뒤 멈추며, 관통하지 않는지 확인한다(2-7).
+    /// 바퀴가 곧으면 타이어 옆 마찰이 커서 길게 미끄러지지 않고, 저속으로 미는 것만으로는 미끄러지지 않는다(임시 모델).
+    #[test]
+    fn oblique_hit_slides_along_wall() {
+        let wall = [wall_ahead(1.0, 0.5)];
+        let mut state = ready_in(Gear::Drive);
+        state.set_speed_mps(5.0);
+        let mut motion = Motion {
+            heading_rad: 30f32.to_radians(),
+            ..Motion::default()
+        };
+        let mut contact = ContactState::default();
+        let impacts = drive(
+            &mut state,
+            &mut motion,
+            &mut contact,
+            &wall,
+            VehicleInput::default(),
+            64 * 3,
+        );
+        assert_eq!(impacts.len(), 1, "{impacts:?}");
+        // 처음 닿은 곳에서 벽을 따라 왼쪽(-X)으로 0.3 m 넘게 미끄러진 뒤, 타이어 옆 마찰로 멈춘다.
+        assert!(motion.x_m < impacts[0].x_m - 0.3, "{impacts:?} {motion:?}");
+        assert_eq!(state.speed_mps(), 0.0);
+        assert!(!motion.sliding(), "{motion:?}");
+    }
+
+    /// 정면 벽에 빠르게 부딪히면 잠깐 뒤로 튕기고, 입력이 없으면 벽 앞에서 멈추는지 확인한다(2-7 반발).
+    #[test]
+    fn fast_head_on_hit_bounces_back() {
+        let wall = [wall_ahead(0.5, 0.5)];
+        let mut state = ready_in(Gear::Drive);
+        state.set_speed_mps(5.0);
+        let mut motion = Motion::default();
+        let mut contact = ContactState::default();
+        let impacts = drive(
+            &mut state,
+            &mut motion,
+            &mut contact,
+            &wall,
+            VehicleInput::default(),
+            8,
+        );
+        assert_eq!(impacts.len(), 1);
+        assert!(state.speed_mps() < -0.5, "speed {}", state.speed_mps());
+        drive(
+            &mut state,
+            &mut motion,
+            &mut contact,
+            &wall,
+            VehicleInput::default(),
+            64 * 5,
+        );
+        assert_eq!(state.speed_mps(), 0.0);
+        assert!(motion.z_m > 0.0, "moved back from the wall: {motion:?}");
+    }
+
+    /// 기둥 모서리에 비켜 부딪혀 생긴 옆 미끄러짐·추가 회전이 입력 없이도 곧 0으로 사라지는지 확인한다(2-7 타이어 복원).
+    #[test]
+    fn spin_from_offset_hit_dies_out() {
+        // 차체 오른쪽 앞 모서리(x=0.9)만 걸리는 작은 기둥.
+        let pillar = [GroundRect::axis_aligned(
+            Vec2::new(1.0, -4.5),
+            Vec2::new(0.4, 0.4),
+        )];
+        let mut state = ready_in(Gear::Drive);
+        state.set_speed_mps(6.0);
+        let mut motion = Motion::default();
+        let mut contact = ContactState::default();
+        let impacts = drive(
+            &mut state,
+            &mut motion,
+            &mut contact,
+            &pillar,
+            VehicleInput::default(),
+            16,
+        );
+        assert_eq!(impacts.len(), 1);
+        assert!(motion.sliding(), "{motion:?}");
+        // 오른쪽 앞이 걸리므로 오른쪽으로 돈다(heading 감소).
+        assert!(motion.heading_rad < -0.01, "{motion:?}");
+        drive(
+            &mut state,
+            &mut motion,
+            &mut contact,
+            &pillar,
+            VehicleInput::default(),
+            64 * 2,
+        );
+        assert!(!motion.sliding(), "{motion:?}");
     }
 }

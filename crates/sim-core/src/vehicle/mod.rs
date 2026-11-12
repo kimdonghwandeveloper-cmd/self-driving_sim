@@ -3,6 +3,7 @@
 pub mod calibration;
 pub mod collision;
 pub mod dynamics;
+pub mod impulse;
 pub mod state;
 
 pub use collision::{ContactState, GroundRect, Obstacle, VEHICLE_FOOTPRINT};

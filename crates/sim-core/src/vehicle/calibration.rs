@@ -77,6 +77,9 @@ pub enum ActiveTrial {
 pub struct CalibrationLog {
     /// 진행 중인 제동 시험.
     brake: Option<Trial>,
+    /// 제동 중 장애물에 막혀 제동 시험을 버렸는지. 제동을 떼거나 멈출 때까지 새 제동 시험을 시작하지 않는다
+    /// (충돌로 튕겨 나온 속도에서 다시 시작하지 않게, 2-7).
+    brake_spoiled: bool,
     /// 진행 중인 가속 시험.
     accel: Option<Trial>,
     /// 직전 단계의 부호 있는 속도(m/s). 시험 시작 속도로 쓴다.
@@ -126,6 +129,7 @@ impl CalibrationLog {
     /// 시작 위치 복귀 후 진행 중인 시험을 버리고 기준 위치·속도를 다시 잡는다. 끝난 결과는 유지한다.
     pub fn restart_from(&mut self, state: &VehicleState, motion: &Motion) {
         self.brake = None;
+        self.brake_spoiled = false;
         self.accel = None;
         self.prev_speed_mps = state.speed_mps();
         self.prev_pos = (motion.x_m, motion.z_m);
@@ -135,6 +139,7 @@ impl CalibrationLog {
     ///
     /// - 제동 시험: 움직이는 중 가속 없이 제동 입력이나 비상 정지 감속이 생기면 시작하고, 속도가 0이 되면 끝난다.
     ///   정지하는 단계까지 제동(또는 비상 정지)이 유지되지 않았거나, 장애물에 막혀 이동이 잘리면 결과 없이 버린다.
+    ///   막혀서 버린 뒤에는 제동을 떼거나 멈출 때까지 새 제동 시험을 시작하지 않는다(튕겨 나온 속도는 시험이 아님).
     /// - 가속 시험: 정지 상태에서 가속이 허용된 입력이 생기면 시작하고, 가속을 떼거나 최고 속도에 닿으면 끝난다.
     ///   장애물에 막혀 이동이 잘리면 결과 없이 버린다.
     ///
@@ -179,7 +184,10 @@ impl CalibrationLog {
         blocked: bool,
         dt: f32,
     ) {
-        if self.brake.is_none() && braking && self.prev_speed_mps != 0.0 {
+        if !braking || self.prev_speed_mps == 0.0 {
+            self.brake_spoiled = false;
+        }
+        if self.brake.is_none() && braking && !self.brake_spoiled && self.prev_speed_mps != 0.0 {
             self.brake = Some(Trial::new(self.prev_speed_mps.abs()));
         }
         let Some(mut trial) = self.brake else {
@@ -188,6 +196,7 @@ impl CalibrationLog {
         // 이번 단계에 제동이 유지되지 않았으면(관성만으로 멈춘 경우 포함) 정지 여부보다 먼저 버린다.
         if blocked || !braking {
             self.brake = None;
+            self.brake_spoiled = blocked && braking && speed != 0.0;
             return;
         }
         trial.distance_m += step_m;
