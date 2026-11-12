@@ -68,6 +68,8 @@ func _run() -> void:
 	map._clear_route()
 	_check(map.points.is_empty() and map.start_box.edit.text == "", "경로 지우기가 점·칸을 비우지 않음")
 	map.draw_toggle.button_pressed = true
+	# 선 점은 화면 4 px 이상 움직일 때만 더하므로, 헤드리스의 작은 화면에서도 m 단위로 촘촘히 그려지게 크게 확대한다.
+	map.camera.zoom = Vector2.ONE * 2.0
 	_draw_line(map, clicked_line)
 	route = picker.call("route")
 	_check(route.ok, "선 그리기 경로 계산 실패: " + str(route.error) + " / " + map.feedback)
