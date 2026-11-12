@@ -121,6 +121,8 @@ pub struct ScenarioRun {
     travel_m: f32,
     /// 시작 뒤 새로 시작된 충돌 횟수.
     collisions: u32,
+    /// 시작 뒤 가장 큰 충돌 속도 변화(m/s, 2-7). 충돌이 없으면 0.
+    max_impact_delta_v_mps: f32,
     /// 지금 단계 번호. 모든 단계를 끝내면 단계 수와 같다.
     step: usize,
     /// 끝낸 단계마다 끝낸 틱.
@@ -162,6 +164,7 @@ impl ScenarioRun {
             ticks: 0,
             travel_m: 0.0,
             collisions: 0,
+            max_impact_delta_v_mps: 0.0,
             step: 0,
             step_done_ticks: Vec::new(),
             message: None,
@@ -219,6 +222,11 @@ impl ScenarioRun {
         self.collisions
     }
 
+    /// 시작 뒤 가장 큰 충돌 속도 변화(m/s, 2-7). 충돌이 없으면 0. 크기는 시뮬레이터 임시값으로 계산한 값이다.
+    pub fn max_impact_delta_v_mps(&self) -> f32 {
+        self.max_impact_delta_v_mps
+    }
+
     /// 끝낸 단계 수.
     pub fn steps_done(&self) -> usize {
         self.step
@@ -264,6 +272,7 @@ impl ScenarioRun {
                 self.ticks = 0;
                 self.travel_m = 0.0;
                 self.collisions = 0;
+                self.max_impact_delta_v_mps = 0.0;
                 self.step = 0;
                 self.step_done_ticks.clear();
                 self.fired.fill(false);
@@ -290,8 +299,9 @@ impl ScenarioRun {
         let mut updates = Vec::new();
         self.ticks += 1;
         self.travel_m += drive.state().speed_mps().abs() * DT;
-        if report.collided.is_some() {
+        if let Some(hit) = report.collided {
             self.collisions += 1;
+            self.max_impact_delta_v_mps = self.max_impact_delta_v_mps.max(hit.delta_v_mps);
         }
         while let Some(step) = self.def.steps.get(self.step) {
             if !self.holds(&step.done, drive) {
@@ -573,6 +583,7 @@ mod tests {
         });
         let updates = run_ticks(&mut run, &mut drive, 64 * 120);
         assert_eq!(run.collisions(), 1);
+        assert!(run.max_impact_delta_v_mps() > 0.0);
         assert_eq!(
             updates.last(),
             Some(&ScenarioUpdate::Finished(Outcome::Collisions))

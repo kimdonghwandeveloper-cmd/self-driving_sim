@@ -375,7 +375,8 @@ impl SimVehicle {
     /// 시나리오 HUD 값(계약 v1.4). 시나리오가 없으면 `{active: false}`만 돌려준다.
     /// `active`, `title`, `briefing`, `phase`(계약 이름), `phase_text`(한국어), `outcome`(끝났을 때만, 아니면 빈 문자열),
     /// `step_index`(지금 단계 번호, 다 끝냈으면 단계 수), `step_count`, `guide`(지금 단계 안내, 다 끝냈으면 빈 문자열),
-    /// `elapsed_s`, `time_limit_s`(없으면 -1), `collisions`, `max_collisions`(없으면 -1), `message`(없으면 빈 문자열).
+    /// `elapsed_s`, `time_limit_s`(없으면 -1), `collisions`, `max_collisions`(없으면 -1), `message`(없으면 빈 문자열),
+    /// (v1.8) `max_impact_delta_v_mps`(시작 뒤 가장 큰 충돌 속도 변화 m/s, 없으면 0).
     #[func]
     fn scenario_status(&self) -> VarDictionary {
         let Some(run) = &self.run else {
@@ -401,6 +402,7 @@ impl SimVehicle {
             "time_limit_s" => def.end.time_limit_s.map_or(-1.0, f64::from),
             "collisions" => i64::from(run.collisions()),
             "max_collisions" => def.end.max_collisions.map_or(-1, i64::from),
+            "max_impact_delta_v_mps" => f64::from(run.max_impact_delta_v_mps()),
             "message" => run.message().unwrap_or(""),
         }
     }
@@ -500,6 +502,24 @@ impl SimVehicle {
             .iter()
             .map(GString::from)
             .collect()
+    }
+
+    /// 마지막 충돌(계약 v1.8, 2-7). 없거나 시작 위치 복귀 뒤면 빈 사전.
+    /// `tick`은 충돌한 틱 번호, 크기(`normal_speed_mps`·`impulse_ns`·`delta_v_mps`)는 시뮬레이터 임시값으로 계산한 값,
+    /// `point`는 접촉점(높이 0)이다.
+    #[func]
+    fn last_impact(&self) -> VarDictionary {
+        let Some((tick, hit)) = self.session.as_ref().and_then(DriveSession::last_impact) else {
+            return VarDictionary::new();
+        };
+        vdict! {
+            "tick" => tick as i64,
+            "speed_mps" => f64::from(hit.speed_mps),
+            "normal_speed_mps" => f64::from(hit.normal_speed_mps),
+            "impulse_ns" => f64::from(hit.impulse_ns),
+            "delta_v_mps" => f64::from(hit.delta_v_mps),
+            "point" => Vector3::new(hit.contact_x_m, 0.0, hit.contact_z_m),
+        }
     }
 
     /// 장애물·연석과 접촉한 상태인지.

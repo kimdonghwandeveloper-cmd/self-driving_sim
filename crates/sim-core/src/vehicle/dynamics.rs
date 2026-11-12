@@ -85,6 +85,20 @@ pub struct DynamicsParams {
     pub steer_return: SteerReturn,
     /// `auto`에서 입력을 놓았을 때 0도로 돌아가는 속도(도/s). `hold`에서는 쓰지 않는다.
     pub steer_return_rate_deg_s: f32,
+    /// 수직축 회전 관성(kg·m², 2-7). 충돌 충격량이 차를 얼마나 돌리는지 정한다. 기본은 질량 3000 kg 직사각형 차체
+    /// 4.2×1.8 m의 `m(L²+W²)/12` ≈ 5220.
+    pub yaw_inertia_kg_m2: f32,
+    /// 충돌 반발 계수(0..=1, 2-7). 0이면 튕기지 않고, 1이면 닿는 방향 속도를 그대로 되돌린다.
+    pub restitution: f32,
+    /// 닿는 방향 속도가 이보다 느리면(m/s, 0 허용) 반발 없이 붙는다(2-7). 벽을 계속 밀 때 떨림을 막는다.
+    pub bounce_min_speed_mps: f32,
+    /// 차체–장애물 마찰 계수(0 허용, 2-7). 벽을 따라 미끄러질 때 접선 방향 속도를 줄인다.
+    pub body_friction_coeff: f32,
+    /// 타이어 옆방향 마찰 계수(2-7). 충돌로 생긴 옆 미끄러짐·회전을 `계수 × g`로 줄여 평소 주행으로 되돌린다.
+    pub tire_lateral_friction_coeff: f32,
+    /// 충돌 속도 변화(Δv, m/s)가 이 값 이상이면 비상 정지를 건다(2-7, 임시 규칙). 0이면 끔(기본값).
+    /// 실차가 충돌 때 스스로 비상 정지하는지 확인하지 못해 기본은 끈다.
+    pub impact_emergency_delta_v_mps: f32,
 }
 
 impl Default for DynamicsParams {
@@ -109,6 +123,12 @@ impl Default for DynamicsParams {
             steer_sensitivity: 1.0,
             steer_return: SteerReturn::Auto,
             steer_return_rate_deg_s: 60.0,
+            yaw_inertia_kg_m2: 5220.0,
+            restitution: 0.2,
+            bounce_min_speed_mps: 0.5,
+            body_friction_coeff: 0.3,
+            tire_lateral_friction_coeff: 0.7,
+            impact_emergency_delta_v_mps: 0.0,
         }
     }
 }
@@ -123,6 +143,12 @@ impl DynamicsParams {
             (
                 "understeer_gradient_rad_per_g",
                 self.understeer_gradient_rad_per_g,
+            ),
+            ("bounce_min_speed_mps", self.bounce_min_speed_mps),
+            ("body_friction_coeff", self.body_friction_coeff),
+            (
+                "impact_emergency_delta_v_mps",
+                self.impact_emergency_delta_v_mps,
             ),
         ] {
             if !(value.is_finite() && value >= 0.0) {
@@ -145,12 +171,23 @@ impl DynamicsParams {
             ("steer_rate_deg_s", self.steer_rate_deg_s),
             ("steer_sensitivity", self.steer_sensitivity),
             ("steer_return_rate_deg_s", self.steer_return_rate_deg_s),
+            ("yaw_inertia_kg_m2", self.yaw_inertia_kg_m2),
+            (
+                "tire_lateral_friction_coeff",
+                self.tire_lateral_friction_coeff,
+            ),
         ] {
             if !(value.is_finite() && value > 0.0) {
                 return Err(format!(
                     "dynamics.{name} must be a positive number, got {value}"
                 ));
             }
+        }
+        if !(0.0..=1.0).contains(&self.restitution) {
+            return Err(format!(
+                "dynamics.restitution must be between 0 and 1, got {}",
+                self.restitution
+            ));
         }
         if self.max_steer_angle_deg > MAX_STEER_ANGLE_LIMIT_DEG {
             return Err(format!(
@@ -236,6 +273,10 @@ pub struct Motion {
     pub accel_mps2: f32,
     /// 실제 바퀴 조향각(rad, 양수=우). 입력을 조향 속도 제한으로 따라간다.
     pub steer_angle_rad: f32,
+    /// 충돌로 생긴 후륜축의 옆 미끄러짐 속도(m/s, 양수=오른쪽, 2-7). 평소 주행에서는 0이다.
+    pub lateral_mps: f32,
+    /// 충돌로 생긴, 조향이 정하는 회전 외의 추가 회전 속도(rad/s, heading 증가 방향=왼쪽, 2-7). 평소 주행에서는 0이다.
+    pub slip_yaw_rate_rad_s: f32,
 }
 
 impl Motion {
@@ -243,6 +284,17 @@ impl Motion {
     pub fn forward(&self) -> (f32, f32) {
         let (sin, cos) = self.heading_rad.sin_cos();
         (-sin, -cos)
+    }
+
+    /// 차량 오른쪽 단위 벡터(x, z)를 반환한다.
+    pub fn right(&self) -> (f32, f32) {
+        let (sin, cos) = self.heading_rad.sin_cos();
+        (cos, -sin)
+    }
+
+    /// 충돌로 생긴 옆 미끄러짐이나 추가 회전이 남아 있는지 반환한다.
+    pub fn sliding(&self) -> bool {
+        self.lateral_mps != 0.0 || self.slip_yaw_rate_rad_s != 0.0
     }
 }
 
@@ -267,11 +319,37 @@ pub fn step(state: &mut VehicleState, motion: &mut Motion, params: &DynamicsPara
     }
 
     // 우조향(양수)이면 전진 시 heading이 줄어든다. 후진이면 속도 부호로 회전 방향이 자동으로 바뀐다.
-    let yaw_rate = -next_speed * params.path_curvature(next_speed, motion.steer_angle_rad);
+    let yaw_rate = steering_yaw_rate(params, next_speed, motion.steer_angle_rad);
     motion.heading_rad = wrap_angle(motion.heading_rad + yaw_rate * dt);
     let (forward_x, forward_z) = motion.forward();
     motion.x_m += forward_x * next_speed * dt;
     motion.z_m += forward_z * next_speed * dt;
+    // 충돌로 생긴 미끄러짐이 없으면 아래를 건너뛰어 평소 주행 결과가 예전과 비트 단위로 같다.
+    if motion.sliding() {
+        slide(motion, params, dt);
+    }
+}
+
+/// 충돌로 생긴 옆 미끄러짐·추가 회전만큼 자세를 옮기고, 타이어 옆방향 마찰로 두 값을 0 쪽으로 줄인다(2-7).
+///
+/// 옆 미끄러짐은 `μ·g`로 줄인다. 추가 회전은 앞·뒤 바퀴가 무게중심에서 축간거리 절반 떨어져 반씩 무게를 받는다고 보고
+/// `μ·m·g·(L/2) ÷ I`로 줄인다. 둘 다 0을 넘어 반대로 돌지 않는다. 실차 타이어 특성을 반영하지 않은 임시 모델이다.
+fn slide(motion: &mut Motion, params: &DynamicsParams, dt: f32) {
+    motion.heading_rad = wrap_angle(motion.heading_rad + motion.slip_yaw_rate_rad_s * dt);
+    let (right_x, right_z) = motion.right();
+    motion.x_m += right_x * motion.lateral_mps * dt;
+    motion.z_m += right_z * motion.lateral_mps * dt;
+    let grip = params.tire_lateral_friction_coeff * GRAVITY_MPS2;
+    let yaw_grip = grip * params.mass_kg * params.wheelbase_m / 2.0 / params.yaw_inertia_kg_m2;
+    motion.lateral_mps = approach_zero(motion.lateral_mps, grip * dt);
+    motion.slip_yaw_rate_rad_s = approach_zero(motion.slip_yaw_rate_rad_s, yaw_grip * dt);
+}
+
+/// 속도 `speed_mps`·조향각 `steer_angle_rad`에서 조향이 정하는 회전 속도(rad/s, heading 증가 방향)를 계산한다.
+///
+/// [`step`]이 자세를 돌리는 식과 같다. 우조향(양수)이면 전진 시 heading이 줄어든다.
+pub fn steering_yaw_rate(params: &DynamicsParams, speed_mps: f32, steer_angle_rad: f32) -> f32 {
+    -speed_mps * params.path_curvature(speed_mps, steer_angle_rad)
 }
 
 /// 조향 입력(-1..=1)에 조향 감도를 곱해 -1..=1 범위의 조향 지령으로 바꾼다.
@@ -305,6 +383,7 @@ fn steer_target(steering: f32, current_rad: f32, params: &DynamicsParams) -> Opt
 /// - 제동·관성·비상 정지·구름/공기 저항 감속은 각 성분을 더한 값으로, 항상 속도를 0 쪽으로만 당기며
 ///   0을 넘지 않는다. 저항 때문에 차가 반대로 움직이지 않는다.
 /// - 최고 속도 상한은 감속을 적용한 뒤에 자르므로, 구동이 저항보다 크면 정확히 상한을 유지한다.
+///   충돌로 튕겨 이미 상한보다 빠른 속도는 자르지 않는다(감속으로만 줄어든다, 2-7).
 fn longitudinal_speed(state: &VehicleState, params: &DynamicsParams, speed: f32, dt: f32) -> f32 {
     if state.gear() == Gear::Park {
         return 0.0;
@@ -325,8 +404,12 @@ fn longitudinal_speed(state: &VehicleState, params: &DynamicsParams, speed: f32,
     if state.engine() == EngineState::EmergencyStop {
         decel += params.emergency_decel_mps2;
     }
-    next = approach_zero(next, decel * dt)
-        .clamp(-params.max_reverse_speed_mps, params.max_forward_speed_mps);
+    // 최고 속도는 구동으로 넘지 못하게 하는 한계다. 충돌로 튕겨 이미 그보다 빠르면(2-7) 자르지 않고 감속으로만 줄인다.
+    // 평소에는 속도가 늘 범위 안이므로 결과가 예전과 같다.
+    next = approach_zero(next, decel * dt).clamp(
+        (-params.max_reverse_speed_mps).min(speed),
+        params.max_forward_speed_mps.max(speed),
+    );
     if drive_accel == 0.0 && next.abs() < REST_SPEED_MPS {
         next = 0.0;
     }
@@ -864,6 +947,23 @@ mod tests {
         }
         assert_eq!(state.speed_mps(), 2.0);
         assert!((-motion.z_m - 4.0).abs() < 1e-3, "z={}", motion.z_m);
+    }
+
+    /// 충돌로 튕겨 후진 최고 속도보다 빠르게 뒤로 움직이면 잘리지 않고 감속으로만 줄어드는지 확인한다(2-7).
+    #[test]
+    fn bounce_beyond_speed_limit_is_not_clipped() {
+        let params = DynamicsParams::default();
+        let mut state = ready_in(Gear::Drive);
+        state.set_speed_mps(-3.0);
+        let mut motion = Motion::default();
+        step(&mut state, &mut motion, &params, DT);
+        let decel = params.coast_decel_mps2 + params.resistance_decel_mps2(-3.0);
+        assert!(
+            (state.speed_mps() - (-3.0 + decel * DT)).abs() < 1e-4,
+            "{}",
+            state.speed_mps()
+        );
+        assert!(state.speed_mps() < -params.max_reverse_speed_mps);
     }
 
     /// 각도 정규화가 -π..=π 범위를 유지하는지 확인한다.
