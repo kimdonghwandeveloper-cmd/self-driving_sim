@@ -58,7 +58,7 @@ func _run() -> void:
 		_check(saved.ok, "경로 저장 실패: " + str(saved.error))
 		if saved.ok:
 			var text := FileAccess.get_file_as_string(str(saved.path))
-			_check(text.contains("cache/regions/"), "경로 파일이 지역 스냅샷을 가리키지 않음: " + text)
+			_check(text.contains("snapshot = \"../regions/"), "경로 파일이 지역 스냅샷을 가리키지 않음: " + text)
 			var built: Dictionary = ClassDB.class_call_static("SimCourse", "build", "map:cache/routes/%s.toml" % SAVED)
 			_check(built.get("ok", false), "저장 경로로 코스 만들기 실패: " + str(built.get("error", "")))
 			DirAccess.remove_absolute(str(saved.path))
