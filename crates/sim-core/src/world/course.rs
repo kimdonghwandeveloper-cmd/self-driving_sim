@@ -78,11 +78,13 @@ impl CourseId {
     }
 }
 
-/// 충돌 경계 종류. 화면 색과 높이만 다르고 판정 방식은 같다.
+/// 충돌 경계 종류. 화면 색과 높이만 다르고 판정 방식은 같다(낮은 연석만 저속에서 넘을 수 있다).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ColliderKind {
     /// 차로 양옆의 낮은 연석(주행 경계).
     Curb,
+    /// 저속([`crate::vehicle::collision::LOW_CURB_PASS_SPEED_MPS`] 이하)에서 넘을 수 있는 연석(4-11b, 사용자 제작 맵 도로).
+    LowCurb,
     /// 코스 끝을 막는 벽.
     Wall,
     /// 좁은 통로를 만드는 가벽.

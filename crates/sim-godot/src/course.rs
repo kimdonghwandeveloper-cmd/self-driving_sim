@@ -51,7 +51,7 @@ fn marking_kind(kind: MarkingKind) -> &'static str {
 /// 충돌 경계 종류의 계약 이름을 반환한다.
 fn collider_kind(kind: ColliderKind) -> &'static str {
     match kind {
-        ColliderKind::Curb => "curb",
+        ColliderKind::Curb | ColliderKind::LowCurb => "curb",
         ColliderKind::Wall => "wall",
         ColliderKind::Barrier => "barrier",
         ColliderKind::Obstacle => "obstacle",

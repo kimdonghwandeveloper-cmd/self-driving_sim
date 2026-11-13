@@ -26,6 +26,8 @@ pub const CONTACT_MARGIN_M: f32 = 0.02;
 /// 충돌을 보고한 장애물에서 이만큼(m) 떨어져야 다시 닿을 때 새 충돌로 본다(2-7, 임시값).
 /// 충돌로 튕겨 조금 물러났다 다시 닿는 것을 새 충돌로 세지 않기 위한 거리다.
 pub const REPORT_RELEASE_M: f32 = 0.3;
+/// 낮은 연석([`ObstacleGrid::with_low_curbs`])을 넘을 수 있는 최대 속력(m/s, 약 9 km/h, 4-11b 임시값).
+pub const LOW_CURB_PASS_SPEED_MPS: f32 = 2.5;
 /// 장애물 격자([`ObstacleGrid`]) 한 칸의 크기(m).
 const GRID_CELL_M: f32 = 8.0;
 /// 격자 후보에서 뺄 장애물의 최소 여유(m). 분리축 거리는 실제 거리의 1/√2까지 작을 수 있으므로
@@ -369,11 +371,21 @@ pub struct ObstacleGrid {
     cells: Vec<Vec<u32>>,
     /// 장애물마다 감싸는 원(중심, 반지름).
     bounds: Vec<(Vec2, f32)>,
+    /// 장애물마다 저속에서 넘을 수 있는 낮은 연석인지(4-11b).
+    low_curbs: Vec<bool>,
 }
 
 impl ObstacleGrid {
-    /// 장애물 목록으로 격자를 만든다. 목록이 비면 칸 없는 격자다.
+    /// 장애물 목록으로 격자를 만든다. 목록이 비면 칸 없는 격자다. 모든 장애물이 항상 막는다.
     pub fn new(rects: Vec<GroundRect>) -> Self {
+        let low_curbs = vec![false; rects.len()];
+        Self::with_low_curbs(rects, low_curbs)
+    }
+
+    /// [`Self::new`]와 같되, `low_curbs[i]`가 참인 장애물은 저속([`LOW_CURB_PASS_SPEED_MPS`] 이하)이거나
+    /// 이미 차체와 겹쳐 있으면(올라탄 채 넘는 중) 막지 않는 낮은 연석이다(4-11b). 길이가 다르면 모자란 쪽은 막는다.
+    pub fn with_low_curbs(rects: Vec<GroundRect>, mut low_curbs: Vec<bool>) -> Self {
+        low_curbs.resize(rects.len(), false);
         let bounds: Vec<(Vec2, f32)> = rects
             .iter()
             .map(|rect| (rect.center, rect.half_size.length()))
@@ -390,6 +402,7 @@ impl ObstacleGrid {
                 rows: 0,
                 cells: Vec::new(),
                 bounds,
+                low_curbs,
             };
         };
         let max = bounds
@@ -405,6 +418,7 @@ impl ObstacleGrid {
             rows,
             cells: vec![Vec::new(); cols * rows],
             bounds,
+            low_curbs,
         };
         for index in 0..grid.bounds.len() {
             let (center, radius) = grid.bounds[index];
@@ -417,6 +431,14 @@ impl ObstacleGrid {
             }
         }
         grid
+    }
+
+    /// 장애물 `index`가 차체 `body`, 속력 `speed_mps`에서 넘을 수 있는 낮은 연석인지 반환한다.
+    /// 저속이거나 이미 차체와 겹친(올라탄) 낮은 연석이면 참이다.
+    fn passable(&self, index: usize, body: &GroundRect, speed_mps: f32) -> bool {
+        self.low_curbs[index]
+            && (speed_mps.abs() <= LOW_CURB_PASS_SPEED_MPS
+                || body.overlaps(&self.rects[index], 0.0))
     }
 
     /// 장애물 목록(원래 순서)을 반환한다.
@@ -674,6 +696,7 @@ pub fn step_with_obstacles(
 ///
 /// 후보에서 빠진 장애물은 이 단계에서 닿거나 접촉 거리 안에 들 수 없으므로 결과(자세·속도·충돌·접촉 상태,
 /// 장애물 번호)는 전체 목록 검사와 같다. 충돌 경계가 많은 지도 코스에서 한 단계 비용을 줄인다.
+/// 예외로, 격자의 낮은 연석([`ObstacleGrid::with_low_curbs`])은 저속이거나 이미 올라탄 동안 막지도 접촉으로 보지도 않는다.
 pub fn step_with_grid(
     state: &mut VehicleState,
     motion: &mut Motion,
@@ -700,17 +723,21 @@ pub fn step_with_grid(
 const MAX_CONTACT_PASSES: usize = 4;
 
 /// `from`→`to` 경로를 검사한다. `grid`가 있으면 그 후보만 검사하고 장애물 번호는 원래 목록 번호로 되돌린다.
+/// 속력 `speed_mps`에서 넘을 수 있는 낮은 연석은 후보에서 뺀다.
 fn sweep_filtered(
     footprint: &Footprint,
     from: &Motion,
     to: &Motion,
     obstacles: &[GroundRect],
     grid: Option<&ObstacleGrid>,
+    speed_mps: f32,
 ) -> Sweep {
     let Some(grid) = grid else {
         return sweep(footprint, from, to, obstacles);
     };
-    let indices = grid.candidates(footprint, from, travel_between(footprint, from, to));
+    let body = footprint.rect_at(from);
+    let mut indices = grid.candidates(footprint, from, travel_between(footprint, from, to));
+    indices.retain(|&index| !grid.passable(index, &body, speed_mps));
     let subset: Vec<GroundRect> = indices.iter().map(|&i| obstacles[i]).collect();
     let found = sweep(footprint, from, to, &subset);
     Sweep {
@@ -744,7 +771,7 @@ fn step_filtered(
     // 이번 단계에서 막은 장애물마다 (번호, 닿기 직전 충돌 정보).
     let mut hits: Vec<(usize, Impact)> = Vec::new();
     for pass in 0..MAX_CONTACT_PASSES {
-        let result = sweep_filtered(footprint, &from, &to, obstacles, grid);
+        let result = sweep_filtered(footprint, &from, &to, obstacles, grid, state.speed_mps());
         let (Some(index), Some(touch)) = (result.blocked_by, result.contact) else {
             *motion = to;
             break;
@@ -800,6 +827,7 @@ fn step_filtered(
         Some(grid) => grid
             .candidates(footprint, motion, 0.0)
             .into_iter()
+            .filter(|&index| !grid.passable(index, &body, state.speed_mps()))
             .any(near),
     };
     contact.blocked = !hits.is_empty();
@@ -1768,6 +1796,56 @@ mod tests {
                 "stuck at {angle_deg} {steering}: {motion:?} speed {}",
                 state.speed_mps()
             );
+        }
+    }
+
+    /// 격자의 낮은 연석은 저속이면 넘어가고(올라탄 채 빨라져도 끝까지 넘는다) 빠르면 막는다.
+    /// 보통 장애물은 저속에서도 막는다(4-11b).
+    #[test]
+    fn low_curbs_pass_only_at_low_speed() {
+        let params = DynamicsParams::default();
+        let across = |z: f32| GroundRect::axis_aligned(Vec2::new(0.0, z), Vec2::new(10.0, 0.5));
+        // (가로지른 장애물 중심 z, 낮은 연석인지, 넘어가야 하는지). 앞 범퍼는 z = -3.5에서 출발한다.
+        for (z, low, passes) in [
+            (-4.5f32, true, true),
+            (-20.0, true, false),
+            (-4.5, false, false),
+        ] {
+            let grid = ObstacleGrid::with_low_curbs(vec![across(z)], vec![low]);
+            let mut state = ready_in(Gear::Drive);
+            state.set_input(VehicleInput {
+                throttle: 1.0,
+                ..VehicleInput::default()
+            });
+            let mut motion = Motion::default();
+            let mut contact = ContactState::default();
+            let mut impact = None;
+            for _ in 0..64 * 8 {
+                impact = step_with_grid(
+                    &mut state,
+                    &mut motion,
+                    &params,
+                    DT,
+                    &VEHICLE_FOOTPRINT,
+                    &grid,
+                    &mut contact,
+                );
+                if impact.is_some() {
+                    break;
+                }
+            }
+            if passes {
+                assert!(motion.z_m < z - 2.0, "did not cross at {z}: {motion:?}");
+                assert!(state.speed_mps() > LOW_CURB_PASS_SPEED_MPS);
+            } else {
+                let hit = impact.unwrap_or_else(|| panic!("not blocked at {z} {low}: {motion:?}"));
+                if low {
+                    assert!(hit.speed_mps > LOW_CURB_PASS_SPEED_MPS, "{hit:?}");
+                } else {
+                    assert!(hit.speed_mps <= LOW_CURB_PASS_SPEED_MPS, "{hit:?}");
+                }
+                assert!(motion.z_m > z, "{motion:?}");
+            }
         }
     }
 }
