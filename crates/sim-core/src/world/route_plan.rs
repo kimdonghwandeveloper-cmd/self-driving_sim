@@ -181,7 +181,7 @@ pub struct RouteFile {
     pub allowed_highways: Vec<String>,
     /// 사용자가 찍은 점 [위도, 경도](deg). 시작·경유·끝 순서.
     pub points: Vec<[f64; 2]>,
-    /// 경로 노드 ID 순서. `[2^62, 2^63)`은 찍은 점을 붙인 가상 노드이고 `2^63` 이상은 지역 보정 합성 노드다.
+    /// 경로 노드 ID 순서. `2^62`부터의 낮은 값은 찍은 점을 붙인 가상 노드이고 `[3×2^61, 2^63)`은 지역 보정 합성 노드다.
     pub nodes: Vec<u64>,
     /// 코스 전체에 쓰는 폭(m).
     pub width_m: f32,
@@ -1094,13 +1094,31 @@ pub fn load_route_course_with_patch_dir(
     }
     let graph = map_patch_graph::apply_map_patches(&snapshot.ways, &selected)
         .map_err(|error| format!("cannot rebuild route map patches: {error}"))?;
-    build_route_file_course_full(
+    let mut course = build_route_file_course_full(
         file,
         &graph.ways,
         &snapshot.restrictions,
         snapshot.connectivity.as_ref(),
     )
-    .map(|built| built.course)
+    .map(|built| built.course)?;
+    course
+        .notices
+        .push("Map source: OSM + local patches".to_owned());
+    for patch in selected {
+        course.notices.push(format!(
+            "Map patch: {} (status: {}, geometry accuracy: {})",
+            patch.name,
+            patch.status.as_str(),
+            patch.geometry_accuracy
+        ));
+        course
+            .notices
+            .push(format!("Map patch notice: {}", patch.notice));
+    }
+    for warning in graph.warnings {
+        course.notices.push(format!("Map patch warning: {warning}"));
+    }
+    Ok(course)
 }
 
 /// 경로 파일의 보정 참조가 정렬·고유하고 형식과 SHA-256 모양이 유효한지 검사한다.

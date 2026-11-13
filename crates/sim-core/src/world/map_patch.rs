@@ -24,8 +24,10 @@ pub const MAX_BBOX_SIDE_M: f64 = 2_000.0;
 pub const MAX_ANCHOR_ERROR_M: f64 = 20.0;
 /// 보정 도로 폭의 허용 범위(m).
 pub const WIDTH_M: std::ops::RangeInclusive<f64> = 0.5..=30.0;
-/// 합성 ID가 쓰는 최상위 비트. 양수 `i64` 범위의 OSM ID와 기존 `2^62` 경로 점 ID를 피한다.
-const SYNTHETIC_BIT: u64 = 1 << 63;
+/// 합성 ID의 고정 상위 비트 `011`. TOML의 양수 `i64` 범위 안에서 OSM ID와 `2^62` 경로 점 영역을 피한다.
+const SYNTHETIC_PREFIX: u64 = 3 << 61;
+/// SHA-256에서 합성 ID에 보존할 하위 61비트.
+const SYNTHETIC_HASH_MASK: u64 = (1 << 61) - 1;
 
 /// 보정 파일을 어느 실행 환경에서 활성화할지 정한다.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -48,6 +50,17 @@ pub enum PatchStatus {
     Provisional,
     /// 합성 자동 시험에서만 쓸 수 있다.
     Synthetic,
+}
+
+impl PatchStatus {
+    /// 파일과 화면 안내에 쓰는 안정적인 소문자 이름을 반환한다.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Verified => "verified",
+            Self::Provisional => "provisional",
+            Self::Synthetic => "synthetic",
+        }
+    }
 }
 
 /// 보정 범위(남·서·북·동).
@@ -318,7 +331,7 @@ fn validate_audience(status: PatchStatus, audience: PatchAudience) -> Result<(),
     }
 }
 
-/// 이름 공간과 로컬 ID를 SHA-256으로 고정된 상위 `u64` 합성 ID로 바꾼다.
+/// 이름 공간과 로컬 ID를 SHA-256으로 고정된 양수 `i64` 합성 ID 영역으로 바꾼다.
 fn synthetic_id(patch_id: &str, revision: u64, kind: &str, local_id: &str) -> u64 {
     let mut hasher = Sha256::new();
     for value in [FORMAT, patch_id, &revision.to_string(), kind, local_id] {
@@ -328,7 +341,7 @@ fn synthetic_id(patch_id: &str, revision: u64, kind: &str, local_id: &str) -> u6
     let bytes: [u8; 8] = hasher.finalize()[..8]
         .try_into()
         .expect("SHA-256 always has at least 8 bytes");
-    u64::from_be_bytes(bytes) | SYNTHETIC_BIT
+    (u64::from_be_bytes(bytes) & SYNTHETIC_HASH_MASK) | SYNTHETIC_PREFIX
 }
 
 /// way 중간 접속점, 내부 노드와 way의 합성 ID를 만들고 파일 안 충돌을 검사한다.
@@ -647,7 +660,7 @@ width_source = "estimated"
             first
                 .synthetic_ids
                 .values()
-                .all(|id| id & SYNTHETIC_BIT != 0)
+                .all(|id| id & !SYNTHETIC_HASH_MASK == SYNTHETIC_PREFIX)
         );
         assert_ne!(
             first.synthetic_ids["node/p1"],

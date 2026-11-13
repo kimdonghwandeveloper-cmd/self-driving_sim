@@ -7,7 +7,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::map::LatLon;
-use super::map_patch::{MapPatch, PatchAnchor};
+use super::map_patch::{MapPatch, PatchAnchor, PatchStatus};
 use super::osm_graph::{OsmGraphWay, OsmNode};
 use super::route_plan;
 
@@ -23,6 +23,14 @@ pub struct AppliedPatch {
     pub id: String,
     /// 보정 파일 형식.
     pub format: String,
+    /// 화면에 표시할 보정 이름.
+    pub name: String,
+    /// 자료 확인 상태.
+    pub status: PatchStatus,
+    /// 형상 정확도와 실측 여부 설명.
+    pub geometry_accuracy: String,
+    /// 사용자에게 계속 표시할 제한 안내.
+    pub notice: String,
     /// 조립한 원본 파일의 SHA-256.
     pub sha256: String,
     /// 이 보정에서 추가한 합성 way ID.
@@ -474,6 +482,10 @@ pub fn apply_map_patches(
         applied.push(AppliedPatch {
             id: patch.id.clone(),
             format: patch.format.clone(),
+            name: patch.name.clone(),
+            status: patch.status,
+            geometry_accuracy: patch.geometry_accuracy.clone(),
+            notice: patch.notice.clone(),
             sha256: patch.sha256.clone(),
             way_ids,
         });
@@ -589,7 +601,7 @@ width_source = "synthetic""#
         assert!(plan_route(&osm, "test.json", &points, &config).is_err());
         let graph = apply_map_patches(&osm, &[bridge_patch(false)]).unwrap();
         let route = plan_route(&graph.ways, "test.json", &points, &config).unwrap();
-        assert!(route.nodes.iter().any(|id| *id >= (1_u64 << 63)));
+        assert!(route.nodes.iter().any(|id| *id >= (3_u64 << 61)));
         assert_eq!(graph.applied[0].id, "bridge");
         assert!(graph.warnings.is_empty());
     }
