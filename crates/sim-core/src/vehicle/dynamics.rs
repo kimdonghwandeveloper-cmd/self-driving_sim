@@ -96,6 +96,10 @@ pub struct DynamicsParams {
     pub body_friction_coeff: f32,
     /// 타이어 옆방향 마찰 계수(2-7). 충돌로 생긴 옆 미끄러짐·회전을 `계수 × g`로 줄여 평소 주행으로 되돌린다.
     pub tire_lateral_friction_coeff: f32,
+    /// 제동·P·비상 정지 중 옆 미끄러짐·추가 회전을 줄이는 배율(1 이상, 2-7 임시 규칙). 최대 제동·P·비상 정지에서
+    /// 타이어 옆방향 마찰에 이 값을 곱하고, 제동 입력이 그보다 약하면 1과 이 값 사이를 비례로 쓴다. 1이면 끔.
+    /// 실차 타이어는 잠기면 옆 마찰이 오히려 줄 수 있어 실제 거동이라고 주장하지 않는다.
+    pub stopping_slide_grip_scale: f32,
     /// 충돌 속도 변화(Δv, m/s)가 이 값 이상이면 비상 정지를 건다(2-7, 임시 규칙). 0이면 끔(기본값).
     /// 실차가 충돌 때 스스로 비상 정지하는지 확인하지 못해 기본은 끈다.
     pub impact_emergency_delta_v_mps: f32,
@@ -128,6 +132,7 @@ impl Default for DynamicsParams {
             bounce_min_speed_mps: 0.5,
             body_friction_coeff: 0.3,
             tire_lateral_friction_coeff: 0.7,
+            stopping_slide_grip_scale: 2.0,
             impact_emergency_delta_v_mps: 0.0,
         }
     }
@@ -182,6 +187,12 @@ impl DynamicsParams {
                     "dynamics.{name} must be a positive number, got {value}"
                 ));
             }
+        }
+        if !(self.stopping_slide_grip_scale.is_finite() && self.stopping_slide_grip_scale >= 1.0) {
+            return Err(format!(
+                "dynamics.stopping_slide_grip_scale must be at least 1, got {}",
+                self.stopping_slide_grip_scale
+            ));
         }
         if !(0.0..=1.0).contains(&self.restitution) {
             return Err(format!(
@@ -326,20 +337,34 @@ pub fn step(state: &mut VehicleState, motion: &mut Motion, params: &DynamicsPara
     motion.z_m += forward_z * next_speed * dt;
     // 충돌로 생긴 미끄러짐이 없으면 아래를 건너뛰어 평소 주행 결과가 예전과 비트 단위로 같다.
     if motion.sliding() {
-        slide(motion, params, dt);
+        slide(motion, params, slide_grip_scale(state, params), dt);
     }
+}
+
+/// 제동·P·비상 정지에 따라 옆 미끄러짐을 줄이는 마찰에 곱할 배율을 정한다(2-7 임시 규칙).
+///
+/// P와 비상 정지는 최대 제동과 같게 보고, 그 밖에는 제동 입력(0..=1)에 비례해 1에서
+/// `stopping_slide_grip_scale`까지 키운다.
+fn slide_grip_scale(state: &VehicleState, params: &DynamicsParams) -> f32 {
+    let stopping = if state.gear() == Gear::Park || state.engine() == EngineState::EmergencyStop {
+        1.0
+    } else {
+        state.input().brake.clamp(0.0, 1.0)
+    };
+    1.0 + (params.stopping_slide_grip_scale - 1.0) * stopping
 }
 
 /// 충돌로 생긴 옆 미끄러짐·추가 회전만큼 자세를 옮기고, 타이어 옆방향 마찰로 두 값을 0 쪽으로 줄인다(2-7).
 ///
 /// 옆 미끄러짐은 `μ·g`로 줄인다. 추가 회전은 앞·뒤 바퀴가 무게중심에서 축간거리 절반 떨어져 반씩 무게를 받는다고 보고
-/// `μ·m·g·(L/2) ÷ I`로 줄인다. 둘 다 0을 넘어 반대로 돌지 않는다. 실차 타이어 특성을 반영하지 않은 임시 모델이다.
-fn slide(motion: &mut Motion, params: &DynamicsParams, dt: f32) {
+/// `μ·m·g·(L/2) ÷ I`로 줄인다. 제동·P·비상 정지 중이면 두 값에 `grip_scale`을 곱해 더 빨리 멈춘다.
+/// 둘 다 0을 넘어 반대로 돌지 않는다. 실차 타이어 특성을 반영하지 않은 임시 모델이다.
+fn slide(motion: &mut Motion, params: &DynamicsParams, grip_scale: f32, dt: f32) {
     motion.heading_rad = wrap_angle(motion.heading_rad + motion.slip_yaw_rate_rad_s * dt);
     let (right_x, right_z) = motion.right();
     motion.x_m += right_x * motion.lateral_mps * dt;
     motion.z_m += right_z * motion.lateral_mps * dt;
-    let grip = params.tire_lateral_friction_coeff * GRAVITY_MPS2;
+    let grip = params.tire_lateral_friction_coeff * GRAVITY_MPS2 * grip_scale;
     let yaw_grip = grip * params.mass_kg * params.wheelbase_m / 2.0 / params.yaw_inertia_kg_m2;
     motion.lateral_mps = approach_zero(motion.lateral_mps, grip * dt);
     motion.slip_yaw_rate_rad_s = approach_zero(motion.slip_yaw_rate_rad_s, yaw_grip * dt);
@@ -922,6 +947,10 @@ mod tests {
                 understeer_gradient_rad_per_g: f32::NAN,
                 ..DynamicsParams::default()
             },
+            DynamicsParams {
+                stopping_slide_grip_scale: 0.9,
+                ..DynamicsParams::default()
+            },
         ] {
             assert!(params.validate().is_err(), "{params:?}");
         }
@@ -964,6 +993,46 @@ mod tests {
             state.speed_mps()
         );
         assert!(state.speed_mps() < -params.max_reverse_speed_mps);
+    }
+
+    /// 충돌 미끄러짐이 남은 차가 제동·P·비상 정지 중이면 더 빨리 멈추는지 확인한다(2-7 임시 규칙).
+    /// 최대 제동·P·비상 정지는 배율(기본 2)만큼, 절반 제동은 그 중간만큼 빨리 줄고, 배율 1이면 그대로다.
+    #[test]
+    fn stopping_recovers_slide_faster() {
+        let params = DynamicsParams::default();
+        // 정지한 차에 옆 미끄러짐 1 m/s를 주고 한 틱 뒤 줄어든 양(m/s)을 잰다.
+        let drop = |mut state: VehicleState, params: &DynamicsParams| {
+            let mut motion = Motion {
+                lateral_mps: 1.0,
+                slip_yaw_rate_rad_s: 0.2,
+                ..Motion::default()
+            };
+            step(&mut state, &mut motion, params, DT);
+            (1.0 - motion.lateral_mps, 0.2 - motion.slip_yaw_rate_rad_s)
+        };
+        let with_brake = |brake: f32| {
+            let mut state = ready_in(Gear::Drive);
+            state.set_input(input(0.0, brake, 0.0));
+            state
+        };
+        let base = drop(with_brake(0.0), &params);
+        let close = |actual: (f32, f32), scale: f32| {
+            (actual.0 - base.0 * scale).abs() < 1e-5 && (actual.1 - base.1 * scale).abs() < 1e-5
+        };
+        assert!((base.0 - 0.7 * GRAVITY_MPS2 * DT).abs() < 1e-5, "{base:?}");
+        assert!(close(drop(with_brake(1.0), &params), 2.0));
+        assert!(close(drop(with_brake(0.5), &params), 1.5));
+        assert!(close(drop(ready_in(Gear::Park), &params), 2.0));
+        let mut emergency = ready_in(Gear::Drive);
+        emergency
+            .apply(VehicleCommand::EngageEmergencyStop)
+            .unwrap();
+        assert!(close(drop(emergency, &params), 2.0));
+        let off = DynamicsParams {
+            stopping_slide_grip_scale: 1.0,
+            ..DynamicsParams::default()
+        };
+        assert!(close(drop(with_brake(1.0), &off), 1.0));
     }
 
     /// 각도 정규화가 -π..=π 범위를 유지하는지 확인한다.
