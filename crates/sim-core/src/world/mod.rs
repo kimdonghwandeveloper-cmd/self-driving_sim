@@ -20,6 +20,7 @@ pub mod pbf_extract;
 pub(crate) mod pbf_fixture;
 pub mod places;
 pub mod road_geom;
+pub mod road_polygons;
 pub mod road_snapshot;
 pub mod route;
 pub mod route_plan;

@@ -7,6 +7,8 @@ const Visual = preload("res://presentation/vehicle_visual.gd")
 const Rig = preload("res://presentation/camera_rig.gd")
 ## GLB의 미터 원점을 공유하는 여수 고정 코스. 저장 경로는 시작점이 달라 이 배경을 쓰지 않는다.
 const YEOSU_COURSE := "map:testdata/yeosu-expo/course.toml"
+## 사용자 제작 맵의 도로 면을 그대로 노면·연석으로 쓰는 여수 코스. 배경 GLB와 같은 원점을 쓴다.
+const YEOSU_CUSTOM_ROADS_COURSE := "map:testdata/yeosu-expo/custom-roads.toml"
 const YEOSU_BACKGROUND = preload("res://assets/maps/yeosu-expo/background.glb")
 ## 코스 범위 밖으로 바닥을 더 까는 여백(m).
 const GROUND_MARGIN_M := 300.0
@@ -95,7 +97,7 @@ func start(course_name: String, force_preview: bool = false) -> void:
 	scene_content.add_child(course_mesh)
 	course_mesh.build(data)
 	var bounds := CourseMesh.ground_bounds(data)
-	if course_name == YEOSU_COURSE and not is_preview and fallback_notice.is_empty():
+	if course_name in [YEOSU_COURSE, YEOSU_CUSTOM_ROADS_COURSE] and not is_preview and fallback_notice.is_empty():
 		bounds = _add_yeosu_background(bounds)
 	_fit_ground(bounds)
 	visual = Visual.new()
