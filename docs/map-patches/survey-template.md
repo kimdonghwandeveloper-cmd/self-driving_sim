@@ -35,6 +35,8 @@ TOML의 `source_description`에는 이 문서 경로와 요약만 적는다.
 
 ## 2. 기준 OSM 판본 (현장 조사 전에 고정)
 
+`sim-tools --osm-anchors "<시작 위도,경도>;<끝 위도,경도>"` 출력에서 옮겨 적는다(README "전국 지도 자료 만들기").
+
 | 항목 | 기록 |
 | --- | --- |
 | `data/korea/manifest.toml` 원본 PBF 이름 | |
@@ -47,6 +49,7 @@ TOML의 `source_description`에는 이 문서 경로와 요약만 적는다.
 ### 접속 후보(anchor)
 
 양쪽 끝마다 한 줄씩 적는다. OSM 노드에 바로 붙으면 `osm_node`, way의 노드 사이에 붙으면 `osm_way` + 인접 노드 쌍.
+같은 명령 출력의 묶음 번호(group)가 양쪽 끝에서 다르면 보정 전에 끊겨 있다는 근거가 된다(그 1.5 km 지역 안에서만).
 
 | anchor ID | 종류 | OSM node ID 또는 way ID | 인접 노드 쌍 (way일 때) | OSM 좌표 | 확인 좌표 | 거리(m) |
 | --- | --- | --- | --- | --- | --- | --- |

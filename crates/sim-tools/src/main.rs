@@ -10,14 +10,19 @@
 //!
 //! - `--build-korea-data <PBF 파일> [--out <폴더>] [--clip <남,서,북,동>]`: 전국 PBF를 전국 지도 자료(`data/korea/`)로
 //!   바꾸고 개수·크기·시간을 출력한다(PLAN 4-11, 네트워크 없음). `--clip`은 시험 자료용으로 범위만 넣는다.
+//! - `--osm-anchors <위도,경도;...> [--radius <m>]`: 전국 지도 자료에서 확인 좌표 주변 도로의 OSM way·node ID,
+//!   인접 노드 쌍, 거리, 허용 도로 묶음 번호를 출력한다(PLAN 4-11a 보정 조사표 2절, 파일을 쓰지 않음).
 //!
 //! 상대 경로(`cache/`, `config/`, `data/`)는 실행한 폴더 기준이므로 저장소 최상위에서 실행한다.
 
 use std::path::PathBuf;
 use std::process::ExitCode;
 
+use sim_core::world::map::LatLon;
 use sim_core::world::map_fetch::{self, Bbox, FetchJob, FetchPolicy, FetchSettings};
-use sim_core::world::{korea_data, pbf_audit, pbf_compare, pbf_extract, route_plan};
+use sim_core::world::{
+    anchor_probe, korea_data, osm_graph, pbf_audit, pbf_compare, pbf_extract, route_plan,
+};
 
 /// 명령줄 인자를 읽어 개발 명령 하나를 실행한다. 명령이 없거나 인자가 모자라면 사용법을 출력하고 오류 종료한다.
 fn main() -> ExitCode {
@@ -81,6 +86,15 @@ fn main() -> ExitCode {
             }
         };
     }
+    if args.iter().any(|argument| argument == "--osm-anchors") {
+        return match value_after("--osm-anchors") {
+            Some(points) => osm_anchors_command(points, value_after("--radius")),
+            None => {
+                eprintln!("--osm-anchors needs <lat,lon[;lat,lon...]>");
+                ExitCode::FAILURE
+            }
+        };
+    }
     if args.iter().any(|argument| argument == "--build-korea-data") {
         return match value_after("--build-korea-data") {
             Some(pbf) => build_korea_data_command(pbf, value_after("--out"), value_after("--clip")),
@@ -100,7 +114,11 @@ const USAGE: &str = "usage: sim-tools --fetch-map <south,west,north,east> [--off
        sim-tools --audit-extract <generation folder> --pbf <pbf>
        sim-tools --compare-overpass <overpass graph> --extract <folder> --pbf <pbf> [--pick-points <lat,lon;...>]
        sim-tools --build-korea-data <pbf> [--out <folder>] [--clip <south,west,north,east>]
-       sim-tools --korea-region <lat,lon>";
+       sim-tools --korea-region <lat,lon>
+       sim-tools --osm-anchors <lat,lon[;lat,lon...]> [--radius <m>]";
+
+/// `--osm-anchors` 기본 조사 반경(m). 보정 접속점 허용 오차 상한(20 m)보다 넓게 본다.
+const DEFAULT_ANCHOR_RADIUS_M: f64 = 30.0;
 
 /// `--korea-region` 명령: 전국 자료에서 가운데 1.5 km 지역을 꺼내 도로·장소 수와 걸린 시간을 출력한다(확인용, 파일을 쓰지 않음).
 fn korea_region_command(center: &str) -> ExitCode {
@@ -130,6 +148,142 @@ fn korea_region_command(center: &str) -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+/// `--osm-anchors` 명령: 확인 좌표들의 가운데 1.5 km 지역을 전국 자료에서 꺼내, 좌표마다 반경 안 도로의
+/// 접속 후보(way·node ID, 인접 노드 쌍, 거리, 묶음 번호)를 출력한다. 보정 조사표 2절을 채우는 데 쓴다.
+fn osm_anchors_command(points_text: &str, radius: Option<&String>) -> ExitCode {
+    match probe_anchors(points_text, radius) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("osm anchors failed: {error}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// `--osm-anchors`의 본체: 인자를 읽고 지역 자료를 꺼내 조사한 뒤 출력한다.
+fn probe_anchors(points_text: &str, radius: Option<&String>) -> Result<(), String> {
+    let radius_m = match radius {
+        Some(text) => text
+            .parse::<f64>()
+            .map_err(|_| format!("--radius must be a number of metres, got `{text}`"))?,
+        None => DEFAULT_ANCHOR_RADIUS_M,
+    };
+    let points: Vec<LatLon> = parse_points(points_text)?
+        .into_iter()
+        .map(|[lat, lon]| LatLon { lat, lon })
+        .collect();
+    let count = points.len() as f64;
+    let center = LatLon {
+        lat: points.iter().map(|p| p.lat).sum::<f64>() / count,
+        lon: points.iter().map(|p| p.lon).sum::<f64>() / count,
+    };
+    let bbox = sim_core::picker::region::bbox_around(center.lat, center.lon)?;
+    if let Some(outside) = points.iter().find(|p| {
+        !(bbox.south..=bbox.north).contains(&p.lat) || !(bbox.west..=bbox.east).contains(&p.lon)
+    }) {
+        return Err(format!(
+            "point {},{} is outside the 1.5 km region around the points' centre; probe it separately",
+            outside.lat, outside.lon
+        ));
+    }
+    let data = korea_data::KoreaData::open(std::path::Path::new(korea_data::KOREA_DATA_DIR))?;
+    let ways = osm_graph::parse_graph_full(&data.region(&bbox)?.snapshot)?.ways;
+    let allowed_owned = allowed_highways();
+    let allowed = allowed_owned.iter().map(String::as_str).collect();
+    let report = anchor_probe::probe(&ways, &allowed, &points, radius_m)?;
+    print_anchor_report(&data.manifest, &bbox, radius_m, &report);
+    Ok(())
+}
+
+/// 접속 후보 조사 결과를 기준 자료 판본과 함께 출력한다.
+fn print_anchor_report(
+    manifest: &korea_data::Manifest,
+    bbox: &Bbox,
+    radius_m: f64,
+    report: &anchor_probe::ProbeReport,
+) {
+    let source = &manifest.source;
+    println!(
+        "base OSM: {} (sha256 {})",
+        source.pbf_file_name, source.pbf_sha256
+    );
+    match source.replication_timestamp {
+        Some(seconds) => println!("data time: {} UTC ({seconds})", utc_date_time(seconds)),
+        None => println!("data time: not recorded"),
+    }
+    println!("roads pack sha256: {}", manifest.roads.sha256);
+    println!(
+        "region: {:.6},{:.6},{:.6},{:.6} / radius {radius_m} m",
+        bbox.south, bbox.west, bbox.north, bbox.east
+    );
+    println!("groups: allowed roads joined by shared OSM node IDs inside this region only");
+    for (index, point) in report.points.iter().enumerate() {
+        println!();
+        println!(
+            "point {}: {:.7},{:.7}",
+            index + 1,
+            point.point.lat,
+            point.point.lon
+        );
+        if point.candidates.is_empty() {
+            println!("  no road within {radius_m} m");
+        }
+        for c in &point.candidates {
+            let group = match c.group {
+                Some(group) => {
+                    let size = report.groups[group - 1].ways;
+                    format!("group {group} ({size} ways)")
+                }
+                None => "not routable".to_owned(),
+            };
+            println!(
+                "  way {} highway={} oneway={} name={} {:.1} m, {group}",
+                c.way_id,
+                c.highway.as_deref().unwrap_or("-"),
+                c.oneway.as_deref().unwrap_or("-"),
+                c.name.as_deref().unwrap_or("-"),
+                c.distance_m
+            );
+            println!(
+                "    osm_way = {} / between_nodes = [{}, {}] (segment #{}, {:.2} along)",
+                c.way_id, c.between_nodes[0], c.between_nodes[1], c.segment_index, c.fraction
+            );
+            let end = if c.nearest_node_degree == 1 {
+                ", dead end"
+            } else {
+                ""
+            };
+            println!(
+                "    osm_node = {} at {:.1} m (degree {}{end})",
+                c.nearest_node, c.nearest_node_m, c.nearest_node_degree
+            );
+        }
+    }
+}
+
+/// 유닉스 초를 `YYYY-MM-DD HH:MM:SS` UTC 문자열로 바꾼다(그레고리력 날짜 계산).
+fn utc_date_time(seconds: i64) -> String {
+    let days = seconds.div_euclid(86_400);
+    let rest = seconds.rem_euclid(86_400);
+    // 1970-01-01 기준 일수를 연·월·일로 바꾼다(3월 시작 400년 주기 방식).
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let day_of_era = z.rem_euclid(146_097);
+    let year_of_era =
+        (day_of_era - day_of_era / 1460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let mp = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = year_of_era + era * 400 + i64::from(month <= 2);
+    format!(
+        "{year:04}-{month:02}-{day:02} {:02}:{:02}:{:02}",
+        rest / 3600,
+        rest % 3600 / 60,
+        rest % 60
+    )
 }
 
 /// `--build-korea-data` 명령: 전국 PBF로 전국 지도 자료를 만들고 개수·크기·단계별 시간·최대 메모리를 출력한다.
@@ -410,5 +564,13 @@ mod tests {
         assert!(parse_points("34.75").is_err());
         assert!(parse_points("a,b").is_err());
         assert!(parse_points("NaN,1").is_err());
+    }
+
+    /// 유닉스 초 → UTC 날짜·시각: 기준일, 윤년 2월 29일, 연말.
+    #[test]
+    fn utc_dates_are_formatted() {
+        assert_eq!(utc_date_time(0), "1970-01-01 00:00:00");
+        assert_eq!(utc_date_time(951_782_400), "2000-02-29 00:00:00");
+        assert_eq!(utc_date_time(1_798_761_599), "2026-12-31 23:59:59");
     }
 }

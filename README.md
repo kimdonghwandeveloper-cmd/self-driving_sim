@@ -247,6 +247,17 @@ cargo run --release --locked -p sim-tools -- --korea-region 37.4979,127.0276   #
 자료를 새로 만들면 지역 스냅샷은 새 판 폴더(`cache/regions/<판>/`)에 쌓이고, 이전에 저장한 경로는 이전 스냅샷으로 그대로 재생됩니다.
 형식과 넣는 것·빼는 것은 `docs/map-data.md`의 "4-11 전국 지도 자료"를 참고하세요.
 
+지역 보정(4-11a) 접속점을 조사할 때는 확인 좌표 주변 도로의 OSM ID를 뽑습니다(파일을 쓰지 않음).
+점은 `;`로 여러 개 줄 수 있고(모두 점들의 가운데 1.5 km 지역 안), 반경 기본값은 30 m입니다.
+
+```powershell
+cargo run --release --locked -p sim-tools -- --osm-anchors "34.7535,127.7480;34.7505,127.7455" --radius 50
+```
+
+맨 위에 기준 자료(원본 PBF SHA-256·자료 시각·도로 묶음 SHA-256)를, 점마다 가까운 way 순으로
+`osm_way`·`between_nodes`(가장 가까운 선분), 가장 가까운 `osm_node`와 거리, 막힌 끝 여부, 허용 도로 묶음 번호를 출력합니다.
+두 점의 묶음 번호가 다르면 그 지역 안에서는 보정 전 서로 이어지지 않습니다. 결과는 조사표(`docs/map-patches/survey-template.md`) 2절에 옮깁니다.
+
 ### 지도 받기 (Phase 4-4, 개발용)
 
 사용자가 요청할 때만 Overpass API에서 bbox(남,서,북,동) 안의 도로를 받아 `cache/maps/`에 저장합니다.
