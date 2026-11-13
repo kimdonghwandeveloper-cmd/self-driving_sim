@@ -466,6 +466,19 @@ pub fn build_map_course(file: &MapCourseFile, base_dir: &Path) -> Result<CourseD
 /// 최상위에 `format` 키가 있으면 경로 파일([`super::route_plan::RouteFile`], Phase 4-3)로,
 /// 없으면 단일 통로 선택 파일([`MapCourseFile`])로 읽는다.
 pub fn load_map_course(path: &Path) -> Result<CourseDef, String> {
+    load_map_course_with_patch_dir(
+        path,
+        Path::new(super::map_patch::PATCH_DIR),
+        super::map_patch::PatchAudience::Distribution,
+    )
+}
+
+/// [`load_map_course`]와 같되 지역 보정 경로가 참조할 보정 폴더와 실행 대상을 명시한다.
+pub fn load_map_course_with_patch_dir(
+    path: &Path,
+    patch_dir: &Path,
+    audience: super::map_patch::PatchAudience,
+) -> Result<CourseDef, String> {
     let text = std::fs::read_to_string(path)
         .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
     let invalid = |error: toml::de::Error| format!("invalid {}: {error}", path.display());
@@ -473,7 +486,9 @@ pub fn load_map_course(path: &Path) -> Result<CourseDef, String> {
     let base_dir = path.parent().unwrap_or(Path::new("."));
     if table.contains_key("format") {
         let file: super::route_plan::RouteFile = toml::from_str(&text).map_err(invalid)?;
-        return super::route_plan::load_route_course(&file, base_dir);
+        return super::route_plan::load_route_course_with_patch_dir(
+            &file, base_dir, patch_dir, audience,
+        );
     }
     let file: MapCourseFile = toml::from_str(&text).map_err(invalid)?;
     build_map_course(&file, base_dir)

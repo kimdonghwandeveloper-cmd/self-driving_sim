@@ -30,6 +30,9 @@ pub fn reject_reason(reason: &str) -> String {
 
 /// 코스 안내(임시 폭·가상 코스)를 한국어로 바꾼다. 출처 표기는 그대로 둔다.
 pub fn course_notice(notice: &str) -> String {
+    if let Some(translated) = map_patch_line(notice) {
+        return translated;
+    }
     match notice {
         "Virtual training course from an OSM route (not a surveyed road)" => {
             return "OSM 경로로 만든 가상 교육 코스입니다(실측 도로 아님)".to_owned();
@@ -98,6 +101,9 @@ pub fn region_error(error: &str) -> String {
 
 /// 경로 선택 화면 안내·경고·경로 오류 한 줄을 한국어로 바꾼다.
 pub fn picker_line(line: &str) -> String {
+    if let Some(translated) = map_patch_line(line) {
+        return translated;
+    }
     if let Some(count) = line.strip_prefix("Points: ") {
         return format!("찍은 점: {count}개");
     }
@@ -174,6 +180,31 @@ pub fn picker_line(line: &str) -> String {
         }
     }
     line.to_owned()
+}
+
+/// 지역 보정의 자료 출처·이름·확인 상태·실측 설명·경고를 한국어 안내로 바꾼다.
+fn map_patch_line(line: &str) -> Option<String> {
+    if line == "Map source: OSM" {
+        return Some("지도 자료: OSM".to_owned());
+    }
+    if line == "Map source: OSM + local patches" {
+        return Some("지도 자료: OSM + 지역 보정".to_owned());
+    }
+    if let Some(detail) = line.strip_prefix("Map patch: ") {
+        let detail = detail
+            .replace("status: verified", "확인 상태: 확인됨")
+            .replace("status: provisional", "확인 상태: 임시")
+            .replace("status: synthetic", "확인 상태: 합성 시험")
+            .replace("geometry accuracy: ", "형상 정확도·실측 여부: ");
+        return Some(format!("지역 보정: {detail}"));
+    }
+    if let Some(detail) = line.strip_prefix("Map patch notice: ") {
+        return Some(format!("지역 보정 안내: {detail}"));
+    }
+    if let Some(detail) = line.strip_prefix("Map patch warning: ") {
+        return Some(format!("지역 보정 경고: {detail}"));
+    }
+    None
 }
 
 /// 보정 표시값을 HUD용 한국어 줄로 만든다(2-5, 지운 Bevy 판 보정 줄과 같은 내용). 모두 시뮬레이터 임시값이다.
@@ -358,6 +389,14 @@ mod tests {
             course_notice("Virtual training course from an OSM route (not a surveyed road)")
                 .contains("가상 교육 코스")
         );
+        assert_eq!(
+            course_notice("Map source: OSM + local patches"),
+            "지도 자료: OSM + 지역 보정"
+        );
+        assert!(
+            course_notice("Map patch: 연결 통로 (status: verified, geometry accuracy: 실측 아님)")
+                .contains("확인 상태: 확인됨")
+        );
     }
 
     /// 저장소 여수 경로 코스의 실제 안내가 출처 표기 말고 모두 한국어로 바뀌는지 확인한다.
@@ -430,6 +469,14 @@ mod tests {
                 "Simplified 1 intersection(s): side roads with unsupported shapes are not drawn"
             ),
             "교차로 1곳 단순화: 형상을 지원하지 않는 곁가지는 그리지 않습니다"
+        );
+        assert_eq!(
+            picker_line("Map source: OSM + local patches"),
+            "지도 자료: OSM + 지역 보정"
+        );
+        assert_eq!(
+            picker_line("Map patch notice: 실제 도로 아님"),
+            "지역 보정 안내: 실제 도로 아님"
         );
     }
 

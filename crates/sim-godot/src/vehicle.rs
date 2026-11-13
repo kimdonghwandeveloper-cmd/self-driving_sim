@@ -19,7 +19,9 @@ use sim_core::scenario::run::{Control, Phase, ScenarioRun, ScenarioUpdate};
 use sim_core::session::{DriveCommand, DriveSession, QueueFull, TickReport};
 use sim_core::vehicle::state::{Gear, VehicleInput};
 
-use crate::course::{build_course, course_dict, failure_dict, panic_message};
+use crate::course::{
+    build_course, build_course_with_patch_dir, course_dict, failure_dict, panic_message,
+};
 use crate::devices::{Devices, load_bindings};
 use crate::paths::resolve_user_path;
 
@@ -145,6 +147,9 @@ pub struct SimVehicle {
     #[export]
     #[init(val = GString::from("training"))]
     course: GString,
+    /// 지도 코스의 지역 보정 폴더. 비우면 `data/map-patches`; 격리된 시험·개발 자료에서만 바꾼다.
+    #[export]
+    patch_dir: GString,
     /// 설정 폴더. 비우면 `res://../config`. `_ready`에서 한 번만 읽는다.
     #[export]
     config_dir: GString,
@@ -201,7 +206,15 @@ impl INode3D for SimVehicle {
             }
             return;
         }
-        match build_course(&self.course.to_string()) {
+        let built = if self.patch_dir.to_string().trim().is_empty() {
+            build_course(&self.course.to_string())
+        } else {
+            build_course_with_patch_dir(
+                &self.course.to_string(),
+                &resolve_user_path(&self.patch_dir.to_string()),
+            )
+        };
+        match built {
             Ok(course) => {
                 self.session = Some(DriveSession::new(course, &config));
                 self.sync_transform();

@@ -1,7 +1,7 @@
 //! 도로 그래프와 경로 탐색, 경로 파일(Phase 4-3).
 //!
 //! 사용자가 찍은 점(시작·경유·끝, 위경도)을 가장 가까운 허용 도로 위 점에 붙이고, 이웃한 점 사이를 A*로 찾아
-//! OSM 노드 ID 순서의 경로를 만든다. 결과는 경로 파일(TOML, [`RouteFile`])로 저장하며, `--course map:` 로더가
+//! OSM·지역 보정 노드 ID 순서의 경로를 만든다. 결과는 경로 파일(TOML, [`RouteFile`])로 저장하며, `--course map:` 로더가
 //! 이 파일과 저장된 스냅샷만으로 같은 코스를 다시 만든다(코스 생성은 [`route::build_route_course_with`]).
 //!
 //! - 도로 그래프: 허용 `highway` 종류의 way를 같은 노드 ID에서 나눈 구간으로 잇는다. 일방통행
@@ -29,6 +29,8 @@ use serde::{Deserialize, Serialize};
 
 use super::course::CourseDef;
 use super::map::{self, LatLon};
+use super::map_patch::{self, PatchAudience};
+use super::map_patch_graph::{self, PatchedGraph};
 use super::osm_graph::{OsmGraphWay, OsmNode, TurnRestriction};
 use super::road_snapshot::{self, Connectivity};
 use super::route::{self, BuildFailure, JunctionSettings, RouteCourse, Travel};
@@ -179,7 +181,7 @@ pub struct RouteFile {
     pub allowed_highways: Vec<String>,
     /// 사용자가 찍은 점 [위도, 경도](deg). 시작·경유·끝 순서.
     pub points: Vec<[f64; 2]>,
-    /// 경로 노드 ID 순서. [`VIRTUAL_NODE_BASE`] 이상은 찍은 점을 붙인 가상 노드다.
+    /// 경로 노드 ID 순서. `2^62`부터의 낮은 값은 찍은 점을 붙인 가상 노드이고 `[3×2^61, 2^63)`은 지역 보정 합성 노드다.
     pub nodes: Vec<u64>,
     /// 코스 전체에 쓰는 폭(m).
     pub width_m: f32,
@@ -197,10 +199,25 @@ pub struct RouteFile {
     /// 예전 규칙으로 재생한다.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub nav_rules: bool,
+    /// 경로가 실제로 지난 지역 보정. 없는 기존 `route-v1`은 OSM만 사용한 경로로 읽는다.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub map_patches: Vec<RoutePatchRef>,
     /// 점마다 표시 이름(건물·장소로 고른 점은 그 이름, 그냥 찍은 점은 빈 문자열, PLAN 4-9). 코스 생성에는 쓰지 않는다.
     /// 비어 있거나 점 개수와 같아야 한다.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub point_labels: Vec<String>,
+}
+
+/// 경로 파일이 재생에 요구하는 지역 보정 하나.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RoutePatchRef {
+    /// 보정의 안정적인 ID.
+    pub id: String,
+    /// 보정 파일 형식.
+    pub format: String,
+    /// 계획할 때 읽은 보정 원문 바이트의 SHA-256.
+    pub sha256: String,
 }
 
 /// 폭을 정한 출처.
@@ -513,7 +530,7 @@ impl SearchGraph {
         entry: (u64, u64),
         to: u64,
         avoid: &BTreeSet<u64>,
-    ) -> Result<(Vec<u64>, (u64, u64)), String> {
+    ) -> Result<(Vec<State>, (u64, u64)), String> {
         let goal = self.pos[&to];
         let start: State = (from, entry.0, entry.1);
         let mut best: BTreeMap<State, f64> = [(start, 0.0)].into_iter().collect();
@@ -531,10 +548,7 @@ impl SearchGraph {
                     path.push(before);
                 }
                 path.reverse();
-                return Ok((
-                    path.into_iter().map(|(id, ..)| id).collect(),
-                    (way, previous),
-                ));
+                return Ok((path, (way, previous)));
             }
             if !closed.insert(state) {
                 continue;
@@ -604,6 +618,14 @@ impl SearchGraph {
             .map(|pair| distance(self.pos[&pair[0]], self.pos[&pair[1]]))
             .sum()
     }
+}
+
+/// A*가 선택한 노드와 각 노드 사이의 way ID 순서.
+struct SearchedRoute {
+    /// 경로 노드 순서.
+    nodes: Vec<u64>,
+    /// `nodes`의 각 인접 쌍에 대응하는 way ID.
+    ways: Vec<u64>,
 }
 
 /// 위경도 배열을 [`LatLon`]으로 바꾸고 대한민국 범위인지 검사한다.
@@ -683,6 +705,47 @@ pub fn plan_route_full(
     points: &[[f64; 2]],
     config: &RoadGraphConfig,
 ) -> Result<PlannedRoute, String> {
+    plan_route_full_inner(
+        ways,
+        restrictions,
+        connectivity,
+        snapshot,
+        points,
+        config,
+        None,
+    )
+}
+
+/// 지역 보정을 조립한 그래프에서 경로를 계획하고 실제로 지난 보정만 경로 파일에 기록한다.
+pub fn plan_route_full_with_patches(
+    graph: &PatchedGraph,
+    restrictions: &[TurnRestriction],
+    connectivity: Option<&Connectivity>,
+    snapshot: &str,
+    points: &[[f64; 2]],
+    config: &RoadGraphConfig,
+) -> Result<PlannedRoute, String> {
+    plan_route_full_inner(
+        &graph.ways,
+        restrictions,
+        connectivity,
+        snapshot,
+        points,
+        config,
+        Some(graph),
+    )
+}
+
+/// OSM 전용·지역 보정 경로 계획의 공통 본체.
+fn plan_route_full_inner(
+    ways: &[OsmGraphWay],
+    restrictions: &[TurnRestriction],
+    connectivity: Option<&Connectivity>,
+    snapshot: &str,
+    points: &[[f64; 2]],
+    config: &RoadGraphConfig,
+    patched: Option<&PatchedGraph>,
+) -> Result<PlannedRoute, String> {
     config.validate()?;
     let allowed: BTreeSet<&str> = config.allowed_highways.iter().map(String::as_str).collect();
     let picked = korean_points(points)?;
@@ -705,8 +768,8 @@ pub fn plan_route_full(
     // 처음 피한 교차로의 실패 이유. 돌아갈 길이 없으면 이 이유를 알린다.
     let mut first_failure = String::new();
     loop {
-        let nodes = match search_route(&graph, &snapped.nodes, &avoid) {
-            Ok(nodes) => nodes,
+        let searched = match search_route(&graph, &snapped.nodes, &avoid) {
+            Ok(searched) => searched,
             Err(error) if avoided.is_empty() => return Err(error),
             Err(_) => {
                 return Err(format!(
@@ -715,20 +778,23 @@ pub fn plan_route_full(
                 ));
             }
         };
-        let length = graph.length(&nodes);
+        let length = graph.length(&searched.nodes);
         if length > config.max_route_length_m {
             return Err(format!(
                 "route is {length:.0} m long (limit {} m)",
                 config.max_route_length_m
             ));
         }
-        let (width_m, source) = route_width(&snapped.ways, &allowed, config, &nodes)?;
+        let (width_m, source) = route_width(&snapped.ways, &allowed, config, &searched.nodes)?;
+        let map_patches = patched
+            .map(|graph| route_patch_refs(graph, &searched.ways))
+            .unwrap_or_default();
         let file = RouteFile {
             format: ROUTE_FORMAT.to_owned(),
             snapshot: snapshot.to_owned(),
             allowed_highways: config.allowed_highways.clone(),
             points: points.to_vec(),
-            nodes,
+            nodes: searched.nodes,
             width_m,
             width_source: source.as_str().to_owned(),
             corner_radius_m: config.corner_radius_m,
@@ -736,6 +802,7 @@ pub fn plan_route_full(
             snap_distance_m: config.snap_distance_m,
             max_route_length_m: config.max_route_length_m,
             nav_rules: config.nav_rules,
+            map_patches,
             point_labels: Vec::new(),
         };
         match build_course_checked(&file, ways, restrictions, connectivity) {
@@ -770,13 +837,29 @@ pub fn plan_route_full(
     }
 }
 
+/// A*가 선택한 way ID에서 실제 사용한 보정 참조만 ID 순서로 만든다.
+fn route_patch_refs(graph: &PatchedGraph, route_ways: &[u64]) -> Vec<RoutePatchRef> {
+    let used: BTreeSet<u64> = route_ways.iter().copied().collect();
+    graph
+        .applied
+        .iter()
+        .filter(|patch| patch.way_ids.iter().any(|id| used.contains(id)))
+        .map(|patch| RoutePatchRef {
+            id: patch.id.clone(),
+            format: patch.format.clone(),
+            sha256: patch.sha256.clone(),
+        })
+        .collect()
+}
+
 /// 찍은 점이 붙은 노드를 차례로 A*로 잇는다. 구간 사이에서도 들어온 way를 이어받아 회전 제한을 지킨다.
 fn search_route(
     graph: &SearchGraph,
     stops: &[u64],
     avoid: &BTreeSet<u64>,
-) -> Result<Vec<u64>, String> {
+) -> Result<SearchedRoute, String> {
     let mut nodes: Vec<u64> = vec![stops[0]];
+    let mut ways = Vec::new();
     let mut entry = (NO_WAY, NO_WAY);
     for pair in stops.windows(2) {
         if pair[0] == pair[1] {
@@ -786,10 +869,11 @@ fn search_route(
             ));
         }
         let (path, last) = graph.find_path(pair[0], entry, pair[1], avoid)?;
-        nodes.extend(path.into_iter().skip(1));
+        nodes.extend(path.iter().skip(1).map(|state| state.0));
+        ways.extend(path.iter().skip(1).map(|state| state.1));
         entry = last;
     }
-    Ok(nodes)
+    Ok(SearchedRoute { nodes, ways })
 }
 
 /// 경로가 지나는 way 중 가장 좁은 폭과 그 출처를 정한다(코스 전체에 쓴다).
@@ -951,14 +1035,122 @@ fn build_course_checked(
 /// 스냅샷은 [`road_snapshot::load_road_snapshot`]으로 읽으므로 Geofabrik 추출이면 연결 정보 검사를 건너뛰지 않는다.
 /// 스냅샷에 회전 제한이 있으면 함께 검사한다.
 pub fn load_route_course(file: &RouteFile, base_dir: &Path) -> Result<CourseDef, String> {
-    let snapshot = road_snapshot::load_road_snapshot(&base_dir.join(&file.snapshot))?;
-    build_route_file_course_full(
+    load_route_course_with_patch_dir(
         file,
-        &snapshot.ways,
+        base_dir,
+        Path::new(map_patch::PATCH_DIR),
+        PatchAudience::Distribution,
+    )
+}
+
+/// 경로가 요구한 지역 보정을 지정 디렉터리에서 읽고 ID·형식·SHA를 확인한 뒤 같은 그래프로 재생한다.
+///
+/// `map_patches`가 비어 있는 기존 경로는 보정 디렉터리를 읽지 않고 이전 OSM 전용 경로로 처리한다.
+pub fn load_route_course_with_patch_dir(
+    file: &RouteFile,
+    base_dir: &Path,
+    patch_dir: &Path,
+    audience: PatchAudience,
+) -> Result<CourseDef, String> {
+    let snapshot = road_snapshot::load_road_snapshot(&base_dir.join(&file.snapshot))?;
+    if file.map_patches.is_empty() {
+        return build_route_file_course_full(
+            file,
+            &snapshot.ways,
+            &snapshot.restrictions,
+            snapshot.connectivity.as_ref(),
+        )
+        .map(|built| built.course);
+    }
+    validate_route_patch_refs(&file.map_patches)?;
+    let available = map_patch::load_patch_dir(patch_dir, audience)
+        .map_err(|error| format!("cannot load route map patches: {error}"))?;
+    let by_id: BTreeMap<&str, &map_patch::MapPatch> = available
+        .iter()
+        .map(|patch| (patch.id.as_str(), patch))
+        .collect();
+    let mut selected = Vec::with_capacity(file.map_patches.len());
+    for required in &file.map_patches {
+        let patch = by_id.get(required.id.as_str()).copied().ok_or_else(|| {
+            format!(
+                "route requires missing map patch `{}` in {}",
+                required.id,
+                patch_dir.display()
+            )
+        })?;
+        if patch.format != required.format {
+            return Err(format!(
+                "map patch `{}` format mismatch: route has `{}`, file has `{}`",
+                required.id, required.format, patch.format
+            ));
+        }
+        if patch.sha256 != required.sha256 {
+            return Err(format!(
+                "map patch `{}` SHA-256 mismatch: route has {}, file has {}",
+                required.id, required.sha256, patch.sha256
+            ));
+        }
+        selected.push(patch.clone());
+    }
+    let graph = map_patch_graph::apply_map_patches(&snapshot.ways, &selected)
+        .map_err(|error| format!("cannot rebuild route map patches: {error}"))?;
+    let mut course = build_route_file_course_full(
+        file,
+        &graph.ways,
         &snapshot.restrictions,
         snapshot.connectivity.as_ref(),
     )
-    .map(|built| built.course)
+    .map(|built| built.course)?;
+    course
+        .notices
+        .push("Map source: OSM + local patches".to_owned());
+    for patch in selected {
+        course.notices.push(format!(
+            "Map patch: {} (status: {}, geometry accuracy: {})",
+            patch.name,
+            patch.status.as_str(),
+            patch.geometry_accuracy
+        ));
+        course
+            .notices
+            .push(format!("Map patch notice: {}", patch.notice));
+    }
+    for warning in graph.warnings {
+        course.notices.push(format!("Map patch warning: {warning}"));
+    }
+    Ok(course)
+}
+
+/// 경로 파일의 보정 참조가 정렬·고유하고 형식과 SHA-256 모양이 유효한지 검사한다.
+fn validate_route_patch_refs(references: &[RoutePatchRef]) -> Result<(), String> {
+    let mut previous: Option<&str> = None;
+    for reference in references {
+        if reference.id.trim().is_empty() {
+            return Err("route map patch ID must not be empty".to_owned());
+        }
+        if reference.format != map_patch::FORMAT {
+            return Err(format!(
+                "route map patch `{}` has unsupported format `{}`",
+                reference.id, reference.format
+            ));
+        }
+        if reference.sha256.len() != 64
+            || !reference
+                .sha256
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit())
+        {
+            return Err(format!(
+                "route map patch `{}` has invalid SHA-256 `{}`",
+                reference.id, reference.sha256
+            ));
+        }
+        if previous.is_some_and(|id| id >= reference.id.as_str()) {
+            return Err("route map_patches must have unique IDs in ascending order".to_owned());
+        }
+        previous = Some(&reference.id);
+    }
+    Ok(())
 }
 
 /// 경로 파일 내용을 TOML 문자열로 만든다.
@@ -1611,5 +1803,254 @@ mod tests {
             ..config
         };
         assert!(plan_route_detailed(&ways, None, "snapshot", &points, &legacy).is_err());
+    }
+
+    /// 저장·재생 시험에 쓰는 두 개의 끊긴 OSM service way를 만든다.
+    fn patch_replay_osm() -> Vec<OsmGraphWay> {
+        vec![
+            OsmGraphWay {
+                id: 10,
+                tags: BTreeMap::from([("highway".to_owned(), "service".to_owned())]),
+                nodes: vec![
+                    OsmNode {
+                        id: 1,
+                        pos: LatLon {
+                            lat: 35.0,
+                            lon: 127.0,
+                        },
+                    },
+                    OsmNode {
+                        id: 2,
+                        pos: LatLon {
+                            lat: 35.0,
+                            lon: 127.001,
+                        },
+                    },
+                ],
+            },
+            OsmGraphWay {
+                id: 20,
+                tags: BTreeMap::from([("highway".to_owned(), "service".to_owned())]),
+                nodes: vec![
+                    OsmNode {
+                        id: 3,
+                        pos: LatLon {
+                            lat: 35.0,
+                            lon: 127.002,
+                        },
+                    },
+                    OsmNode {
+                        id: 4,
+                        pos: LatLon {
+                            lat: 35.0,
+                            lon: 127.003,
+                        },
+                    },
+                ],
+            },
+        ]
+    }
+
+    /// 저장·재생 시험에 쓰는 `map-patch-v1` TOML을 만든다.
+    fn patch_replay_toml(id: &str, connector: bool) -> String {
+        let (anchors, nodes, ways) = if connector {
+            (
+                r#"[[anchors]]
+id = "west"
+osm_node = 2
+lat = 35.0
+lon = 127.001
+max_error_m = 1.0
+
+[[anchors]]
+id = "east"
+osm_node = 3
+lat = 35.0
+lon = 127.002
+max_error_m = 1.0"#,
+                r#"[[nodes]]
+id = "middle"
+lat = 35.0001
+lon = 127.0015"#,
+                r#"[[ways]]
+id = "connector"
+nodes = ["anchor:west", "middle", "anchor:east"]
+highway = "service"
+oneway = false
+width_m = 4.0
+width_source = "synthetic""#,
+            )
+        } else {
+            (
+                r#"[[anchors]]
+id = "start"
+osm_node = 1
+lat = 35.0
+lon = 127.0
+max_error_m = 1.0"#,
+                r#"[[nodes]]
+id = "end"
+lat = 35.0005
+lon = 127.0"#,
+                r#"[[ways]]
+id = "spur"
+nodes = ["anchor:start", "end"]
+highway = "service"
+oneway = false
+width_m = 4.0
+width_source = "synthetic""#,
+            )
+        };
+        format!(
+            r#"format = "map-patch-v1"
+id = "{id}"
+name = "test patch"
+revision = 1
+bbox = [34.999, 126.999, 35.002, 127.004]
+source_kind = "synthetic"
+source_description = "unit test"
+verified_at = "2026-11-13"
+license = "test-only"
+status = "synthetic"
+geometry_accuracy = "synthetic"
+access_assumption = "test only"
+notice = "not a real road"
+
+{anchors}
+{nodes}
+{ways}
+"#
+        )
+    }
+
+    /// 저장·재생 시험용 OSM 스냅샷 JSON을 만든다.
+    fn patch_replay_snapshot() -> String {
+        r#"{"generator":"Overpass API test","elements":[{"type":"way","id":10,"nodes":[1,2],"geometry":[{"lat":35.0,"lon":127.0},{"lat":35.0,"lon":127.001}],"tags":{"highway":"service"}},{"type":"way","id":20,"nodes":[3,4],"geometry":[{"lat":35.0,"lon":127.002},{"lat":35.0,"lon":127.003}],"tags":{"highway":"service"}}]}"#.to_owned()
+    }
+
+    /// 시험마다 겹치지 않는 임시 폴더를 새로 만든다.
+    fn patch_replay_temp(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "sds-map-patch-replay-{name}-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// 경로 파일에는 A*가 실제로 지난 보정만 기록되고 TOML 왕복 뒤에도 같은 참조가 남는다.
+    #[test]
+    fn route_records_only_used_map_patches() {
+        let bridge_text = patch_replay_toml("bridge", true);
+        let spur_text = patch_replay_toml("unused-spur", false);
+        let patches = [
+            map_patch::parse_patch(bridge_text.as_bytes(), "bridge.toml", PatchAudience::Test)
+                .unwrap(),
+            map_patch::parse_patch(spur_text.as_bytes(), "unused.toml", PatchAudience::Test)
+                .unwrap(),
+        ];
+        let graph = map_patch_graph::apply_map_patches(&patch_replay_osm(), &patches).unwrap();
+        let planned = plan_route_full_with_patches(
+            &graph,
+            &[],
+            None,
+            "snapshot.json",
+            &[[35.0, 127.0002], [35.0, 127.0028]],
+            &RoadGraphConfig::default(),
+        )
+        .unwrap();
+        assert_eq!(planned.file.map_patches.len(), 1);
+        assert_eq!(planned.file.map_patches[0].id, "bridge");
+        assert_eq!(planned.file.map_patches[0].format, map_patch::FORMAT);
+        assert_eq!(planned.file.map_patches[0].sha256, patches[0].sha256);
+
+        let text = route_file_toml(&planned.file).unwrap();
+        let reread: RouteFile = toml::from_str(&text).unwrap();
+        assert_eq!(reread, planned.file);
+        assert!(text.contains("[[map_patches]]"));
+    }
+
+    /// 동일한 보정 파일은 재생되고 누락·변조·revision 변경은 거부되며 원본 복구 뒤 같은 코스가 만들어진다.
+    #[test]
+    fn patched_route_replay_verifies_file_bytes() {
+        let root = patch_replay_temp("verify");
+        let patch_dir = root.join("patches");
+        std::fs::create_dir_all(&patch_dir).unwrap();
+        std::fs::write(root.join("snapshot.json"), patch_replay_snapshot()).unwrap();
+        let patch_path = patch_dir.join("bridge.toml");
+        let original = patch_replay_toml("bridge", true);
+        std::fs::write(&patch_path, &original).unwrap();
+
+        let parsed =
+            map_patch::parse_patch(original.as_bytes(), &patch_path, PatchAudience::Test).unwrap();
+        let graph = map_patch_graph::apply_map_patches(&patch_replay_osm(), &[parsed]).unwrap();
+        let planned = plan_route_full_with_patches(
+            &graph,
+            &[],
+            None,
+            "snapshot.json",
+            &[[35.0, 127.0002], [35.0, 127.0028]],
+            &RoadGraphConfig::default(),
+        )
+        .unwrap();
+        let first =
+            load_route_course_with_patch_dir(&planned.file, &root, &patch_dir, PatchAudience::Test)
+                .unwrap();
+
+        std::fs::write(&patch_path, original.replace("unit test", "unit tests")).unwrap();
+        let error =
+            load_route_course_with_patch_dir(&planned.file, &root, &patch_dir, PatchAudience::Test)
+                .unwrap_err();
+        assert!(error.contains("SHA-256 mismatch"), "{error}");
+
+        std::fs::write(
+            &patch_path,
+            original.replace("revision = 1", "revision = 2"),
+        )
+        .unwrap();
+        let error =
+            load_route_course_with_patch_dir(&planned.file, &root, &patch_dir, PatchAudience::Test)
+                .unwrap_err();
+        assert!(error.contains("SHA-256 mismatch"), "{error}");
+
+        std::fs::remove_file(&patch_path).unwrap();
+        let error =
+            load_route_course_with_patch_dir(&planned.file, &root, &patch_dir, PatchAudience::Test)
+                .unwrap_err();
+        assert!(error.contains("missing map patch"), "{error}");
+
+        std::fs::write(&patch_path, &original).unwrap();
+        let restored =
+            load_route_course_with_patch_dir(&planned.file, &root, &patch_dir, PatchAudience::Test)
+                .unwrap();
+        assert_eq!(restored, first);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// `map_patches`가 없는 기존 `route-v1`은 보정 폴더가 없어도 이전 OSM 전용 방식으로 재생된다.
+    #[test]
+    fn legacy_route_replay_does_not_require_patch_directory() {
+        let root = patch_replay_temp("legacy");
+        std::fs::write(root.join("snapshot.json"), patch_replay_snapshot()).unwrap();
+        let mut file = plan_route(
+            &patch_replay_osm(),
+            "snapshot.json",
+            &[[35.0, 127.0001], [35.0, 127.0009]],
+            &RoadGraphConfig::default(),
+        )
+        .unwrap();
+        file.map_patches.clear();
+        let text = route_file_toml(&file).unwrap();
+        assert!(!text.contains("map_patches"));
+        let reread: RouteFile = toml::from_str(&text).unwrap();
+        load_route_course_with_patch_dir(
+            &reread,
+            &root,
+            &root.join("does-not-exist"),
+            PatchAudience::Distribution,
+        )
+        .unwrap();
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

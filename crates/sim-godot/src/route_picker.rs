@@ -21,6 +21,8 @@ use sim_core::picker::region::{
 use sim_core::picker::tiles;
 use sim_core::world::korea_data::{KOREA_DATA_DIR, KoreaData, REGION_CACHE_DIR};
 use sim_core::world::map_fetch::Bbox;
+use sim_core::world::map_patch::{self, PATCH_DIR, PatchAudience, PatchBbox};
+use sim_core::world::map_patch_graph;
 use sim_core::world::places;
 use sim_core::world::route_plan::ROAD_GRAPH_CONFIG_PATH;
 
@@ -48,6 +50,27 @@ fn event(kind: &str, message: &str, request_id: i64) -> VarDictionary {
     vdict! { "type" => kind, "message" => message, "request_id" => request_id }
 }
 
+/// 모델에 든 OSM way 전체의 위경도 범위를 지역 보정 선택 범위로 만든다.
+fn model_patch_bbox(model: &PickerModel) -> Result<PatchBbox, String> {
+    let mut bbox = PatchBbox {
+        south: f64::INFINITY,
+        west: f64::INFINITY,
+        north: f64::NEG_INFINITY,
+        east: f64::NEG_INFINITY,
+    };
+    for node in model.ways.iter().flat_map(|way| &way.nodes) {
+        bbox.south = bbox.south.min(node.pos.lat);
+        bbox.west = bbox.west.min(node.pos.lon);
+        bbox.north = bbox.north.max(node.pos.lat);
+        bbox.east = bbox.east.max(node.pos.lon);
+    }
+    if bbox.south.is_finite() {
+        Ok(bbox)
+    } else {
+        Err("the snapshot has no road nodes".to_owned())
+    }
+}
+
 /// 경로 선택 상태. 화면(Godot)은 표시·입력만 하고 계산은 여기서 한다.
 #[derive(GodotClass)]
 #[class(init, base = RefCounted)]
@@ -58,6 +81,8 @@ pub struct SimRoutePicker {
     network: bool,
     /// 전국 자료 폴더(저장소 루트 기준). 비어 있으면 [`KOREA_DATA_DIR`]. 시험이 작은 자료를 가리킬 때 바꾼다.
     data_dir: String,
+    /// 지역 보정 폴더(저장소 루트 기준). 비어 있으면 [`PATCH_DIR`]. 시험은 별도 폴더로 바꿀 수 있다.
+    patch_dir: String,
     /// 열어 둔 전국 자료(처음 지역을 열 때 연다).
     korea: Option<KoreaData>,
     model: Option<PickerModel>,
@@ -95,6 +120,12 @@ impl SimRoutePicker {
     fn use_data_dir(&mut self, dir: GString) {
         self.data_dir = dir.to_string();
         self.korea = None;
+    }
+
+    /// 지역 보정 폴더를 바꾼다(저장소 루트 기준, 빈 문자열이면 `data/map-patches`). 다음 지역부터 적용한다.
+    #[func]
+    fn use_patch_dir(&mut self, dir: GString) {
+        self.patch_dir = dir.to_string();
     }
 
     /// 전국 자료 상태 `{ok, error, data_time}`. 없거나 형식이 다르면 `ok = false`와 만드는 방법 안내(한국어).
@@ -541,9 +572,31 @@ impl SimRoutePicker {
     /// 스냅샷 파일로 모델을 만들어 교체한다. 점·경로는 비워진다.
     fn open_model(&mut self, graph_path: &Path) -> Result<(), String> {
         let config_path: PathBuf = repo_path(ROAD_GRAPH_CONFIG_PATH);
-        let (model, warning) = load_model(graph_path, &config_path)?;
+        let (mut model, warning) = load_model(graph_path, &config_path)?;
         if let Some(warning) = warning {
             godot_warn!("{warning}");
+        }
+        let patch_dir = if self.patch_dir.is_empty() {
+            repo_path(PATCH_DIR)
+        } else {
+            resolve_user_path(&self.patch_dir)
+        };
+        if patch_dir.is_dir() {
+            let available = map_patch::load_patch_dir(&patch_dir, PatchAudience::Distribution)?;
+            let bbox = model_patch_bbox(&model)?;
+            let selected: Vec<_> = map_patch::patches_for_bbox(&available, &bbox)
+                .into_iter()
+                .cloned()
+                .collect();
+            if !selected.is_empty() {
+                let graph = map_patch_graph::apply_map_patches(&model.ways, &selected)?;
+                self.message = format!("지역 보정 {}개를 적용했습니다", graph.applied.len());
+                model = model.with_map_patches(graph);
+            } else {
+                self.message.clear();
+            }
+        } else {
+            self.message.clear();
         }
         self.model = Some(model);
         Ok(())

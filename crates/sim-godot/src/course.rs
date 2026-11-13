@@ -8,9 +8,10 @@ use glam::Vec2;
 use godot::prelude::*;
 use sim_core::vehicle::GroundRect;
 use sim_core::world::course::{ColliderKind, CourseDef, CourseId, MarkingKind, StripKind};
+use sim_core::world::map_patch::{PATCH_DIR, PatchAudience};
 use sim_core::world::{course_files, map};
 
-use crate::paths::{repo_root, resolve_user_path};
+use crate::paths::{repo_path, repo_root, resolve_user_path};
 
 /// 지면 좌표 (x, z)를 높이 0인 Godot 3차원 좌표로 바꾼다.
 fn ground(point: Vec2) -> Vector3 {
@@ -158,6 +159,14 @@ pub fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
 /// 지도 코스는 Bevy `--course map:<파일>`과 같은 `sim_core::world::map::load_map_course`로 만든다.
 /// 패닉도 잡아서 `"내부 오류: ..."` 사유로 바꾼다(계약 6절).
 pub fn build_course(name: &str) -> Result<CourseDef, String> {
+    build_course_with_patch_dir(name, &repo_path(PATCH_DIR))
+}
+
+/// [`build_course`]와 같되 지역 보정 경로가 참조할 보정 폴더를 명시한다(격리된 자동 시험·개발 자료용).
+pub fn build_course_with_patch_dir(
+    name: &str,
+    patch_dir: &std::path::Path,
+) -> Result<CourseDef, String> {
     let course = if let Some(path) = name.trim().strip_prefix("map:") {
         let path = path.trim();
         if path.is_empty() {
@@ -167,9 +176,11 @@ pub fn build_course(name: &str) -> Result<CourseDef, String> {
             );
         }
         let path = resolve_user_path(path);
-        catch_unwind(AssertUnwindSafe(|| map::load_map_course(&path)))
-            .map_err(|payload| format!("내부 오류: {}", panic_message(payload.as_ref())))?
-            .map_err(|error| format!("지도 코스를 열 수 없습니다: {error}"))?
+        catch_unwind(AssertUnwindSafe(|| {
+            map::load_map_course_with_patch_dir(&path, patch_dir, PatchAudience::Distribution)
+        }))
+        .map_err(|payload| format!("내부 오류: {}", panic_message(payload.as_ref())))?
+        .map_err(|error| format!("지도 코스를 열 수 없습니다: {error}"))?
     } else {
         let id = CourseId::parse(name).ok_or_else(|| {
             format!(
@@ -194,6 +205,16 @@ impl SimCourse {
     #[func]
     fn build(name: GString) -> VarDictionary {
         match build_course(&name.to_string()) {
+            Ok(course) => course_dict(&course),
+            Err(error) => failure_dict(&error),
+        }
+    }
+
+    /// 지정한 지역 보정 폴더로 지도 코스를 만든다. 격리된 시험·개발 자료를 확인할 때 쓴다.
+    #[func]
+    fn build_with_patch_dir(name: GString, patch_dir: GString) -> VarDictionary {
+        let patch_dir = resolve_user_path(&patch_dir.to_string());
+        match build_course_with_patch_dir(&name.to_string(), &patch_dir) {
             Ok(course) => course_dict(&course),
             Err(error) => failure_dict(&error),
         }

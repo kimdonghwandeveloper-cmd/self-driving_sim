@@ -11,6 +11,7 @@ use glam::Vec2;
 
 use super::tiles;
 use crate::world::map::LatLon;
+use crate::world::map_patch_graph::PatchedGraph;
 use crate::world::osm_graph::{OsmGraphWay, TurnRestriction};
 use crate::world::places::{self, Place};
 use crate::world::road_snapshot::Connectivity;
@@ -37,6 +38,8 @@ pub struct PickerModel {
     pub snapshot_path: PathBuf,
     /// 스냅샷 way.
     pub ways: Vec<OsmGraphWay>,
+    /// 적용한 지역 보정 그래프. 없으면 OSM 스냅샷만 사용한다.
+    pub patch_graph: Option<PatchedGraph>,
     /// 경계 연결 정보(Geofabrik 추출). Overpass 스냅샷이면 `None`(연결 검증 정보 없음).
     pub connectivity: Option<Connectivity>,
     /// 회전 제한(PLAN 4-8). 관계를 받지 않은 스냅샷이면 비어 있다.
@@ -95,6 +98,7 @@ impl PickerModel {
         Ok(Self {
             snapshot_path,
             ways,
+            patch_graph: None,
             connectivity: None,
             restrictions: Vec::new(),
             config,
@@ -106,6 +110,31 @@ impl PickerModel {
             places_loaded: false,
             planned: None,
         })
+    }
+
+    /// 검증된 지역 보정 그래프로 도로·표시 선분을 바꾸고 이후 계산에 보정 메타데이터를 보존한다.
+    pub fn with_map_patches(mut self, graph: PatchedGraph) -> Self {
+        let allowed: std::collections::BTreeSet<&str> = self
+            .config
+            .allowed_highways
+            .iter()
+            .map(String::as_str)
+            .collect();
+        self.segments = graph
+            .ways
+            .iter()
+            .flat_map(|way| {
+                let usable = route_plan::searchable(way, &allowed, self.config.nav_rules);
+                way.nodes.windows(2).map(move |pair| RoadSegment {
+                    from: tiles::to_view(pair[0].pos),
+                    to: tiles::to_view(pair[1].pos),
+                    usable,
+                })
+            })
+            .collect();
+        self.ways = graph.ways.clone();
+        self.patch_graph = Some(graph);
+        self
     }
 
     /// 받은 건물·장소를 바꾼다. 이미 찍은 점과 경로는 그대로 둔다.
@@ -263,18 +292,34 @@ impl PickerModel {
             Vec::new()
         };
         self.planned = (self.points.len() >= 2).then(|| {
-            route_plan::plan_route_full(
-                &self.ways,
-                &self.restrictions,
-                self.connectivity.as_ref(),
-                "",
-                &self.points,
-                &self.config,
-            )
-            .map(|mut planned| {
-                planned.file.point_labels = labels;
-                planned
-            })
+            self.patch_graph
+                .as_ref()
+                .map_or_else(
+                    || {
+                        route_plan::plan_route_full(
+                            &self.ways,
+                            &self.restrictions,
+                            self.connectivity.as_ref(),
+                            "",
+                            &self.points,
+                            &self.config,
+                        )
+                    },
+                    |graph| {
+                        route_plan::plan_route_full_with_patches(
+                            graph,
+                            &self.restrictions,
+                            self.connectivity.as_ref(),
+                            "",
+                            &self.points,
+                            &self.config,
+                        )
+                    },
+                )
+                .map(|mut planned| {
+                    planned.file.point_labels = labels;
+                    planned
+                })
         });
     }
 
@@ -301,6 +346,27 @@ impl PickerModel {
         } else {
             format!("Turn restrictions: {} applied", self.restrictions.len())
         });
+        match &self.patch_graph {
+            Some(graph) if !graph.applied.is_empty() => {
+                lines.push("Map source: OSM + local patches".to_owned());
+                for patch in &graph.applied {
+                    lines.push(format!(
+                        "Map patch: {} (status: {}, geometry accuracy: {})",
+                        patch.name,
+                        patch.status.as_str(),
+                        patch.geometry_accuracy
+                    ));
+                    lines.push(format!("Map patch notice: {}", patch.notice));
+                }
+                lines.extend(
+                    graph
+                        .warnings
+                        .iter()
+                        .map(|warning| format!("Map patch warning: {warning}")),
+                );
+            }
+            _ => lines.push("Map source: OSM".to_owned()),
+        }
         lines.push(if self.places_loaded {
             format!(
                 "Places: {} (click a building or search by name)",

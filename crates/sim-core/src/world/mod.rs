@@ -9,6 +9,8 @@ pub mod junction;
 pub mod korea_data;
 pub mod map;
 pub mod map_fetch;
+pub mod map_patch;
+pub mod map_patch_graph;
 pub mod osm_graph;
 pub mod pbf_audit;
 pub mod pbf_compare;
