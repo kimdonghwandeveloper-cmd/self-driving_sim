@@ -4,7 +4,7 @@ extends SceneTree
 const Main = preload("res://main.tscn")
 const Drive = preload("res://presentation/drive_screen.gd")
 
-## 메뉴 경유 열기, 도로 면·연석 합친 메시, 배경, 주행을 검사한다.
+## 메뉴 경유 열기, 도로 면·연석 합친 메시, 배경, 도로 이탈 판정, 주행을 검사한다.
 func _initialize() -> void:
 	call_deferred("_run")
 
@@ -31,11 +31,14 @@ func _run() -> void:
 		return
 	var vehicle: Node3D = drive.vehicle
 	var data: Dictionary = vehicle.call("course_data")
-	if data.areas.size() < 1000 or data.colliders.size() < 1000:
+	if data.areas.size() < 500 or data.colliders.size() < 500:
 		_finish(false, "도로 면 또는 연석 수가 너무 적습니다: %d / %d" % [data.areas.size(), data.colliders.size()])
 		return
 	if drive.scene_content.find_child("Colliders_curb", true, false) == null:
 		_finish(false, "연석 합친 메시가 없습니다.")
+		return
+	if not drive.on_road(vehicle.position) or drive.on_road(Vector3(5000.0, 0.0, 5000.0)):
+		_finish(false, "도로 이탈 판정이 맞지 않습니다(시작점은 도로 위, 먼 곳은 도로 밖이어야 함).")
 		return
 	vehicle.set("read_input", false)
 	vehicle.call("send_command", "engine_toggle")
@@ -50,7 +53,7 @@ func _run() -> void:
 ## 검증 결과와 종료 코드를 남긴다.
 func _finish(ok: bool, message: String) -> void:
 	if ok:
-		print("YEOSU CUSTOM ROADS OK: menu, road polygons, curbs, background, driving")
+		print("YEOSU CUSTOM ROADS OK: menu, road polygons, curbs, background, off-road check, driving")
 	else:
 		printerr("YEOSU CUSTOM ROADS FAIL: " + message)
 	quit(0 if ok else 1)

@@ -9,6 +9,9 @@ const Rig = preload("res://presentation/camera_rig.gd")
 const YEOSU_COURSE := "map:testdata/yeosu-expo/course.toml"
 ## 사용자 제작 맵의 도로 면을 그대로 노면·연석으로 쓰는 여수 코스. 배경 GLB와 같은 원점을 쓴다.
 const YEOSU_CUSTOM_ROADS_COURSE := "map:testdata/yeosu-expo/custom-roads.toml"
+## 내 맵 도로 코스에서 차가 도로 면 밖(열린 막다른 끝 너머)에 있을 때 HUD에 보일 안내와 도로 면 격자 칸 크기(m).
+const OFF_ROAD_NOTICE := "도로 이탈 · 맵 도로 밖입니다"
+const ROAD_CELL_M := 20.0
 const YEOSU_BACKGROUND = preload("res://assets/maps/yeosu-expo/background.glb")
 ## 코스 범위 밖으로 바닥을 더 까는 여백(m).
 const GROUND_MARGIN_M := 300.0
@@ -73,6 +76,8 @@ var command_notice := ""
 var command_notice_until := 0
 ## 코스 둘레 바닥. 코스 범위를 안 뒤 크기를 맞춘다.
 var ground := MeshInstance3D.new()
+## 도로 이탈 판정용 도로 면 격자(칸 → 그 칸에 걸친 면 다각형 목록). 내 맵 도로 코스에서만 채운다.
+var road_cells := {}
 
 ## 전달받은 코스로 화면을 만들고 실패 시 메시를 생성하지 않는다.
 func start(course_name: String, force_preview: bool = false) -> void:
@@ -99,6 +104,8 @@ func start(course_name: String, force_preview: bool = false) -> void:
 	var bounds := CourseMesh.ground_bounds(data)
 	if course_name in [YEOSU_COURSE, YEOSU_CUSTOM_ROADS_COURSE] and not is_preview and fallback_notice.is_empty():
 		bounds = _add_yeosu_background(bounds)
+	if course_name == YEOSU_CUSTOM_ROADS_COURSE and fallback_notice.is_empty():
+		_index_road_areas(data)
 	_fit_ground(bounds)
 	visual = Visual.new()
 	vehicle.add_child(visual)
@@ -137,6 +144,34 @@ func _make_vehicle(course_name: String) -> Node3D:
 		node.set("course", course_name)
 	add_child(node)
 	return node
+
+## 코스 면(`areas`) 다각형을 격자 칸에 나눠 담아 도로 이탈 판정에 쓴다.
+func _index_road_areas(data: Dictionary) -> void:
+	road_cells.clear()
+	for area in data.get("areas", []):
+		var polygon := PackedVector2Array()
+		for point: Vector3 in area.boundary:
+			polygon.append(Vector2(point.x, point.z))
+		var box := Rect2(polygon[0], Vector2.ZERO)
+		for point in polygon:
+			box = box.expand(point)
+		for x in range(floori(box.position.x / ROAD_CELL_M), floori(box.end.x / ROAD_CELL_M) + 1):
+			for z in range(floori(box.position.y / ROAD_CELL_M), floori(box.end.y / ROAD_CELL_M) + 1):
+				var cell := Vector2i(x, z)
+				if not road_cells.has(cell):
+					road_cells[cell] = []
+				road_cells[cell].append(polygon)
+
+## 지면 위치(x, z)가 도로 면 안인지 본다. 격자가 비어 있으면(다른 코스) 항상 도로 위로 본다.
+func on_road(position_3d: Vector3) -> bool:
+	if road_cells.is_empty():
+		return true
+	var point := Vector2(position_3d.x, position_3d.z)
+	var cell := Vector2i(floori(point.x / ROAD_CELL_M), floori(point.y / ROAD_CELL_M))
+	for polygon: PackedVector2Array in road_cells.get(cell, []):
+		if Geometry2D.is_point_in_polygon(point, polygon):
+			return true
+	return false
 
 ## 시각 배경을 원점에 배치하고, 바닥이 배경 도로를 덮지 않도록 높이와 범위를 맞춘다.
 func _add_yeosu_background(bounds: Rect2) -> Rect2:
@@ -295,6 +330,8 @@ func _process(_delta: float) -> void:
 	elif rig.current_view != "front":
 		hud.text += "\n" + SIDE_VIEW_NOTICE
 
+	if not road_cells.is_empty() and not on_road(vehicle.position):
+		hud.text += "\n" + OFF_ROAD_NOTICE
 	var impact_line := _impact_line(vehicle.call("last_impact"), int(vehicle.call("tick_count")))
 	if not impact_line.is_empty():
 		hud.text += "\n" + impact_line
