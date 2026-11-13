@@ -5,6 +5,7 @@ pub mod collision;
 pub mod dynamics;
 pub mod impulse;
 pub mod state;
+pub mod suspension;
 
 pub use collision::{ContactState, GroundRect, Obstacle, VEHICLE_FOOTPRINT};
 pub use dynamics::{DynamicsParams, Motion, SteerReturn};

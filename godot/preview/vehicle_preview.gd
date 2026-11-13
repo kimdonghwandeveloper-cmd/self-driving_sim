@@ -52,6 +52,10 @@ func in_contact() -> bool:
 func last_impact() -> Dictionary:
 	return {}
 
+## 임시 노드는 차체가 기울지 않는다(계약 v1.9).
+func body_pose() -> Dictionary:
+	return {"pitch_rad": 0.0, "roll_rad": 0.0, "heave_m": 0.0}
+
 ## 임시 노드는 물리 틱을 돌리지 않는다.
 func tick_count() -> int:
 	return 0

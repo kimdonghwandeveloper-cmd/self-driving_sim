@@ -13,6 +13,7 @@ use crate::input::gamepad::GamepadMapping;
 use crate::input::mapping::KeyboardMapping;
 use crate::vehicle::dynamics::DynamicsParams;
 use crate::vehicle::state::{DEFAULT_STOP_THRESHOLD_MPS, MAX_STOP_THRESHOLD_MPS};
+use crate::vehicle::suspension::SuspensionParams;
 
 /// 차량 설정 파일 경로(저장소 루트 기준).
 pub const VEHICLE_CONFIG_PATH: &str = "config/vehicle.toml";
@@ -27,6 +28,8 @@ pub const CAMERA_CONFIG_PATH: &str = "config/camera.toml";
 pub struct VehicleConfig {
     pub state_machine: StateMachineConfig,
     pub dynamics: DynamicsParams,
+    /// 차체 서스펜션 움직임(2-8, 보이는 움직임만).
+    pub suspension: SuspensionParams,
 }
 
 /// `[state_machine]` 구역.
@@ -46,7 +49,7 @@ impl Default for StateMachineConfig {
 }
 
 impl VehicleConfig {
-    /// 상태 머신·운동 모델 값의 범위를 검사한다.
+    /// 상태 머신·운동 모델·서스펜션 값의 범위를 검사한다.
     pub fn validate(&self) -> Result<(), String> {
         let threshold = self.state_machine.stop_threshold_mps;
         if !(0.0..=MAX_STOP_THRESHOLD_MPS).contains(&threshold) {
@@ -54,7 +57,8 @@ impl VehicleConfig {
                 "state_machine.stop_threshold_mps must be within 0..={MAX_STOP_THRESHOLD_MPS}, got {threshold}"
             ));
         }
-        self.dynamics.validate()
+        self.dynamics.validate()?;
+        self.suspension.validate()
     }
 }
 
