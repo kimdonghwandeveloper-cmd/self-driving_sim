@@ -45,7 +45,7 @@ impl Default for SuspensionParams {
             track_width_m: 1.6,
             natural_freq_hz: 1.3,
             roll_freq_hz: 1.8,
-            damping_ratio: 0.35,
+            damping_ratio: 0.6,
             max_pitch_deg: 3.0,
             max_roll_deg: 4.0,
             max_heave_m: 0.05,
