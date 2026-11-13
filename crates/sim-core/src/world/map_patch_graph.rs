@@ -21,6 +21,8 @@ const SEGMENT_EPSILON_M: f64 = 0.001;
 pub struct AppliedPatch {
     /// 보정의 안정적인 ID.
     pub id: String,
+    /// 보정 파일 형식.
+    pub format: String,
     /// 조립한 원본 파일의 SHA-256.
     pub sha256: String,
     /// 이 보정에서 추가한 합성 way ID.
@@ -471,6 +473,7 @@ pub fn apply_map_patches(
         additions.extend(patch_ways);
         applied.push(AppliedPatch {
             id: patch.id.clone(),
+            format: patch.format.clone(),
             sha256: patch.sha256.clone(),
             way_ids,
         });
