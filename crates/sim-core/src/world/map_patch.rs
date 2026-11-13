@@ -219,7 +219,7 @@ pub struct MapPatch {
     pub ways: Vec<PatchWay>,
     /// 원본 TOML 바이트의 SHA-256.
     pub sha256: String,
-    /// `node/<ID>`·`way/<ID>`에서 합성 `u64`로 가는 결정적 표.
+    /// `anchor/<ID>`·`node/<ID>`·`way/<ID>`에서 합성 `u64`로 가는 결정적 표.
     pub synthetic_ids: BTreeMap<String, u64>,
     /// 원본 파일 경로.
     pub path: PathBuf,
@@ -331,14 +331,16 @@ fn synthetic_id(patch_id: &str, revision: u64, kind: &str, local_id: &str) -> u6
     u64::from_be_bytes(bytes) | SYNTHETIC_BIT
 }
 
-/// 내부 노드와 way의 합성 ID를 만들고 파일 안 충돌을 검사한다.
+/// way 중간 접속점, 내부 노드와 way의 합성 ID를 만들고 파일 안 충돌을 검사한다.
 fn build_synthetic_ids(file: &PatchFile) -> Result<BTreeMap<String, u64>, String> {
     let mut by_name = BTreeMap::new();
     let mut used = BTreeMap::new();
     for (kind, local) in file
-        .nodes
+        .anchors
         .iter()
-        .map(|node| ("node", node.id.as_str()))
+        .filter(|anchor| anchor.osm_way.is_some())
+        .map(|anchor| ("anchor", anchor.id.as_str()))
+        .chain(file.nodes.iter().map(|node| ("node", node.id.as_str())))
         .chain(file.ways.iter().map(|way| ("way", way.id.as_str())))
     {
         let key = format!("{kind}/{local}");
