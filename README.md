@@ -326,6 +326,7 @@ cargo.exe build --locked -p sim-godot
 & '<Godot 콘솔 실행 파일>' --headless --fixed-fps 64 --path godot --script res://tests/scenario_test.gd
 & '<Godot 콘솔 실행 파일>' --headless --fixed-fps 64 --path godot --script res://tests/suspension_test.gd
 & '<Godot 콘솔 실행 파일>' --headless --fixed-fps 64 --path godot --script res://tests/map_patch_test.gd
+& '<Godot 콘솔 실행 파일>' --headless --fixed-fps 64 --path godot --script res://tests/yeosu_custom_roads_test.gd
 ```
 
 - `presentation_smoke.gd`는 정지 미리보기 장면·네 시점·지도 화면·메뉴 재진입을 검사합니다. `-- --capture-dir=<폴더>`를 주고 창 모드로 돌리면
@@ -348,6 +349,8 @@ cargo.exe build --locked -p sim-godot
   입석 카메라는 `body_follow`(0.5)만큼만 따라가고 외부 시점은 따라가지 않는지 확인합니다(2-8).
 - `map_patch_test.gd`는 합성 지역 보정으로 끊긴 OSM 도로를 연결해 경로 선택·안내·저장·재생·차량 통과를 확인하고,
   보정 파일 누락·변조 오류와 다른 코스에서 보정 안내가 사라지는지도 검사합니다(4-11a, 네트워크 없음).
+- `yeosu_custom_roads_test.gd`는 메뉴에서 "여수 엑스포 · 내 맵 도로"(사용자 제작 맵의 도로 중심선 코스)를 열어 도로 면·연석·배경,
+  도로 이탈 판정과 몇 초 주행을 확인합니다(4-11b).
 
 프레임 시간은 실제 창에서 잽니다(헤드리스 아님, 측정만 하고 실패로 끝내지 않음).
 지도 화면은 `godot/tests/map_frame_probe.gd`로 잽니다(전국 지도 자료 필요, 기본 강남역 1.5 km 지역을 열고 가만히·끌기·확대 프레임 시간 출력):

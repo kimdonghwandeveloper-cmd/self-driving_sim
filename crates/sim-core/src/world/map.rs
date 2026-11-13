@@ -463,7 +463,8 @@ pub fn build_map_course(file: &MapCourseFile, base_dir: &Path) -> Result<CourseD
 
 /// 선택 파일 경로에서 지도 코스를 읽는다. 파일 없음·TOML 오류·변환 오류는 모두 `Err`다.
 ///
-/// 최상위에 `format` 키가 있으면 경로 파일([`super::route_plan::RouteFile`], Phase 4-3)로,
+/// 최상위 `format`이 [`super::road_polygons::ROAD_LINES_FORMAT`]이면 맵 도로 코스(사용자 제작 맵 도로, 4-11b)로,
+/// 그 밖의 `format` 키가 있으면 경로 파일([`super::route_plan::RouteFile`], Phase 4-3)로,
 /// 없으면 단일 통로 선택 파일([`MapCourseFile`])로 읽는다.
 pub fn load_map_course(path: &Path) -> Result<CourseDef, String> {
     load_map_course_with_patch_dir(
@@ -484,6 +485,11 @@ pub fn load_map_course_with_patch_dir(
     let invalid = |error: toml::de::Error| format!("invalid {}: {error}", path.display());
     let table: toml::Table = toml::from_str(&text).map_err(invalid)?;
     let base_dir = path.parent().unwrap_or(Path::new("."));
+    if table.get("format").and_then(toml::Value::as_str)
+        == Some(super::road_polygons::ROAD_LINES_FORMAT)
+    {
+        return super::road_polygons::load_road_lines_course(&text, base_dir);
+    }
     if table.contains_key("format") {
         let file: super::route_plan::RouteFile = toml::from_str(&text).map_err(invalid)?;
         return super::route_plan::load_route_course_with_patch_dir(

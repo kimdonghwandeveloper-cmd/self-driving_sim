@@ -39,12 +39,13 @@ func build(data: Dictionary) -> void:
 			vertices.append_array(PackedVector3Array([left[i], right[i], left[i + 1], right[i], right[i + 1], left[i + 1]]))
 		var is_line: bool = strip.kind == "edge_line"
 		_triangles(vertices, 0.016 if is_line else 0.012, paint.edge_line if is_line else asphalt)
+	# 면은 모두 메시 하나로 합친다(도로 면 코스는 면이 천 개가 넘는다).
+	var area_vertices := PackedVector3Array()
 	for area in data.get("areas", []):
 		var boundary: PackedVector3Array = area.boundary
-		var vertices := PackedVector3Array()
 		for i in range(boundary.size()):
-			vertices.append_array(PackedVector3Array([area.center, boundary[i], boundary[(i + 1) % boundary.size()]]))
-		_triangles(vertices, 0.012, asphalt)
+			area_vertices.append_array(PackedVector3Array([area.center, boundary[i], boundary[(i + 1) % boundary.size()]]))
+	_triangles(area_vertices, 0.012, asphalt)
 	for marking in data.get("markings", []):
 		_box(marking.rect, 0.004, 0.016, COLORS.stop_line, paint.get(marking.kind, paint.stop_line))
 	_colliders(data.get("colliders", []), concrete)
