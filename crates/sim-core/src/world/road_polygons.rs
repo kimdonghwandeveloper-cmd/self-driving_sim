@@ -4,6 +4,7 @@
 //! `road-lines-v1` JSON)을 읽어, 폭을 넓히고(배율·최소 폭) 꺾이는 곳을 둥글게 다듬은 뒤 도로 면 다각형을 만든다.
 //! 겹친 면들을 합친 영역의 바깥 경계선을 따라 연석을 세우며, 교차로처럼 면이 겹친 곳의 안쪽 변에는 연석이
 //! 생기지 않는다. 막다른 끝은 반원으로 둥글게 하고 연석 없이 열어 둔다(사용자 결정 2026-11-13).
+//! 연석은 저속에서 넘을 수 있는 낮은 연석([`ColliderKind::LowCurb`])이다(사용자 결정 2026-11-13).
 //!
 //! 경계 계산: 각 다각형 변을 다른 변과의 교차점에서 자르고, 조각 가운데에서 양옆으로 [`SIDE_PROBE_M`]만큼
 //! 떨어진 두 점 중 한쪽만 도로 영역(다각형 합집합) 안이면 경계로 본다. 연석은 바깥쪽에 붙인다.
@@ -296,7 +297,7 @@ fn build_course_from_polygons(
         .map(|segment| Collider {
             rect: curb_rect(segment),
             height_m: CURB_HEIGHT_M,
-            kind: ColliderKind::Curb,
+            kind: ColliderKind::LowCurb,
         })
         .collect();
     let rects: Vec<GroundRect> = colliders.iter().map(|collider| collider.rect).collect();

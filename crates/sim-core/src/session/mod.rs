@@ -17,6 +17,7 @@ use crate::vehicle::dynamics::{DynamicsParams, Motion};
 use crate::vehicle::state::{EngineState, Gear, VehicleCommand, VehicleInput, VehicleState};
 use crate::vehicle::suspension::{BodyMotion, SuspensionParams};
 use crate::world::CourseDef;
+use crate::world::course::ColliderKind;
 
 /// 고정 시간 간격(s). Bevy `FixedUpdate` 64 Hz와 같다.
 pub const DT: f32 = 1.0 / 64.0;
@@ -159,7 +160,13 @@ pub struct DriveSession {
 impl DriveSession {
     /// 코스와 차량 설정으로 초기 상태(시동 OFF, P, 비상 정지 없음, 코스 시작 자세, 틱 0)의 세션을 만든다.
     pub fn new(course: CourseDef, config: &VehicleConfig) -> Self {
-        let obstacles = ObstacleGrid::new(course.collision_rects());
+        // 사용자 제작 맵 도로의 낮은 연석은 저속에서 넘을 수 있다(4-11b).
+        let low_curbs = course
+            .colliders
+            .iter()
+            .map(|collider| collider.kind == ColliderKind::LowCurb)
+            .collect();
+        let obstacles = ObstacleGrid::with_low_curbs(course.collision_rects(), low_curbs);
         let motion = course.start;
         let state = VehicleState::new(config.state_machine.stop_threshold_mps);
         let mut calibration = CalibrationLog::default();
