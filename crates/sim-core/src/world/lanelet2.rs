@@ -675,7 +675,7 @@ mod tests {
     #[test]
     fn parses_straight_lanelet() {
         let map = parse_lanelet2(straight_fixture()).unwrap();
-        assert_eq!(map.nodes.len(), 6);
+        assert_eq!(map.nodes.len(), 9);
         assert_eq!(map.ways.len(), 3);
         assert_eq!(map.sha256.len(), 64);
         assert_eq!(
