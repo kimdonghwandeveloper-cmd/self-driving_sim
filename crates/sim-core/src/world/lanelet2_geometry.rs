@@ -17,6 +17,8 @@ const MIN_POINT_SPACING_M: f32 = 0.05;
 const MAX_SAMPLE_SPACING_M: f32 = 5.0;
 /// 단일 lanelet 도로 폭의 허용 범위(m).
 const WIDTH_RANGE_M: std::ops::RangeInclusive<f32> = 0.5..=30.0;
+/// 차로 하나로 보기 위한 평균 폭의 임시 허용 범위(m).
+const MEAN_WIDTH_RANGE_M: std::ops::RangeInclusive<f32> = 2.0..=7.0;
 /// 지역 원점에서 형상이 떨어질 수 있는 최대 거리(m).
 const MAX_ORIGIN_DISTANCE_M: f32 = 2_000.0;
 /// 비정상적으로 큰 입력이 과도한 도로 면 표본을 만들지 못하게 하는 상한.
@@ -37,6 +39,10 @@ pub struct LaneletGeometry {
     pub mean_width_m: f32,
     /// 원본 relation의 통행 방향.
     pub direction: LaneletDirection,
+    /// 공유 경계 시작점으로 이어지는 이전 lanelet relation ID.
+    pub predecessors: Vec<i64>,
+    /// 공유 경계 끝점에서 이어지는 다음 lanelet relation ID.
+    pub successors: Vec<i64>,
 }
 
 /// 한 Lanelet2 파일을 공통 지역 원점으로 투영한 결정적 geometry 결과.
@@ -50,15 +56,34 @@ pub struct LaneletGeometryMap {
     pub warnings: Vec<String>,
 }
 
-/// 파서가 검증한 Lanelet2 지도를 지역 좌표 도로 면과 중심선으로 변환한다.
-pub fn build_lanelet_geometry(map: &LaneletMap) -> Result<LaneletGeometryMap, String> {
-    let origin = referenced_bounds_center(map)?;
+/// lanelet 진행 방향에서 좌우 경계의 시작·끝 node ID 쌍.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct LaneletEndpoints {
+    start: (i64, i64),
+    end: (i64, i64),
+}
+
+/// 파서가 검증한 Lanelet2 지도를 지정한 원점의 지역 좌표 도로 면과 중심선으로 변환한다.
+pub fn build_lanelet_geometry(
+    map: &LaneletMap,
+    origin: LatLon,
+) -> Result<LaneletGeometryMap, String> {
+    if !origin.lat.is_finite()
+        || !origin.lon.is_finite()
+        || origin.lat.abs() > 90.0
+        || origin.lon.abs() > 180.0
+    {
+        return Err(format!("invalid Lanelet2 geometry origin {origin:?}"));
+    }
     let mut warnings = map.warnings.clone();
     let mut lanelets = BTreeMap::new();
+    let mut endpoints = BTreeMap::new();
     for relation in map.lanelets.values() {
-        let geometry = build_one(map, relation, origin, &mut warnings)?;
+        let (geometry, relation_endpoints) = build_one(map, relation, origin, &mut warnings)?;
         lanelets.insert(relation.id, geometry);
+        endpoints.insert(relation.id, relation_endpoints);
     }
+    connect_lanelets(&mut lanelets, &endpoints);
     Ok(LaneletGeometryMap {
         origin,
         lanelets,
@@ -66,8 +91,8 @@ pub fn build_lanelet_geometry(map: &LaneletMap) -> Result<LaneletGeometryMap, St
     })
 }
 
-/// 실제 lanelet이 참조하는 모든 way의 경계 상자 중심을 투영 원점으로 고른다.
-fn referenced_bounds_center(map: &LaneletMap) -> Result<LatLon, String> {
+/// 실제 lanelet이 참조하는 모든 way의 경계 상자 중심을 편의용 투영 원점으로 제안한다.
+pub fn suggest_lanelet_origin(map: &LaneletMap) -> Result<LatLon, String> {
     let mut min_lat = f64::INFINITY;
     let mut max_lat = f64::NEG_INFINITY;
     let mut min_lon = f64::INFINITY;
@@ -106,10 +131,10 @@ fn build_one(
     relation: &LaneletRelation,
     origin: LatLon,
     warnings: &mut Vec<String>,
-) -> Result<LaneletGeometry, String> {
+) -> Result<(LaneletGeometry, LaneletEndpoints), String> {
     let left = project_way(map, &map.ways[&relation.left], origin)?;
     let mut right = project_way(map, &map.ways[&relation.right], origin)?;
-    orient_like(&left, &mut right);
+    let right_reversed = orient_like(&left, &mut right);
 
     let sample_parameters = sample_parameters(&left, &right)?;
     let left_samples = resample(&left, &sample_parameters);
@@ -147,18 +172,87 @@ fn build_one(
         ));
         generated_center
     };
-    let mean_width_m = widths.iter().sum::<f32>() / widths.len() as f32;
-    Ok(LaneletGeometry {
-        id: relation.id,
-        surface: Strip {
-            kind: StripKind::Road,
-            left: left_samples,
-            right: right_samples,
+    let mean_width_m: f32 = widths
+        .windows(2)
+        .zip(sample_parameters.windows(2))
+        .map(|(width_pair, parameter_pair)| {
+            (width_pair[0] + width_pair[1]) * 0.5 * (parameter_pair[1] - parameter_pair[0])
+        })
+        .sum();
+    if !MEAN_WIDTH_RANGE_M.contains(&mean_width_m) {
+        return Err(format!(
+            "lanelet {} mean width is {mean_width_m:.3} m (allowed {:.1}..={:.1} m)",
+            relation.id,
+            MEAN_WIDTH_RANGE_M.start(),
+            MEAN_WIDTH_RANGE_M.end()
+        ));
+    }
+    let left_way = &map.ways[&relation.left];
+    let right_way = &map.ways[&relation.right];
+    let right_start = if right_reversed {
+        right_way.nodes[right_way.nodes.len() - 1]
+    } else {
+        right_way.nodes[0]
+    };
+    let right_end = if right_reversed {
+        right_way.nodes[0]
+    } else {
+        right_way.nodes[right_way.nodes.len() - 1]
+    };
+    Ok((
+        LaneletGeometry {
+            id: relation.id,
+            surface: Strip {
+                kind: StripKind::Road,
+                left: left_samples,
+                right: right_samples,
+            },
+            centerline,
+            mean_width_m,
+            direction: relation.direction,
+            predecessors: Vec::new(),
+            successors: Vec::new(),
         },
-        centerline,
-        mean_width_m,
-        direction: relation.direction,
-    })
+        LaneletEndpoints {
+            start: (left_way.nodes[0], right_start),
+            end: (left_way.nodes[left_way.nodes.len() - 1], right_end),
+        },
+    ))
+}
+
+/// 공유 경계 node 쌍을 색인해 모든 lanelet의 이전·다음 연결을 결정적으로 채운다.
+fn connect_lanelets(
+    lanelets: &mut BTreeMap<i64, LaneletGeometry>,
+    endpoints: &BTreeMap<i64, LaneletEndpoints>,
+) {
+    let mut starts: BTreeMap<(i64, i64), Vec<i64>> = BTreeMap::new();
+    for (&id, endpoint) in endpoints {
+        starts.entry(endpoint.start).or_default().push(id);
+    }
+    let mut edges = Vec::new();
+    for (&id, endpoint) in endpoints {
+        if let Some(successors) = starts.get(&endpoint.end) {
+            edges.extend(
+                successors
+                    .iter()
+                    .copied()
+                    .filter(|successor| *successor != id)
+                    .map(|successor| (id, successor)),
+            );
+        }
+    }
+    for (predecessor, successor) in edges {
+        lanelets
+            .get_mut(&predecessor)
+            .expect("endpoint IDs come from lanelets")
+            .successors
+            .push(successor);
+        lanelets
+            .get_mut(&successor)
+            .expect("endpoint IDs come from lanelets")
+            .predecessors
+            .push(predecessor);
+    }
 }
 
 /// way의 위경도 node를 지역 좌표로 투영하고 퇴화·범위 초과를 거부한다.
@@ -197,13 +291,16 @@ fn project_way(map: &LaneletMap, way: &LaneletWay, origin: LatLon) -> Result<Vec
 }
 
 /// 기준 선과 후보 선의 양 끝 거리 합이 작아지는 방향으로 후보를 뒤집는다.
-fn orient_like(reference: &[Vec2], candidate: &mut [Vec2]) {
+fn orient_like(reference: &[Vec2], candidate: &mut [Vec2]) -> bool {
     let same = reference[0].distance(candidate[0])
         + reference[reference.len() - 1].distance(candidate[candidate.len() - 1]);
     let reversed = reference[0].distance(candidate[candidate.len() - 1])
         + reference[reference.len() - 1].distance(candidate[0]);
     if reversed + GEOMETRY_EPSILON_M < same {
         candidate.reverse();
+        true
+    } else {
+        false
     }
 }
 
@@ -409,7 +506,7 @@ fn point_in_polygon_or_boundary(point: Vec2, polygon: &[Vec2]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::world::lanelet2::{LaneletNode, parse_lanelet2};
+    use crate::world::lanelet2::{LaneletNode, LaneletRelation, LaneletWay, parse_lanelet2};
 
     /// 저장소의 직선 Lanelet2 fixture를 파싱한다.
     fn straight_map() -> LaneletMap {
@@ -419,17 +516,104 @@ mod tests {
         .unwrap()
     }
 
+    /// 시험 지도에 제안 원점을 적용해 geometry를 만든다.
+    fn build_auto(map: &LaneletMap) -> Result<LaneletGeometryMap, String> {
+        build_lanelet_geometry(map, suggest_lanelet_origin(map)?)
+    }
+
     /// 정상 직선 lanelet을 도로 면과 명시적 중심선으로 변환한다.
     #[test]
     fn builds_straight_surface_and_centerline() {
-        let result = build_lanelet_geometry(&straight_map()).unwrap();
+        let result = build_auto(&straight_map()).unwrap();
         let lanelet = &result.lanelets[&301];
         assert_eq!(lanelet.surface.kind, StripKind::Road);
         assert_eq!(lanelet.surface.left.len(), lanelet.surface.right.len());
         assert_eq!(lanelet.centerline.len(), 3);
         assert!((3.5..=4.0).contains(&lanelet.mean_width_m));
         assert_eq!(lanelet.direction, LaneletDirection::OneWay);
+        assert!(lanelet.predecessors.is_empty());
+        assert!(lanelet.successors.is_empty());
         assert!(result.warnings.is_empty());
+    }
+
+    /// 호출자가 지정한 원점이 결과에 보존되고 모든 좌표 투영에 사용된다.
+    #[test]
+    fn uses_explicit_origin() {
+        let map = straight_map();
+        let origin = LatLon {
+            lat: map.nodes[&1].lat,
+            lon: map.nodes[&1].lon,
+        };
+        let result = build_lanelet_geometry(&map, origin).unwrap();
+        assert_eq!(result.origin, origin);
+        assert!(result.lanelets[&301].surface.left[0].length() < GEOMETRY_EPSILON_M);
+    }
+
+    /// 공유 경계 끝점 쌍으로 직렬·갈림·합류 연결을 ID 순서로 생성한다.
+    #[test]
+    fn connects_serial_fork_and_merge_lanelets() {
+        let mut map = straight_map();
+        for (id, lat, lon) in [
+            (10, 34.0004, 127.0),
+            (11, 34.0004, 127.00004),
+            (12, 34.0006, 127.0),
+            (13, 34.0006, 127.00004),
+        ] {
+            map.nodes.insert(id, LaneletNode { id, lat, lon });
+        }
+        for (id, nodes) in [
+            (204, vec![3, 10]),
+            (205, vec![6, 11]),
+            (206, vec![10, 12]),
+            (207, vec![11, 13]),
+        ] {
+            map.ways.insert(id, LaneletWay { id, nodes });
+        }
+        for id in [302, 303] {
+            map.lanelets.insert(
+                id,
+                LaneletRelation {
+                    id,
+                    left: 204,
+                    right: 205,
+                    centerline: None,
+                    direction: LaneletDirection::OneWay,
+                },
+            );
+        }
+        map.lanelets.insert(
+            304,
+            LaneletRelation {
+                id: 304,
+                left: 206,
+                right: 207,
+                centerline: None,
+                direction: LaneletDirection::OneWay,
+            },
+        );
+
+        let geometry = build_auto(&map).unwrap();
+        assert_eq!(geometry.lanelets[&301].successors, [302, 303]);
+        assert_eq!(geometry.lanelets[&302].predecessors, [301]);
+        assert_eq!(geometry.lanelets[&302].successors, [304]);
+        assert_eq!(geometry.lanelets[&303].predecessors, [301]);
+        assert_eq!(geometry.lanelets[&303].successors, [304]);
+        assert_eq!(geometry.lanelets[&304].predecessors, [302, 303]);
+    }
+
+    /// 지점별 폭은 유효해도 평균이 2~7 m 밖인 비현실적 차선을 거부한다.
+    #[test]
+    fn rejects_implausible_mean_width() {
+        for (width_lon, center_lon) in [(0.000008, 0.000004), (0.00027, 0.000135)] {
+            let mut map = straight_map();
+            for id in [4, 5, 6] {
+                map.nodes.get_mut(&id).unwrap().lon = 127.0 + width_lon;
+            }
+            for id in [7, 8, 9] {
+                map.nodes.get_mut(&id).unwrap().lon = 127.0 + center_lon;
+            }
+            assert!(build_auto(&map).unwrap_err().contains("mean width"));
+        }
     }
 
     /// 중심선이 없으면 대응시킨 좌우 경계 중점으로 결정적으로 생성한다.
@@ -437,8 +621,8 @@ mod tests {
     fn generates_missing_centerline() {
         let mut map = straight_map();
         map.lanelets.get_mut(&301).unwrap().centerline = None;
-        let first = build_lanelet_geometry(&map).unwrap();
-        let second = build_lanelet_geometry(&map).unwrap();
+        let first = build_auto(&map).unwrap();
+        let second = build_auto(&map).unwrap();
         assert_eq!(first, second);
         assert!(first.lanelets[&301].centerline.len() >= 6);
         assert!(first.warnings[0].contains("generated from boundary midpoints"));
@@ -449,7 +633,7 @@ mod tests {
     fn reverses_opposite_boundary_direction() {
         let mut map = straight_map();
         map.ways.get_mut(&202).unwrap().nodes.reverse();
-        let geometry = build_lanelet_geometry(&map).unwrap();
+        let geometry = build_auto(&map).unwrap();
         let lanelet = &geometry.lanelets[&301];
         assert!(lanelet.surface.right[0].y > lanelet.surface.right.last().unwrap().y);
     }
@@ -461,7 +645,7 @@ mod tests {
         map.nodes.get_mut(&2).unwrap().lon += 0.00001;
         map.nodes.get_mut(&5).unwrap().lon += 0.00001;
         map.lanelets.get_mut(&301).unwrap().centerline = None;
-        let geometry = build_lanelet_geometry(&map).unwrap();
+        let geometry = build_auto(&map).unwrap();
         let expected = project(
             geometry.origin,
             LatLon {
@@ -499,11 +683,7 @@ mod tests {
             },
         );
         map.ways.get_mut(&203).unwrap().nodes = vec![101, 102];
-        assert!(
-            build_lanelet_geometry(&map)
-                .unwrap_err()
-                .contains("centerline sample")
-        );
+        assert!(build_auto(&map).unwrap_err().contains("centerline sample"));
     }
 
     /// 지나치게 좁거나 좌우 역할이 바뀐 경계는 도로 면으로 만들지 않는다.
@@ -511,17 +691,13 @@ mod tests {
     fn rejects_bad_width_and_swapped_roles() {
         let mut narrow = straight_map();
         narrow.lanelets.get_mut(&301).unwrap().right = 201;
-        assert!(
-            build_lanelet_geometry(&narrow)
-                .unwrap_err()
-                .contains("width")
-        );
+        assert!(build_auto(&narrow).unwrap_err().contains("width"));
 
         let mut swapped = straight_map();
         let relation = swapped.lanelets.get_mut(&301).unwrap();
         std::mem::swap(&mut relation.left, &mut relation.right);
         assert!(
-            build_lanelet_geometry(&swapped)
+            build_auto(&swapped)
                 .unwrap_err()
                 .contains("crossed or reversed")
         );
@@ -532,6 +708,6 @@ mod tests {
     fn rejects_self_intersecting_surface() {
         let mut map = straight_map();
         map.ways.get_mut(&202).unwrap().nodes.swap(0, 1);
-        assert!(build_lanelet_geometry(&map).is_err());
+        assert!(build_auto(&map).is_err());
     }
 }
