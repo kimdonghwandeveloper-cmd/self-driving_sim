@@ -47,6 +47,8 @@ const SCENARIO_HELP := {
 }
 ## 시나리오 메시지 글자색.
 const SCENARIO_MESSAGE_COLOR := Color("ffd27a")
+## 보행자 대체 객체(5-4) 색. 노면·장애물과 구분되는 주황.
+const HAZARD_COLOR := Color("ff7a1a")
 var vehicle: Node3D
 var rig: Node3D
 ## 차체 외관·실내(서스펜션 움직임을 받는다, 2-8).
@@ -66,6 +68,8 @@ var scenario_box: PanelContainer
 var scenario_label := Label.new()
 var scenario_message := Label.new()
 var scenario_buttons := {}
+## 보행자 대체 객체 표시 노드(이름 → 노드). 처음 보일 때 만들고, 사라지면 숨긴다.
+var hazard_nodes := {}
 var is_preview := false
 var failure := ""
 ## 지도 코스 대신 개발 코스를 열었을 때의 안내. 대체하지 않았으면 빈 문자열.
@@ -341,6 +345,7 @@ func _process(_delta: float) -> void:
 		calibration_label.text = CALIBRATION_TITLE + "\n" + "\n".join(vehicle.call("calibration_lines"))
 	if scenario_box.visible:
 		_update_scenario(vehicle.call("scenario_status"))
+		_update_hazards(vehicle.call("scenario_hazards"))
 
 ## 차체 움직임(`SimVehicle.body_pose`, 계약 v1.9)으로 차체를 기울이고, 입석 카메라는 `body_follow`만큼 따라가게 한다.
 func _apply_body_pose(pose: Dictionary) -> void:
@@ -376,6 +381,8 @@ func _update_scenario(status: Dictionary) -> void:
 	if float(status.get("max_impact_delta_v_mps", 0.0)) > 0.0:
 		collision_text += " · 최대 속도 변화 %.1f m/s" % float(status.max_impact_delta_v_mps)
 	lines.append(time_text + "    " + collision_text)
+	if phase == "finished":
+		lines.append_array(status.get("result_lines", PackedStringArray()))
 	lines.append(SCENARIO_HELP.get(phase, ""))
 	scenario_label.text = "\n".join(lines)
 	scenario_message.text = str(status.get("message", ""))
@@ -383,6 +390,47 @@ func _update_scenario(status: Dictionary) -> void:
 	scenario_buttons["go"].disabled = phase != "briefing" and phase != "paused"
 	scenario_buttons["pause"].disabled = phase != "running"
 	scenario_buttons["end"].disabled = phase == "finished"
+
+## 보행자 대체 객체 목록(`SimVehicle.scenario_hazards`)대로 주황 기둥(몸)과 공(머리)을 놓고, 목록에 없는 것은 숨긴다.
+func _update_hazards(hazards: Array) -> void:
+	var seen := {}
+	for hazard: Dictionary in hazards:
+		var id := str(hazard.get("id", ""))
+		seen[id] = true
+		if not hazard_nodes.has(id):
+			hazard_nodes[id] = _make_hazard(hazard.get("size", Vector3(0.6, 1.7, 0.6)))
+			scene_content.add_child(hazard_nodes[id])
+		var node: Node3D = hazard_nodes[id]
+		node.position = hazard.get("position", Vector3.ZERO)
+		node.rotation = Vector3(0.0, float(hazard.get("heading_rad", 0.0)), 0.0)
+		node.visible = true
+	for id in hazard_nodes:
+		if not seen.has(id):
+			hazard_nodes[id].visible = false
+
+## 바닥 크기(x, z)와 높이(y)가 `size`인 사람 모양 대체 객체(몸 상자 + 머리 공)를 만든다. 원점은 바닥 가운데다.
+static func _make_hazard(size: Vector3) -> Node3D:
+	var root := Node3D.new()
+	root.name = "Hazard"
+	var material := StandardMaterial3D.new()
+	material.albedo_color = HAZARD_COLOR
+	var head_d := minf(size.x, size.z) * 0.8
+	var body := MeshInstance3D.new()
+	var box := BoxMesh.new()
+	box.size = Vector3(size.x, size.y - head_d, size.z)
+	body.mesh = box
+	body.material_override = material
+	body.position.y = (size.y - head_d) / 2.0
+	root.add_child(body)
+	var head := MeshInstance3D.new()
+	var sphere := SphereMesh.new()
+	sphere.radius = head_d / 2.0
+	sphere.height = head_d
+	head.mesh = sphere
+	head.material_override = material
+	head.position.y = size.y - head_d / 2.0
+	root.add_child(head)
+	return root
 
 ## 시나리오 차량이 준비됐는지 반환한다.
 func _has_scenario() -> bool:

@@ -64,6 +64,8 @@ func _check_scenario_flow() -> void:
 	for signal_name in ["scenario_step_done", "scenario_message", "scenario_phase_changed", "scenario_finished"]:
 		vehicle.connect(signal_name, _record.bind(signal_name))
 	vehicle.set("read_input", false)
+	# 결과 파일(5-5)은 저장소 logs/ 대신 시험용 사용자 폴더에 둔다.
+	vehicle.set("result_dir", "user://scenario-test-results")
 	_check(drive.scenario_box.visible, "시나리오 안내 상자가 보이지 않음")
 
 	for i in 16:

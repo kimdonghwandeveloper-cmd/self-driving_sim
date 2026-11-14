@@ -1,4 +1,4 @@
-# Godot ↔ Rust 인터페이스 계약 (v1.9)
+# Godot ↔ Rust 인터페이스 계약 (v1.10)
 
 작성: 2026-11-08 Claude 초안, 2026-11-09 v1 고정(Codex가 동의한 v0.2와 Codex 추가 요청 2건 반영).
 목적: Claude(Rust, `crates/`)와 Codex(Godot, `godot/`)가 동시에 개발할 때 서로 기다리지 않도록
@@ -19,6 +19,7 @@ Godot에 노출할 클래스·메서드·시그널·좌표 규칙·실패 처리
 | v1.7 | **항목 제거·추가**(2026-11-12 Claude, PLAN 4-11 전국 지도 자료 내장, 사용자 결정): 네트워크 지역 받기 `request_region()`·`cancel_region()`·`request_places()`·`cached_regions()`와 `poll()` 이벤트 `progress`·`region_loaded`·`places_loaded`·`failed`를 없앴다. 대신 `open_region()`(내장 전국 자료에서 바로 열기, 동기)·`data_status()`·`use_data_dir()`·`latlon_to_view()`를 더했다. `network`는 전국 장소 검색에만 쓴다. ※ `feature/phase5-scenarios`(v1.5)를 나중에 병합하면 그쪽을 v1.8로 올린다 |
 | v1.8 | 항목 추가(기존 이름·인자 변경 없음, 2026-11-12 Claude, PLAN 2-7 충돌 물리 반응): `SimVehicle.last_impact()`(2절 읽기 함수, 마지막 충돌의 틱·닿는 속도·충격량·속도 변화·접촉점), `scenario_status()`의 `max_impact_delta_v_mps`(2-1). `collided` 시그널은 인자 없이 그대로다. 충돌하면 바로 서지 않고 튕기거나 미끄러지므로 `in_contact()`는 "접촉 거리 안"이라는 뜻만 남는다. ※ `feature/phase5-scenarios`(v1.5)를 나중에 병합하면 그쪽을 v1.9로 올린다(v1.9가 먼저 들어가면 v1.10) |
 | v1.9 | 항목 추가(기존 이름·인자 변경 없음, 2026-11-13 Claude, PLAN 2-8 차체 서스펜션 움직임): `SimVehicle.body_pose()`(2절 읽기 함수, 차체 피치·롤·상하), `operator_view()`의 `body_follow`(카메라 설정, 입석 카메라가 차체 기울기를 따라가는 정도). 보이는 움직임만이며 주행·충돌·재생 결과는 바뀌지 않는다. ※ `feature/phase5-scenarios`(v1.5)를 나중에 병합하면 그쪽을 v1.10으로 올린다 |
+| v1.10 | 항목 추가(기존 이름·인자 변경 없음, 2026-11-11 Claude, Phase 5-2~5-5, 2026-11-14 병합 때 v1.5에서 번호만 올림): `SimVehicle.result_dir` 속성, `scenario_hazards()`, `scenario_status()`의 `result_lines`·`result_path`(2-1절). 끝날 때 결과 JSON 저장. 시나리오 장애물은 `course_data()` 충돌 경계에 들어간다 |
 
 > GD-5(v1.3)에서 Bevy 앱을 지웠다. 본문의 "Bevy 판과 같음"·Bevy 파일 경로는 계약을 정할 때의 기준을 기록한 것이며, 그 규칙은 지금 `sim-core`에 있다.
 
@@ -58,6 +59,7 @@ Godot 쪽은 이 노드의 **자식**으로 차체 메시·실내·카메라를 
 | `config_dir` | `String` | `""` | 비우면 `res://../config`. 테스트에서 다른 설정 폴더를 쓸 때만 지정. `_ready`에서 한 번만 읽는다 |
 | `read_input` | `bool` | `true` | `false`면 Godot 입력을 읽지 않고 `set_manual_input`/`send_command`만 쓴다(헤드리스 시험용). 실행 중 바꿀 수 있다(5-1 2단계) |
 | (v1.4) `scenario` | `String` | `""` | 시나리오 파일(상대 경로는 저장소 루트 기준). 비우면 시나리오 없이 `course`를 주행한다. 있으면 `course` 대신 파일의 `course`를 쓰고 2-1절 규칙을 따른다. `_ready`에서 한 번만 읽는다 |
+| (v1.10) `result_dir` | `String` | `""` | 시나리오 결과 파일 폴더. 비우면 저장소 루트의 `logs/scenarios`. `res://`·`user://`·절대 경로 또는 저장소 루트 기준 상대 경로. 끝날 때 읽는다(헤드리스 시험은 `user://`를 쓴다) |
 
 ### 상태 확인
 
@@ -126,13 +128,19 @@ Godot 쪽은 이 노드의 **자식**으로 차체 메시·실내·카메라를 
 - 실행 단계: `briefing`(시작 전 안내) → `running` ⇄ `paused` → `finished`(결과 `success`·`time_limit`·`collisions`·`aborted`).
   **`running`이 아닐 때는 물리 틱을 처리하지 않는다**(장치를 읽지 않고, `tick_count`가 늘지 않고, 시그널도 없다). 그동안 장치 이력은 비워 둔다.
 - 시간은 `running` 중 처리한 틱 수 × 1/64 s다. 일시정지·화면 프레임과 무관하게 같은 입력이면 같은 결과다.
-- 판정은 매 틱 운동 모델 뒤에: 충돌·거리 누적 → 지금 단계 완료(같은 틱에 여러 단계 가능) → 이벤트 → 충돌 초과 실패 → 모든 단계 끝이면 성공 → 시간 초과 실패.
+- 판정은 매 틱 운동 모델 뒤에: 입력 열·거리 누적 → 사건 기록(기어 오류·과도한 입력·비상 정지·충돌·복귀) → 지금 단계 완료(같은 틱에 여러 단계 가능)
+  → 이벤트(메시지·보행자 대체 객체 등장) → 보행자 대체 객체 접촉·제동 반응 → 충돌 초과 실패 → 모든 단계 끝이면 성공 → 시간 초과 실패.
+- (v1.10) 시나리오 `[[obstacles]]`는 코스 충돌 경계(`kind = "obstacle"`)에 더해져 `course_data()`로 그대로 그린다.
+  보행자 대체 객체는 차량을 막지 않고 겹치기 시작하면 충돌로 센다(`collided` 시그널은 보내지 않는다. 코스 장애물 충돌만 보낸다).
+- (v1.10) 끝나는 순간(틱 안의 성공·실패, `end`) 결과 JSON(`scenario-result-v1`, `docs/scenarios.md`)을 `result_dir`에 저장한 뒤 `scenario_phase_changed`·`scenario_finished`를 보낸다.
+  저장에 실패해도 주행은 계속되고 `godot_warn!`을 남기며 `result_lines` 마지막 줄이 실패 사유다. `restart`는 결과 요약을 비운다.
 - `reset_course`는 시나리오 중에도 기존 규칙대로 동작하며 시나리오 진행(단계·시간·거리)은 되돌리지 않는다. 처음부터 하려면 `restart`다.
 
 | 함수 | 반환 | 설명 |
 | --- | --- | --- |
 | `scenario_control(name: String)` | `bool` | `"start"`(briefing→running), `"pause"`(running→paused), `"resume"`(paused→running), `"restart"`(어느 단계든 → briefing, 차량을 시작 조건의 새 세션으로 바꾸고 `tick_count` 0, 시점 전방), `"end"`(끝나지 않았으면 → finished `aborted`). **대기열 없이 바로** 적용한다. 시나리오가 없거나 지금 단계에서 받을 수 없으면 `false`(상태 그대로), 모르는 이름은 `godot_error!` 뒤 `false` |
-| `scenario_status()` | `Dictionary` | 시나리오가 없으면 `{active: false}`. 있으면 `active`, `title`, `briefing`, `phase`, `phase_text`(한국어), `outcome`(끝났을 때만, 아니면 `""`), `step_index`(지금 단계 번호, 다 끝냈으면 단계 수), `step_count`, `guide`(지금 단계 안내, 다 끝냈으면 `""`), `elapsed_s`, `time_limit_s`(없으면 -1), `collisions`, `max_collisions`(없으면 -1), `message`(지금 띄울 메시지, 없으면 `""`), (v1.8) `max_impact_delta_v_mps`(시작 뒤 가장 큰 충돌 속도 변화, 없으면 0) |
+| `scenario_status()` | `Dictionary` | 시나리오가 없으면 `{active: false}`. 있으면 `active`, `title`, `briefing`, `phase`, `phase_text`(한국어), `outcome`(끝났을 때만, 아니면 `""`), `step_index`(지금 단계 번호, 다 끝냈으면 단계 수), `step_count`, `guide`(지금 단계 안내, 다 끝냈으면 `""`), `elapsed_s`, `time_limit_s`(없으면 -1), `collisions`, `max_collisions`(없으면 -1), `message`(지금 띄울 메시지, 없으면 `""`), (v1.8) `max_impact_delta_v_mps`(시작 뒤 가장 큰 충돌 속도 변화, 없으면 0), (v1.10) `result_lines`(`PackedStringArray`, 끝난 뒤 한국어 결과 요약: 기록 횟수·정지 오차·반응 시간·임시 점수·임시 기준 안내·결과 파일. 그 전에는 빈 배열), `result_path`(저장한 결과 파일의 절대 경로, 끝나기 전·저장 실패면 `""`) |
+| (v1.10) `scenario_hazards()` | `Array[Dictionary]` | 지금 보이는 보행자 대체 객체 `[{id, position: Vector3(x, 0, z), heading_rad, size: Vector3(폭, 높이, 앞뒤)}]`. 등장 전·사라진 뒤·시나리오 없음이면 빈 배열. `heading_rad`는 차량과 같은 규칙(0이면 -Z). 매 화면 프레임 읽어 그린다 |
 
 시그널(틱 안에서 생긴 것은 9번 `debug_camera_toggled` 뒤, `tick_finished` 앞에 처리 순서대로):
 
