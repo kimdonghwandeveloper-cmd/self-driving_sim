@@ -6,6 +6,9 @@
   <node id="4" lat="34.0000000" lon="127.0000400"/>
   <node id="5" lat="34.0001000" lon="127.0000400"/>
   <node id="6" lat="34.0002000" lon="127.0000400"/>
+  <node id="7" lat="34.0000000" lon="127.0000200"/>
+  <node id="8" lat="34.0001000" lon="127.0000200"/>
+  <node id="9" lat="34.0002000" lon="127.0000200"/>
   <way id="201">
     <nd ref="1"/>
     <nd ref="2"/>
@@ -17,8 +20,9 @@
     <nd ref="6"/>
   </way>
   <way id="203">
-    <nd ref="1"/>
-    <nd ref="3"/>
+    <nd ref="7"/>
+    <nd ref="8"/>
+    <nd ref="9"/>
   </way>
   <relation id="301">
     <member type="way" ref="201" role="left"/>
