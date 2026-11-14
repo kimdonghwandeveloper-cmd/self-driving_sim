@@ -1,0 +1,29 @@
+format = "korea-data-v1"
+generator = "self-driving-sim korea-data v1"
+tile_e7 = 1000000
+
+[source]
+pbf_file_name = "south-korea.osm.pbf"
+pbf_sha256 = "ff3396a70e5b87a29de31d33bf366e7c6257f1c558cc282e6389f54a0c215243"
+pbf_bytes = 291616129
+replication_timestamp = 1794432167
+clip = "34.743,127.737,34.759,127.757"
+
+[counts]
+roads = 347
+restrictions = 2
+places = 3251
+buildings = 2872
+skipped_ways = 1
+
+[roads]
+file = "roads.pack"
+bytes = 23453
+sha256 = "172abab944112bfc6bdf1636644db3862b79972b819ff699edeea41b0624c1f3"
+tiles = 1
+
+[places]
+file = "places.pack"
+bytes = 87401
+sha256 = "afcfc94d33a84448bbca1eb958eb26df65848be8db0e0e839c07a807f9d6701b"
+tiles = 1

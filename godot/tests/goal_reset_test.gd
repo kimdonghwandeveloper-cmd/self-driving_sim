@@ -5,7 +5,7 @@ extends SceneTree
 
 const Drive = preload("res://presentation/drive_screen.gd")
 ## 저장소의 여수 교차로 경로 코스와, 없는 지도 파일(대체 확인용).
-const ROUTE := "map:assets/maps/yeosu-expo/route-junctions.toml"
+const ROUTE := "map:testdata/yeosu-expo/route-junctions.toml"
 const MISSING := "map:assets/maps/없는-코스.toml"
 ## 리셋 전에 시작점에서 벗어날 거리(m)와 그때까지 가속할 최대 틱 수, 제동 후 정지를 기다릴 최대 틱 수.
 const LEAVE_M := 3.0

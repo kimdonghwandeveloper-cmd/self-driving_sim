@@ -101,8 +101,8 @@ impl NationalRoads {
 }
 
 /// PBF 블록을 차례로 풀어 요소마다 `visit`를 부른다. 머리부가 처음에 와야 하고, 모든 블록을 끝까지 풀어야 한다
-/// (손상·잘린 파일은 여기서 오류). 머리부를 돌려준다.
-fn scan<R: Read + Send>(
+/// (손상·잘린 파일은 여기서 오류). 머리부를 돌려준다. 전국 자료 변환([`super::korea_data`])도 쓴다.
+pub(crate) fn scan<R: Read + Send>(
     reader: R,
     mut visit: impl FnMut(Element) -> Result<(), String>,
 ) -> Result<PbfHeader, String> {
@@ -415,7 +415,7 @@ pub fn compare_connectivity<'a>(
 }
 
 /// 1e-7° 정수를 소수 7자리 고정 문자열로 쓴다(예: `347512345` → `34.7512345`).
-fn fixed7(value: i32) -> String {
+pub(crate) fn fixed7(value: i32) -> String {
     let sign = if value < 0 { "-" } else { "" };
     let abs = value.unsigned_abs();
     format!("{sign}{}.{:07}", abs / 10_000_000, abs % 10_000_000)
@@ -875,6 +875,7 @@ mod tests {
             ],
             replication: Some((1_793_000_000, 4242)),
             dense,
+            ..Fixture::default()
         }
     }
 
@@ -1157,6 +1158,7 @@ mod tests {
             ],
             replication: None,
             dense: true,
+            ..Fixture::default()
         }
     }
 

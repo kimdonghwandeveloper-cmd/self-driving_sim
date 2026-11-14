@@ -22,3 +22,5 @@ sha2 = "=0.11.1"
 png = "=0.18.1"
 # Phase 4-5G Geofabrik PBF 읽기(순수 Rust, 기본 rust-zlib). GD-1에서 루트 앱에서 옮겼다.
 osmpbf = "=0.3.8"
+# PLAN 4-11 전국 지도 자료 조각 압축(deflate). 이미 osmpbf·png가 쓰는 판이라 새 외부 코드가 늘지 않는다.
+flate2 = "=1.1.10"

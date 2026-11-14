@@ -17,7 +17,7 @@ pub const SAVED_ROUTE_DIR: &str = crate::picker::region::ROUTE_DIR;
 pub struct CourseFile {
     /// 사람이 읽는 이름. 예: `"yeosu-expo / route-junctions"`, `"저장 경로 / route-20261107T050906Z"`.
     pub label: String,
-    /// 코스 선택 문자열. 예: `"map:assets/maps/yeosu-expo/route-junctions.toml"`.
+    /// 코스 선택 문자열. 예: `"map:testdata/yeosu-expo/route-junctions.toml"`.
     pub course: String,
     /// 경로 선택 화면이 저장한 경로이면 `true`, 저장소에 들어 있는 코스이면 `false`.
     pub saved: bool,
@@ -152,16 +152,16 @@ mod tests {
         assert!(list_course_files(&root).is_empty());
     }
 
-    /// 저장소에 들어 있는 여수 경로 코스가 목록에 있고 실제로 코스를 만들 수 있는지 확인한다.
+    /// 여수 고정 코스는 메뉴(저장소 지도 코스)에서 빠지고(PLAN 4-11), 시험 자료(`testdata/`)로는 코스를 만들 수 있다.
     #[test]
-    fn bundled_yeosu_route_is_listed_and_loads() {
+    fn yeosu_route_is_test_data_only_and_loads() {
         let root = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."));
-        let files = list_course_files(root);
-        let route = files
-            .iter()
-            .find(|file| file.course == "map:assets/maps/yeosu-expo/route-junctions.toml")
-            .expect("bundled route listed");
-        let path = root.join(route.course.strip_prefix("map:").unwrap());
+        assert!(
+            list_course_files(root)
+                .iter()
+                .all(|file| !file.course.contains("yeosu-expo"))
+        );
+        let path = root.join("testdata/yeosu-expo/route-junctions.toml");
         let course = super::super::map::load_map_course(&path).unwrap();
         course.validate().unwrap();
         assert!(!course.areas.is_empty(), "route course has junction areas");

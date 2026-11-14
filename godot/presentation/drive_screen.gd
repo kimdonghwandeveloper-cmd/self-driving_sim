@@ -5,6 +5,14 @@ const Preview = preload("res://preview/vehicle_preview.gd")
 const CourseMesh = preload("res://presentation/course_mesh.gd")
 const Visual = preload("res://presentation/vehicle_visual.gd")
 const Rig = preload("res://presentation/camera_rig.gd")
+## GLB의 미터 원점을 공유하는 여수 고정 코스. 저장 경로는 시작점이 달라 이 배경을 쓰지 않는다.
+const YEOSU_COURSE := "map:testdata/yeosu-expo/course.toml"
+## 사용자 제작 맵의 도로 면을 그대로 노면·연석으로 쓰는 여수 코스. 배경 GLB와 같은 원점을 쓴다.
+const YEOSU_CUSTOM_ROADS_COURSE := "map:testdata/yeosu-expo/custom-roads.toml"
+## 내 맵 도로 코스에서 차가 도로 면 밖(열린 막다른 끝 너머)에 있을 때 HUD에 보일 안내와 도로 면 격자 칸 크기(m).
+const OFF_ROAD_NOTICE := "도로 이탈 · 맵 도로 밖입니다"
+const ROAD_CELL_M := 20.0
+const YEOSU_BACKGROUND = preload("res://assets/maps/yeosu-expo/background.glb")
 ## 코스 범위 밖으로 바닥을 더 까는 여백(m).
 const GROUND_MARGIN_M := 300.0
 ## HUD에 보일 입력 장치·시점 이름(계약 값 → 한국어).
@@ -14,6 +22,10 @@ const VIEW_NAMES := {"front": "전방", "rear": "후방", "left": "좌측", "rig
 const EXTERIOR_NOTICE := "외부 시점 · 차체 외관은 임시 모델이며 충돌 판정 차체와 크기가 다릅니다"
 ## 1인칭 전방이 아닌 시점일 때 시선과 진행 방향이 다름을 알리는 문구.
 const SIDE_VIEW_NOTICE := "현재 시선은 차량 전방과 다릅니다"
+## 충돌 뒤 HUD에 충격 크기를 보이는 시간(물리 틱 수, 64 Hz에서 3초, 표시용 임시값, 2-7).
+const IMPACT_SHOW_TICKS := 192
+## 충격 크기 줄. 크기는 임시값으로 계산한 값이라 실제 충돌 거동이 아님을 함께 알린다.
+const IMPACT_TEXT := "충돌 · 속도 변화 %.1f m/s · 충격량 %.1f kN·s (임시값, 실제 충돌 거동 아님)"
 ## HUD 이동 방향을 "정지"로 보일 속도 크기 상한(m/s, 표시용 임시값).
 const MOVING_THRESHOLD_MPS := 0.01
 ## 지도 코스(`map:`)를 열지 못했을 때 대신 여는 개발 코스와 안내 문구(Bevy `--course map:` 대체와 같음, 4-6).
@@ -39,6 +51,12 @@ const SCENARIO_MESSAGE_COLOR := Color("ffd27a")
 const HAZARD_COLOR := Color("ff7a1a")
 var vehicle: Node3D
 var rig: Node3D
+## 차체 외관·실내(서스펜션 움직임을 받는다, 2-8).
+var visual: Node3D
+## 입석 카메라를 얹는 받침. 차체 기울기를 `body_follow`만큼 따라간다(외부 시점에서는 따라가지 않음).
+var camera_mount := Node3D.new()
+## 카메라가 차체 기울기를 따라가는 정도(계약 v1.9 `operator_view().body_follow`, 0 = 끔).
+var body_follow := 0.0
 var hud := Label.new()
 var warnings_label := Label.new()
 var notice := Label.new()
@@ -62,6 +80,8 @@ var command_notice := ""
 var command_notice_until := 0
 ## 코스 둘레 바닥. 코스 범위를 안 뒤 크기를 맞춘다.
 var ground := MeshInstance3D.new()
+## 도로 이탈 판정용 도로 면 격자(칸 → 그 칸에 걸친 면 다각형 목록). 내 맵 도로 코스에서만 채운다.
+var road_cells := {}
 
 ## 전달받은 코스로 화면을 만들고 실패 시 메시를 생성하지 않는다.
 func start(course_name: String, force_preview: bool = false) -> void:
@@ -85,11 +105,21 @@ func start(course_name: String, force_preview: bool = false) -> void:
 	var course_mesh := CourseMesh.new()
 	scene_content.add_child(course_mesh)
 	course_mesh.build(data)
-	_fit_ground(CourseMesh.ground_bounds(data))
-	vehicle.add_child(Visual.new())
+	var bounds := CourseMesh.ground_bounds(data)
+	if course_name in [YEOSU_COURSE, YEOSU_CUSTOM_ROADS_COURSE] and not is_preview and fallback_notice.is_empty():
+		bounds = _add_yeosu_background(bounds)
+	if course_name == YEOSU_CUSTOM_ROADS_COURSE and fallback_notice.is_empty():
+		_index_road_areas(data)
+	_fit_ground(bounds)
+	visual = Visual.new()
+	vehicle.add_child(visual)
+	camera_mount.name = "CameraMount"
+	vehicle.add_child(camera_mount)
 	rig = Rig.new()
-	vehicle.add_child(rig)
-	rig.configure(vehicle.call("operator_view"))
+	camera_mount.add_child(rig)
+	var view_settings: Dictionary = vehicle.call("operator_view")
+	body_follow = clampf(float(view_settings.get("body_follow", 0.0)), 0.0, 1.0)
+	rig.configure(view_settings)
 	if not is_preview:
 		vehicle.connect("view_changed", rig.apply_view)
 		vehicle.connect("debug_camera_toggled", rig.set_external)
@@ -119,7 +149,46 @@ func _make_vehicle(course_name: String) -> Node3D:
 	add_child(node)
 	return node
 
-## 절차 생성 하늘·태양광(그림자)·보조광·옅은 안개와 바닥을 만든다. 외부 애셋은 쓰지 않는다.
+## 코스 면(`areas`) 다각형을 격자 칸에 나눠 담아 도로 이탈 판정에 쓴다.
+func _index_road_areas(data: Dictionary) -> void:
+	road_cells.clear()
+	for area in data.get("areas", []):
+		var polygon := PackedVector2Array()
+		for point: Vector3 in area.boundary:
+			polygon.append(Vector2(point.x, point.z))
+		var box := Rect2(polygon[0], Vector2.ZERO)
+		for point in polygon:
+			box = box.expand(point)
+		for x in range(floori(box.position.x / ROAD_CELL_M), floori(box.end.x / ROAD_CELL_M) + 1):
+			for z in range(floori(box.position.y / ROAD_CELL_M), floori(box.end.y / ROAD_CELL_M) + 1):
+				var cell := Vector2i(x, z)
+				if not road_cells.has(cell):
+					road_cells[cell] = []
+				road_cells[cell].append(polygon)
+
+## 지면 위치(x, z)가 도로 면 안인지 본다. 격자가 비어 있으면(다른 코스) 항상 도로 위로 본다.
+func on_road(position_3d: Vector3) -> bool:
+	if road_cells.is_empty():
+		return true
+	var point := Vector2(position_3d.x, position_3d.z)
+	var cell := Vector2i(floori(point.x / ROAD_CELL_M), floori(point.y / ROAD_CELL_M))
+	for polygon: PackedVector2Array in road_cells.get(cell, []):
+		if Geometry2D.is_point_in_polygon(point, polygon):
+			return true
+	return false
+
+## 시각 배경을 원점에 배치하고, 바닥이 배경 도로를 덮지 않도록 높이와 범위를 맞춘다.
+func _add_yeosu_background(bounds: Rect2) -> Rect2:
+	var background := YEOSU_BACKGROUND.instantiate() as Node3D
+	background.name = "YeosuBackground"
+	scene_content.add_child(background)
+	ground.position.y = -0.10
+	for mesh_node: MeshInstance3D in background.find_children("*", "MeshInstance3D", true, false):
+		var box: AABB = mesh_node.global_transform * mesh_node.get_aabb()
+		bounds = bounds.merge(Rect2(Vector2(box.position.x, box.position.z), Vector2(box.size.x, box.size.z)))
+	return bounds
+
+## 절차 생성 하늘·태양광(그림자)·보조광·옅은 안개와 바닥을 만든다.
 func _environment() -> void:
 	var sky_material := ProceduralSkyMaterial.new()
 	sky_material.sky_top_color = Color("5d8fc4")
@@ -250,6 +319,7 @@ func _process(_delta: float) -> void:
 	if not bool(vehicle.call("is_ready")):
 		_fail(str(vehicle.call("last_error")))
 		return
+	_apply_body_pose(vehicle.call("body_pose"))
 	var emergency: bool = vehicle.call("emergency_active")
 	var source := str(vehicle.call("input_source"))
 	hud.text = "%5.1f km/h    기어 %s    시동 %s    비상 정지 %s\n입력 %s    접촉 %s    시점 %s" % [
@@ -264,6 +334,11 @@ func _process(_delta: float) -> void:
 	elif rig.current_view != "front":
 		hud.text += "\n" + SIDE_VIEW_NOTICE
 
+	if not road_cells.is_empty() and not on_road(vehicle.position):
+		hud.text += "\n" + OFF_ROAD_NOTICE
+	var impact_line := _impact_line(vehicle.call("last_impact"), int(vehicle.call("tick_count")))
+	if not impact_line.is_empty():
+		hud.text += "\n" + impact_line
 	if Time.get_ticks_msec() < command_notice_until:
 		hud.text += "\n" + command_notice
 	if calibration_box.visible:
@@ -271,6 +346,18 @@ func _process(_delta: float) -> void:
 	if scenario_box.visible:
 		_update_scenario(vehicle.call("scenario_status"))
 		_update_hazards(vehicle.call("scenario_hazards"))
+
+## 차체 움직임(`SimVehicle.body_pose`, 계약 v1.9)으로 차체를 기울이고, 입석 카메라는 `body_follow`만큼 따라가게 한다.
+func _apply_body_pose(pose: Dictionary) -> void:
+	visual.set_body_pose(pose)
+	camera_mount.transform = Transform3D.IDENTITY if rig.external else Visual.pose_transform(pose, body_follow)
+
+## 마지막 충돌 사전(`SimVehicle.last_impact`, 계약 v1.8)으로 충격 크기 줄을 만든다.
+## 충돌이 없거나 [constant IMPACT_SHOW_TICKS]보다 오래됐으면 빈 문자열.
+func _impact_line(impact: Dictionary, tick: int) -> String:
+	if impact.is_empty() or tick - int(impact.get("tick", 0)) >= IMPACT_SHOW_TICKS:
+		return ""
+	return IMPACT_TEXT % [float(impact.get("delta_v_mps", 0.0)), float(impact.get("impulse_ns", 0.0)) / 1000.0]
 
 ## 시나리오 상태 사전(`SimVehicle.scenario_status`)으로 안내 상자 글자·메시지·버튼 사용 가능 여부를 갱신한다.
 func _update_scenario(status: Dictionary) -> void:
@@ -291,6 +378,8 @@ func _update_scenario(status: Dictionary) -> void:
 	var collision_text := "충돌 %d회" % int(status.get("collisions", 0))
 	if int(status.get("max_collisions", -1)) >= 0:
 		collision_text += " / 허용 %d회" % int(status.max_collisions)
+	if float(status.get("max_impact_delta_v_mps", 0.0)) > 0.0:
+		collision_text += " · 최대 속도 변화 %.1f m/s" % float(status.max_impact_delta_v_mps)
 	lines.append(time_text + "    " + collision_text)
 	if phase == "finished":
 		lines.append_array(status.get("result_lines", PackedStringArray()))

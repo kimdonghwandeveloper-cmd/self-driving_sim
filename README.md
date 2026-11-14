@@ -7,7 +7,7 @@ Godot 확장(`crates/sim-godot`, godot-rust)으로 연결합니다. 처음에 �
 운동 모델(가속·제동·관성·조향, 최고 속도 40 km/h·출력 한계·저항·횡가속도 상한), 고정 장애물·연석 충돌을 확인할 수 있습니다.
 화면은 입석 조작자 1인칭 시점(전·후·좌·우 전환)입니다. HUD에 속도·기어·시동·비상 정지·입력 장치·접촉·시점·이동 방향과
 거부된 명령의 사유가 한국어로 표시됩니다. 보정 코스(`calibration`)에서는 회전반경·예상 정지거리와 제동·가속 시험 측정이 함께 표시됩니다.
-메인 메뉴에서 개발 코스·지도 코스·저장 경로를 골라 주행하고, 지도 화면에서 지역 도로를 받아 경로를 찍어 저장할 수 있습니다.
+메인 메뉴에서 개발 코스·저장 경로를 골라 주행하고, 지도 화면에서 내장 전국 지도 자료로 지역을 바로 열어 경로를 찍어 저장할 수 있습니다.
 메뉴의 교육 시나리오 A(기본 조작)·B(공간 판단)·C(돌발 상황)를 안내대로 진행하면 기어 오류·과도한 입력·충돌·정지 위치·
 위험 반응 시간이 기록되고, 끝나면 결과 요약과 **임시 기준** 점수가 화면에 나오며 결과 JSON이 `logs/scenarios/`에 저장됩니다(Phase 5).
 점수는 교육 담당자가 승인한 평가 기준이 아니며 공식 합격·불합격 판정에 쓰지 않습니다.
@@ -20,7 +20,10 @@ Godot 확장(`crates/sim-godot`, godot-rust)으로 연결합니다. 처음에 �
 | 단계 | 상태 |
 | --- | --- |
 | Phase 1~3 (기반·운동 모델·카메라·여수 코스) | 대부분 완료. 실제 게임패드 축 범위·드리프트 측정은 남음 |
-| Phase 4 (굽은 길·교차로·경로 탐색·지도 받기·경로 선택 화면·통합) | 구현과 자동 시험 완료. 4-5·4-5a·4-5b·4-6 일부 체크는 사람 확인 반영 결정 대기, 경사 도로(4-7)는 시작 전 |
+| Phase 4 (굽은 길·교차로·경로 탐색·지도 받기·경로 선택 화면·통합) | 구현과 자동 시험 완료. 경사 도로(4-7)는 시작 전 |
+| 4-8 자동 경로 · 4-9 건물·장소 고르기 (2026-11-11 추가) | 구현과 자동 시험 완료(main 병합). 사람 확인 전. 위아래로 겹치는 도로(4-7 추가)는 시작 전 |
+| 4-10 전국 장소 검색·지도 바깥 바다색 (2026-11-12 추가) | 구현과 자동 시험 완료(`feature/place-search`). 실제 Nominatim 검색·사람 확인 전 |
+| 4-11 전국 지도 자료 내장 (2026-11-12 추가) | 1단계(전국 자료·받기 단계 없애기) 구현과 자동 시험 완료(`feature/korea-data`). 사람 확인 전. 2단계(경로 길이 제한 풀기)·4-12 3D 건물·4-13 땅 쓰임 색은 시작 전 |
 | Phase G (Godot 전환, GD-0~GD-4) | 완료. GD-2~GD-4 사람 확인 2026-11-10. GD-5 Bevy 앱 제거 |
 | 4-5G G-1 Geofabrik 지역 추출 | 코드와 fixture 시험 완료. 실제 한국 PBF 검증·측정 전 |
 | Phase 5 (교육 시나리오·기록) | 5-1 완료. 5-2~5-5 구현·자동 시험 완료(2026-11-11), 사람 확인 전 |
@@ -62,7 +65,8 @@ Godot 확장(`crates/sim-godot`, godot-rust)으로 연결합니다. 처음에 �
 | --- | --- |
 | `training` | 폭 6 m 직선 차로(z=+6 ~ -66), 양옆 연석(충돌 경계), 가장자리 흰 선(표시만), 정지선 z=-20, 차로 오른쪽 고정 장애물 z=-32, 좁은 통로 z=-42 ~ -54(폭 3.0 m = 차체 폭 1.8 m + 양옆 0.6 m), 앞·뒤 끝 벽 |
 | `calibration` | 넓은 평지와 장애물 4개(회전반경·제동 시험용, 아래 보정 측정 표시) |
-| 지도 코스 `map:<파일>` | OSM 중심선·경로 파일로 만든 가상 교육 코스. 저장소에는 `assets/maps/yeosu-expo/`의 `course.toml`(way 532526349, 약 292 m), `curved-course.toml`(way 529495041, 약 321 m), `route-junctions.toml`(교차로 4곳)이 있고, 지도 화면이 저장한 경로(`cache/routes/`)도 목록에 나옵니다. 형식과 제약은 `docs/map-data.md` 참고. 읽지 못하면 사유를 띄우고 `training`으로 대체 |
+| 여수 엑스포 · OSM 배경 | 여수 고정 교육 코스(way 532526349)에 Blender/Blosm으로 만든 OSM 배경을 겹쳐 주행합니다. 배경에는 충돌체가 없으며 기존 노면·연석·충돌 판정을 사용합니다. |
+| 지도 코스 `map:<파일>` | OSM 중심선·경로 파일로 만든 가상 교육 코스. 메뉴에는 지도 화면이 저장한 경로(`cache/routes/`)가 나옵니다. 여수 고정 코스 자료(`testdata/yeosu-expo/`)는 위의 전용 메뉴 항목에서만 엽니다. 형식과 제약은 `docs/map-data.md` 참고. 읽지 못하면 사유를 띄우고 `training`으로 대체 |
 
 - 화면 메시와 충돌 판정은 `crates/sim-core/src/world/`의 같은 정의에서 만들어서 어긋나지 않습니다. 흰 선은 시각 표시일 뿐이고 실제 경계는 연석입니다.
 - 지도 코스에는 경로 끝 목표 표시(체크무늬 띠와 "도착")가 있습니다. 도착 판정·점수는 아직 없습니다(Phase 5).
@@ -155,22 +159,43 @@ HUD의 "입력" 항목에 지금 조향·가속에 쓰는 장치가 표시됩니
 ## 지도 화면 (경로 선택, Phase 4-5·4-5b)
 
 메인 메뉴에서 들어갑니다. 배경에 OSM 표준 지도 타일을 깔고(화면에 보이는 타일만 받고 `cache/tiles/`에 캐시),
-받은 도로 그래프를 그 위에 선으로 그립니다. 타일은 보기 전용이며 코스는 받은 도로 자료로만 만듭니다.
+그 위에 열린 지역의 도로·건물을 그립니다. 타일은 보기 전용이며 코스는 도로 자료로만 만듭니다.
 타일을 받지 못하면 회색으로 비워 두고 나머지 기능은 그대로 됩니다. 출처 표기는 오른쪽 아래에 늘 보입니다. 헤드리스 시험에서는 타일을 받지 않습니다.
+
+지역 도로·건물·장소는 **내장 전국 지도 자료**(`data/korea/`, 아래 "전국 지도 자료 만들기")에서 바로 엽니다(4-11). 받기 버튼이나
+기다림 없이, 다음 경우에 그곳을 가운데로 하는 1.5 km 지역이 열립니다.
+
+- 점이 없을 때 지도를 클릭하면 그곳 지역을 열고 바로 점을 찍습니다.
+- 점이 없을 때 화면 가로 3 km 안쪽으로 확대하고 멈추면(0.4초) 화면 가운데 지역을 엽니다.
+- 전국 검색 결과를 고르면 그곳으로 옮기고 지역을 열어 점으로 더합니다.
+
+출발·도착은 아직 한 지역(1.5 km) 안에서 고릅니다. 점이 있을 때는 지역을 바꾸지 않으며, 다른 곳에서 시작하려면 "점 모두 삭제"를 누릅니다
+(4-11 2단계에서 풀 예정).
 
 | 조작 | 입력 |
 | --- | --- |
 | 화면 이동 / 확대·축소 | 오른쪽 끌기 / 휠 |
-| 이 지역 도로 받기(화면 가운데 십자선 기준 1.5 km, 받은 범위 안이면 캐시만) / 받기 취소 | 버튼 |
-| 받아 둔 지역 열기(캐시만 사용) | 목록 상자 |
-| 스냅샷 파일 열기 / 스냅샷 폴더 열기(오프라인) | 버튼 |
-| 맞춤 보기: 전국 / 받은 지역 / 경로 | 버튼 |
-| 점 추가(시작 → 경유 → 끝) / 점 삭제 | 왼쪽 클릭 / `Shift` + 클릭, "마지막 점 삭제"·"점 모두 삭제" 버튼 |
+| 스냅샷 파일 열기 / 스냅샷 폴더 열기(개발용) | 버튼 |
+| 맞춤 보기: 전국 / 열린 지역 / 경로 | 버튼 |
+| 점 추가(시작 → 경유 → 끝) / 점 삭제 | 왼쪽 클릭(건물을 누르면 그 건물의 진입 지점) / `Shift` + 클릭, "마지막 점 삭제"·"점 모두 삭제" 버튼 |
+| 장소 이름 검색 | 검색 칸에 입력하면 열린 지역의 건물·장소에서 바로 찾고, 결과 상자에서 고르면 점으로 더함 |
+| 전국 장소 검색(4-10) | 검색 칸에서 `Enter` 또는 "검색" 버튼. 결과를 고르면 그곳으로 옮기고 지역을 열어 점으로 더함 |
 | 경로 저장(같은 이름은 "덮어쓰기"를 켜야 함) | 이름 입력 후 "경로 저장" |
 | 메인 메뉴 | `Esc` |
 
-화면에는 경로 길이, 교차로 수, 폭과 그 출처, 경고(임시 폭, 3 m 미만의 좁은 폭, 돌 수 없는 꺾임, 거부된 교차로 등)가 표시됩니다.
-저장한 경로는 `cache/routes/<이름>.toml`이고, 메인 메뉴 코스 목록에서 골라 주행합니다. 장소 이름 검색은 없습니다.
+출발·도착 두 점만 찍으면 도로를 따라 경로를 만듭니다(4-8). 큰 도로·일방통행 방향·회전 제한을 따르고, 만들 수 없는 교차로는 피해 가거나
+곧게 지나면 곁가지를 그리지 않고 잇습니다. 화면에는 다음이 표시됩니다.
+
+- 경로 길이, 교차로 수, 단순화·우회한 교차로 수
+- 회전 제한 수
+- 출발·도착 건물 이름
+- 폭과 그 출처
+- 경고: 임시 폭, 3 m 미만의 좁은 폭, 돌 수 없는 꺾임, 거부된 교차로 등
+
+한국 OSM은 건물 이름이 빈 곳이 많습니다. 열린 지역의 도로는 `cache/regions/<자료 판>/`에 스냅샷으로 남고,
+저장한 경로는 `cache/routes/<이름>.toml`(그 스냅샷을 가리킴)이며, 메인 메뉴 코스 목록에서 골라 주행합니다.
+전국 장소 검색은 OSM 공식 검색 서버 Nominatim을 씁니다(별도 서버 없음, 초당 1회 이하·Enter 때만 요청, 결과는 `cache/geocode/`에 저장).
+지도에서 대한민국 밖은 바다색으로 가립니다. 가장 많이 축소해도 대한민국이 화면 가로를 꽉 채우며, 전국을 보려면 위아래로 끌어 이동합니다.
 
 ## 준비
 
@@ -209,6 +234,33 @@ cargo test --locked --all-features
 `ureq`(=3.5.1)는 지도 받기·타일용 HTTP 클라이언트입니다. 기본 기능(rustls + ring 암호, webpki 루트 인증서, gzip)을
 쓰며, cmake·NASM이 필요한 aws-lc-rs는 쓰지 않습니다.
 
+### 전국 지도 자료 만들기 (PLAN 4-11)
+
+지도 화면은 `data/korea/`의 전국 지도 자료에서 지역을 엽니다. 이 폴더는 저장소에 넣지 않으며(약 116 MB), **배포할 때 실행 파일과
+함께 넣습니다**(실행 폴더 기준 `data/korea/`). 만드는 방법(저장소 최상위, 네트워크는 원본 받기에만 씀):
+
+1. Geofabrik에서 대한민국 원본을 받습니다: <https://download.geofabrik.de/asia/south-korea-latest.osm.pbf> (2026-11-11자 약 278 MB)
+2. 변환합니다(이 PC에서 약 36초, 최대 메모리 약 2 GB). 기존 `data/korea/`는 다 만든 뒤에 바뀝니다.
+
+```powershell
+cargo run --release --locked -p sim-tools -- --build-korea-data <south-korea-latest.osm.pbf>
+cargo run --release --locked -p sim-tools -- --korea-region 37.4979,127.0276   # 확인: 강남역 주변 지역을 꺼내 개수·시간 출력
+```
+
+자료를 새로 만들면 지역 스냅샷은 새 판 폴더(`cache/regions/<판>/`)에 쌓이고, 이전에 저장한 경로는 이전 스냅샷으로 그대로 재생됩니다.
+형식과 넣는 것·빼는 것은 `docs/map-data.md`의 "4-11 전국 지도 자료"를 참고하세요.
+
+지역 보정(4-11a) 접속점을 조사할 때는 확인 좌표 주변 도로의 OSM ID를 뽑습니다(파일을 쓰지 않음).
+점은 `;`로 여러 개 줄 수 있고(모두 점들의 가운데 1.5 km 지역 안), 반경 기본값은 30 m입니다.
+
+```powershell
+cargo run --release --locked -p sim-tools -- --osm-anchors "34.7535,127.7480;34.7505,127.7455" --radius 50
+```
+
+맨 위에 기준 자료(원본 PBF SHA-256·자료 시각·도로 묶음 SHA-256)를, 점마다 가까운 way 순으로
+`osm_way`·`between_nodes`(가장 가까운 선분), 가장 가까운 `osm_node`와 거리, 막힌 끝 여부, 허용 도로 묶음 번호를 출력합니다.
+두 점의 묶음 번호가 다르면 그 지역 안에서는 보정 전 서로 이어지지 않습니다. 결과는 조사표(`docs/map-patches/survey-template.md`) 2절에 옮깁니다.
+
 ### 지도 받기 (Phase 4-4, 개발용)
 
 사용자가 요청할 때만 Overpass API에서 bbox(남,서,북,동) 안의 도로를 받아 `cache/maps/`에 저장합니다.
@@ -231,7 +283,7 @@ cargo run --locked -p sim-tools -- --fetch-map 34.7480,127.7460,34.7590,127.7600
 ```powershell
 cargo run --locked -p sim-tools -- --extract-pbf <south-korea.osm.pbf> --bbox 34.7480,127.7460,34.7590,127.7600
 cargo run --locked -p sim-tools -- --audit-extract <세대 폴더> --pbf <south-korea.osm.pbf>
-cargo run --locked -p sim-tools -- --compare-overpass assets/maps/yeosu-expo/graph-2026-11-06.osm.json --extract <세대 폴더> --pbf <south-korea.osm.pbf>
+cargo run --locked -p sim-tools -- --compare-overpass testdata/yeosu-expo/graph-2026-11-06.osm.json --extract <세대 폴더> --pbf <south-korea.osm.pbf>
 ```
 
 시나리오 결과 파일(Phase 5-5)은 파일 안의 시나리오 내용과 입력 열을 다시 돌려 같은 결과·기록이 나오는지 확인할 수 있습니다
@@ -250,13 +302,16 @@ cargo run --locked -p sim-tools -- --check-result logs/scenarios/<세션 ID>.jso
   - `input/`: 키 매핑·게임패드 규칙·장치 입력 합치기·동시 기어 판정
   - `world/`: 코스(`course.rs`), OSM 지도 코스(`map.rs`), 굽은 길 형상(`road_geom.rs`), 교차로(`junction.rs`),
     도로 그래프(`osm_graph.rs`), 경로(`route.rs`, `route_plan.rs`), Overpass 받기(`map_fetch.rs`),
-    Geofabrik 추출·감사·비교(`pbf_extract.rs`, `pbf_audit.rs`, `pbf_compare.rs`), 스냅샷 읽기(`road_snapshot.rs`)
-  - `picker/`: 경로 선택 모델·지역 캐시·OSM 배경 타일, `config.rs`·`camera.rs`: 설정 파싱과 시점
+    Geofabrik 추출·감사·비교(`pbf_extract.rs`, `pbf_audit.rs`, `pbf_compare.rs`), 스냅샷 읽기(`road_snapshot.rs`),
+    전국 지도 자료(`korea_data.rs`)
+  - `picker/`: 경로 선택 모델·지역 범위·전국 장소 검색·OSM 배경 타일, `config.rs`·`camera.rs`: 설정 파싱과 시점
 - `crates/sim-godot/`: Godot 확장(`SimVehicle`, `SimCourse`, `SimReplay`, `SimRoutePicker`, `SimTiles`, `SimScenario`). 계약은 `docs/design/godot-interface.md`
-- `crates/sim-tools/`: 창 없는 개발 명령(지도 받기, PBF 추출·대조, 시나리오 결과 재현 확인 `--check-result`)
+- `crates/sim-tools/`: 창 없는 개발 명령(전국 지도 자료 만들기, 지도 받기, PBF 추출·대조, 시나리오 결과 재현 확인 `--check-result`)
 - `godot/`: Godot 프로젝트(메뉴·주행·지도 화면 `presentation/`, 헤드리스 시험 `tests/`). 구현 메모는 `godot/IMPLEMENTATION.md`
 - `config/{vehicle,input,camera,road_graph}.toml`: 시뮬레이터 임시 설정값
-- `assets/maps/`: 저장소에 넣은 지도 스냅샷과 지도 코스
+- `assets/maps/`: 저장소에 넣는 지도 코스(현재 비어 있음). 여수 고정 코스는 `testdata/yeosu-expo/`에 있음
+- `data/korea/`: 전국 지도 자료(저장소 제외, 배포에 포함)
+- `testdata/`: 자동 시험 자료(여수 스냅샷·경로, 작은 전국 지도 자료 조각). 여수 고정 코스만 OSM 배경 전용 메뉴에서 재사용
 - `assets/scenarios/`: 교육 시나리오 파일(5-1, 메뉴 목록 끝에 나옴). 형식은 [docs/scenarios.md](docs/scenarios.md)
 - [docs/development.md](docs/development.md): 선정 버전, 개발 PC, 검증 결과
 - [docs/vehicle-assumptions.md](docs/vehicle-assumptions.md): 실차 사양 가정과 미확인 위험(사륜 조향·특수 구동 등)
@@ -274,9 +329,14 @@ cargo.exe build --locked -p sim-godot
 & '<Godot 콘솔 실행 파일>' --headless --fixed-fps 64 --path godot --script res://tests/map_course_test.gd
 & '<Godot 콘솔 실행 파일>' --headless --fixed-fps 64 --path godot --script res://tests/menu_flow_test.gd
 & '<Godot 콘솔 실행 파일>' --headless --fixed-fps 64 --path godot --script res://tests/route_save_test.gd
+& '<Godot 콘솔 실행 파일>' --headless --fixed-fps 64 --path godot --script res://tests/place_pick_test.gd
+& '<Godot 콘솔 실행 파일>' --headless --fixed-fps 64 --path godot --script res://tests/region_open_test.gd
 & '<Godot 콘솔 실행 파일>' --headless --fixed-fps 64 --path godot --script res://tests/goal_reset_test.gd
 & '<Godot 콘솔 실행 파일>' --headless --fixed-fps 64 --path godot --script res://tests/calibration_test.gd
 & '<Godot 콘솔 실행 파일>' --headless --fixed-fps 64 --path godot --script res://tests/scenario_test.gd
+& '<Godot 콘솔 실행 파일>' --headless --fixed-fps 64 --path godot --script res://tests/suspension_test.gd
+& '<Godot 콘솔 실행 파일>' --headless --fixed-fps 64 --path godot --script res://tests/map_patch_test.gd
+& '<Godot 콘솔 실행 파일>' --headless --fixed-fps 64 --path godot --script res://tests/yeosu_custom_roads_test.gd
 & '<Godot 콘솔 실행 파일>' --headless --fixed-fps 64 --path godot --script res://tests/scenario_record_test.gd
 ```
 
@@ -284,19 +344,31 @@ cargo.exe build --locked -p sim-godot
   시점별 화면을 PNG로 저장합니다(Bevy 판 `--capture-views` 대신).
 - `drive_replay_test.gd`는 정해진 입력 열을 `SimVehicle`의 실제 물리 틱으로 재생한 위치·속도·기어가
   Rust 단독 재생(`SimReplay.run`)과 같은지 비교합니다(GD-2). 같은 열의 기대 표본은 `sim-core` 시험에도 고정되어 있습니다.
-- `map_course_test.gd`는 저장소의 여수 경로 코스(`map:assets/maps/yeosu-expo/route-junctions.toml`)를 만들고 몇 초 주행합니다(GD-3).
-- `menu_flow_test.gd`는 메인 메뉴 → 코스 선택 → Rust 차량 주행 → Esc 메뉴 복귀를, `route_save_test.gd`는 오프라인으로 경로를 찍어 저장하고
-  그 저장 경로로 차량이 준비되는지 확인합니다(GD-4, 시험 파일은 끝에 지움).
+- `map_course_test.gd`는 시험 자료의 여수 경로 코스(`map:testdata/yeosu-expo/route-junctions.toml`)를 만들고 몇 초 주행하며, 메뉴 목록에는 없는지 봅니다(GD-3, 4-11).
+- `menu_flow_test.gd`는 메인 메뉴 → 코스 선택 → Rust 차량 주행 → Esc 메뉴 복귀를(시험 경로를 저장 경로 자리에 잠시 복사), `route_save_test.gd`는
+  오프라인으로 경로를 찍어 저장하고 그 저장 경로로 차량이 준비되는지 확인합니다(GD-4, 시험 파일은 끝에 지움).
+- `place_pick_test.gd`는 지도 화면에서 여수 스냅샷과 합성 장소 자료를 열어 건물 윤곽 표시, 이름 검색으로 출발 건물, 건물 클릭으로
+  도착 건물을 고르고 경로가 계산되며 출발·도착 이름이 안내에 나오는지 확인합니다(4-9, 네트워크 없음).
+- `region_open_test.gd`는 작은 전국 지도 자료 조각(`testdata/korea-yeosu`)으로 클릭한 곳 지역 열기, 도로·건물 표시, 경로 계산·저장(지역 스냅샷을
+  가리킴)·다시 코스 만들기, 점이 있을 때 지역 밖 클릭 안내, 멈춘 화면 자동 열기, 자료 없음 안내를 확인합니다(4-11).
 - `goal_reset_test.gd`는 지도 코스의 경로 끝 목표 표시, 주행 후 리셋 시 경로 시작 자세 복원, 없는 지도 파일을 열 때
   개발 코스(training) 대체를 확인합니다(4-6). 출력의 `ERROR: ... 없는-코스.toml` 한 줄은 의도된 실패 경로입니다.
 - `calibration_test.gd`는 보정 코스의 측정 상자, 가속·제동 시험 1회차 결과, 리셋 후 결과 유지와 training에서의 상자 숨김을 확인합니다(2-5).
 - `scenario_test.gd`는 메뉴에서 예시 시나리오를 열어 시작 전 정지, F5 시작, 단계 4개·메시지 2개, F6 일시정지(차량·시간 멈춤), 성공,
   F7 재시작, F8 종료와 없는 시나리오 파일의 실패 화면을 확인합니다(5-1). 출력의 `ERROR: ... 없는-시나리오.toml` 한 줄은 의도된 실패 경로입니다.
+- `suspension_test.gd`는 보정 코스에서 제동 때 앞 숙임, 오른쪽 회전 때 왼쪽(바깥) 기울기가 차체 메시에 전달되고, 바퀴 부품은 기울지 않으며,
+  입석 카메라는 `body_follow`(0.5)만큼만 따라가고 외부 시점은 따라가지 않는지 확인합니다(2-8).
+- `map_patch_test.gd`는 합성 지역 보정으로 끊긴 OSM 도로를 연결해 경로 선택·안내·저장·재생·차량 통과를 확인하고,
+  보정 파일 누락·변조 오류와 다른 코스에서 보정 안내가 사라지는지도 검사합니다(4-11a, 네트워크 없음).
+- `yeosu_custom_roads_test.gd`는 메뉴에서 "여수 엑스포 · 내 맵 도로"(사용자 제작 맵의 도로 중심선 코스)를 열어 도로 면·연석·배경,
+  도로 이탈 판정과 몇 초 주행을 확인합니다(4-11b).
 - `scenario_record_test.gd`는 메뉴의 시나리오 A·B·C, B의 원뿔 두 개(충돌 경계), C의 보행자 대체 객체 등장 자리·이동·표시 노드,
   제동 반응 기록, F8로 끝낸 뒤 결과 JSON(사건 기록·입력 열·임시 점수 안내)과 끝 안내의 기록 요약, F7 뒤 요약 비움을 확인합니다(5-2~5-5).
   결과 파일은 `user://scenario-record-test`에 쓰고 끝에 지웁니다.
 
 프레임 시간은 실제 창에서 잽니다(헤드리스 아님, 측정만 하고 실패로 끝내지 않음).
+지도 화면은 `godot/tests/map_frame_probe.gd`로 잽니다(전국 지도 자료 필요, 기본 강남역 1.5 km 지역을 열고 가만히·끌기·확대 프레임 시간 출력):
+`& '<Godot 콘솔 실행 파일>' --path godot --script res://tests/map_frame_probe.gd -- --data=<전국 자료 폴더 절대 경로>`
 
 ```powershell
 & '<Godot 콘솔 실행 파일>' --path godot --resolution 1280x720 --script res://tests/frame_time_probe.gd -- --seconds=15

@@ -3,7 +3,7 @@
 #   실제 셔틀 운행 경로나 통행 가능 구간이라는 확인이 아니다.
 # - 선택: Codex 제안(2026-11-06)을 사용자가 전달. 공원 경계 way 529495025(여수세계박람회장 / EXPO Ocean Park) 안.
 # - 출처: © OpenStreetMap contributors, ODbL — https://www.openstreetmap.org/copyright
-# 실행: Godot 메인 메뉴 코스 목록에서 선택(코스 이름 map:assets/maps/yeosu-expo/course.toml)
+# 실행: Godot 메인 메뉴에서 여수 엑스포 · OSM 배경 선택(map:testdata/yeosu-expo/course.toml)
 
 # 원본 Overpass 응답(수정하지 않음). 이 파일 기준 상대 경로.
 source = "course-way-532526349.osm.json"

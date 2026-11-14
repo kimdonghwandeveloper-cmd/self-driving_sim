@@ -48,6 +48,18 @@ func input_source() -> String:
 func in_contact() -> bool:
 	return false
 
+## 임시 노드는 충돌하지 않으므로 마지막 충돌이 없다(계약 v1.8).
+func last_impact() -> Dictionary:
+	return {}
+
+## 임시 노드는 차체가 기울지 않는다(계약 v1.9).
+func body_pose() -> Dictionary:
+	return {"pitch_rad": 0.0, "roll_rad": 0.0, "heave_m": 0.0}
+
+## 임시 노드는 물리 틱을 돌리지 않는다.
+func tick_count() -> int:
+	return 0
+
 ## 시점 초기값은 전방이다.
 func view() -> String:
 	return "front"

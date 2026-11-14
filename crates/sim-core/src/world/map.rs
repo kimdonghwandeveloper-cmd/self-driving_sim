@@ -463,17 +463,38 @@ pub fn build_map_course(file: &MapCourseFile, base_dir: &Path) -> Result<CourseD
 
 /// 선택 파일 경로에서 지도 코스를 읽는다. 파일 없음·TOML 오류·변환 오류는 모두 `Err`다.
 ///
-/// 최상위에 `format` 키가 있으면 경로 파일([`super::route_plan::RouteFile`], Phase 4-3)로,
+/// 최상위 `format`이 [`super::road_polygons::ROAD_LINES_FORMAT`]이면 맵 도로 코스(사용자 제작 맵 도로, 4-11b)로,
+/// 그 밖의 `format` 키가 있으면 경로 파일([`super::route_plan::RouteFile`], Phase 4-3)로,
 /// 없으면 단일 통로 선택 파일([`MapCourseFile`])로 읽는다.
 pub fn load_map_course(path: &Path) -> Result<CourseDef, String> {
+    load_map_course_with_patch_dir(
+        path,
+        Path::new(super::map_patch::PATCH_DIR),
+        super::map_patch::PatchAudience::Distribution,
+    )
+}
+
+/// [`load_map_course`]와 같되 지역 보정 경로가 참조할 보정 폴더와 실행 대상을 명시한다.
+pub fn load_map_course_with_patch_dir(
+    path: &Path,
+    patch_dir: &Path,
+    audience: super::map_patch::PatchAudience,
+) -> Result<CourseDef, String> {
     let text = std::fs::read_to_string(path)
         .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
     let invalid = |error: toml::de::Error| format!("invalid {}: {error}", path.display());
     let table: toml::Table = toml::from_str(&text).map_err(invalid)?;
     let base_dir = path.parent().unwrap_or(Path::new("."));
+    if table.get("format").and_then(toml::Value::as_str)
+        == Some(super::road_polygons::ROAD_LINES_FORMAT)
+    {
+        return super::road_polygons::load_road_lines_course(&text, base_dir);
+    }
     if table.contains_key("format") {
         let file: super::route_plan::RouteFile = toml::from_str(&text).map_err(invalid)?;
-        return super::route_plan::load_route_course(&file, base_dir);
+        return super::route_plan::load_route_course_with_patch_dir(
+            &file, base_dir, patch_dir, audience,
+        );
     }
     let file: MapCourseFile = toml::from_str(&text).map_err(invalid)?;
     build_map_course(&file, base_dir)
@@ -757,7 +778,7 @@ mod tests {
     #[test]
     fn committed_yeosu_course_is_drivable() {
         let path = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."))
-            .join("assets/maps/yeosu-expo/course.toml");
+            .join("testdata/yeosu-expo/course.toml");
         let course = load_map_course(&path).unwrap();
         assert!(
             course
@@ -954,7 +975,7 @@ mod tests {
     fn real_curved_way_is_drivable() {
         use crate::world::osm_graph::parse_overpass_graph;
         let path = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."))
-            .join("assets/maps/yeosu-expo/graph-2026-11-06.osm.json");
+            .join("testdata/yeosu-expo/graph-2026-11-06.osm.json");
         let ways = parse_overpass_graph(&std::fs::read_to_string(path).unwrap()).unwrap();
         let way = ways.iter().find(|way| way.id == 529_495_041).unwrap();
         let origin = way.nodes[0].pos;
@@ -963,7 +984,7 @@ mod tests {
         assert_strips_valid(&course);
         // 저장소의 굽은 길 확인 코스 파일도 같은 way로 읽히고 출처 안내가 붙는다.
         let file = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."))
-            .join("assets/maps/yeosu-expo/curved-course.toml");
+            .join("testdata/yeosu-expo/curved-course.toml");
         let from_file = load_map_course(&file).unwrap();
         assert!(from_file.notices.iter().any(|n| n == OSM_ATTRIBUTION));
         assert_eq!(from_file.start, course.start);

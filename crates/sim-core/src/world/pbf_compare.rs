@@ -426,6 +426,7 @@ mod tests {
             ],
             replication: None,
             dense: true,
+            ..Fixture::default()
         };
         let pbf = fixture.to_pbf();
         let bytes = pbf.clone();

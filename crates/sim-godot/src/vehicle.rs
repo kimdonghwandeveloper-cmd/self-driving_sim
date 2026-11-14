@@ -20,7 +20,9 @@ use sim_core::scenario::run::{Control, Phase, ScenarioRun, ScenarioUpdate};
 use sim_core::session::{DriveCommand, DriveSession, QueueFull, TickReport};
 use sim_core::vehicle::state::{Gear, VehicleInput};
 
-use crate::course::{build_course, course_dict, failure_dict, panic_message};
+use crate::course::{
+    build_course, build_course_with_patch_dir, course_dict, failure_dict, panic_message,
+};
 use crate::devices::{Devices, load_bindings};
 use crate::paths::resolve_user_path;
 
@@ -154,6 +156,9 @@ pub struct SimVehicle {
     #[export]
     #[init(val = GString::from("training"))]
     course: GString,
+    /// 지도 코스의 지역 보정 폴더. 비우면 `data/map-patches`; 격리된 시험·개발 자료에서만 바꾼다.
+    #[export]
+    patch_dir: GString,
     /// 설정 폴더. 비우면 `res://../config`. `_ready`에서 한 번만 읽는다.
     #[export]
     config_dir: GString,
@@ -165,7 +170,7 @@ pub struct SimVehicle {
     /// 코스를 쓴다. 상대 경로는 저장소 루트 기준. `_ready`에서 한 번만 읽는다.
     #[export]
     scenario: GString,
-    /// 시나리오 결과 파일 폴더(계약 v1.5, 5-5). 비우면 저장소 루트의 `logs/scenarios`. 상대 경로는 저장소 루트 기준.
+    /// 시나리오 결과 파일 폴더(계약 v1.10, 5-5). 비우면 저장소 루트의 `logs/scenarios`. 상대 경로는 저장소 루트 기준.
     /// 시나리오가 끝날 때 읽는다.
     #[export]
     result_dir: GString,
@@ -220,7 +225,15 @@ impl INode3D for SimVehicle {
             }
             return;
         }
-        match build_course(&self.course.to_string()) {
+        let built = if self.patch_dir.to_string().trim().is_empty() {
+            build_course(&self.course.to_string())
+        } else {
+            build_course_with_patch_dir(
+                &self.course.to_string(),
+                &resolve_user_path(&self.patch_dir.to_string()),
+            )
+        };
+        match built {
             Ok(course) => {
                 self.session = Some(DriveSession::new(course, &config));
                 self.sync_transform();
@@ -400,7 +413,8 @@ impl SimVehicle {
     /// `active`, `title`, `briefing`, `phase`(계약 이름), `phase_text`(한국어), `outcome`(끝났을 때만, 아니면 빈 문자열),
     /// `step_index`(지금 단계 번호, 다 끝냈으면 단계 수), `step_count`, `guide`(지금 단계 안내, 다 끝냈으면 빈 문자열),
     /// `elapsed_s`, `time_limit_s`(없으면 -1), `collisions`, `max_collisions`(없으면 -1), `message`(없으면 빈 문자열),
-    /// (v1.5) `result_lines`(끝난 뒤 결과 요약 줄, 그 전에는 빈 배열), `result_path`(저장한 결과 파일, 없거나 실패면 빈 문자열).
+    /// (v1.8) `max_impact_delta_v_mps`(시작 뒤 가장 큰 충돌 속도 변화 m/s, 없으면 0).
+    /// (v1.10) `result_lines`(끝난 뒤 결과 요약 줄, 그 전에는 빈 배열), `result_path`(저장한 결과 파일, 없거나 실패면 빈 문자열).
     #[func]
     fn scenario_status(&self) -> VarDictionary {
         let Some(run) = &self.run else {
@@ -427,13 +441,14 @@ impl SimVehicle {
             "time_limit_s" => def.end.time_limit_s.map_or(-1.0, f64::from),
             "collisions" => i64::from(run.collisions()),
             "max_collisions" => def.end.max_collisions.map_or(-1, i64::from),
+            "max_impact_delta_v_mps" => f64::from(run.max_impact_delta_v_mps()),
             "message" => run.message().unwrap_or(""),
             "result_lines" => &result_lines,
             "result_path" => self.result_path.as_str(),
         }
     }
 
-    /// (v1.5) 지금 보이는 보행자 대체 객체 `[{id, position: Vector3(x, 0, z), heading_rad, size: Vector3(폭, 높이, 앞뒤)}]`.
+    /// (v1.10) 지금 보이는 보행자 대체 객체 `[{id, position: Vector3(x, 0, z), heading_rad, size: Vector3(폭, 높이, 앞뒤)}]`.
     /// 시나리오가 없거나 등장 전·사라진 뒤면 빈 배열이다. 진행 방향 규칙은 차량과 같다(0이면 -Z).
     #[func]
     fn scenario_hazards(&self) -> VarArray {
@@ -551,6 +566,40 @@ impl SimVehicle {
             .collect()
     }
 
+    /// 차체 움직임(계약 v1.9, 2-8): `pitch_rad`(앞이 내려가면 양수), `roll_rad`(오른쪽이 내려가면 양수),
+    /// `heave_m`(위가 양수). 보이는 움직임만이며 값은 시뮬레이터 임시값으로 계산한다. 준비 전에는 모두 0.
+    #[func]
+    fn body_pose(&self) -> VarDictionary {
+        let body = self
+            .session
+            .as_ref()
+            .map(|session| *session.body())
+            .unwrap_or_default();
+        vdict! {
+            "pitch_rad" => f64::from(body.pitch_rad),
+            "roll_rad" => f64::from(body.roll_rad),
+            "heave_m" => f64::from(body.heave_m),
+        }
+    }
+
+    /// 마지막 충돌(계약 v1.8, 2-7). 없거나 시작 위치 복귀 뒤면 빈 사전.
+    /// `tick`은 충돌한 틱 번호, 크기(`normal_speed_mps`·`impulse_ns`·`delta_v_mps`)는 시뮬레이터 임시값으로 계산한 값,
+    /// `point`는 접촉점(높이 0)이다.
+    #[func]
+    fn last_impact(&self) -> VarDictionary {
+        let Some((tick, hit)) = self.session.as_ref().and_then(DriveSession::last_impact) else {
+            return VarDictionary::new();
+        };
+        vdict! {
+            "tick" => tick as i64,
+            "speed_mps" => f64::from(hit.speed_mps),
+            "normal_speed_mps" => f64::from(hit.normal_speed_mps),
+            "impulse_ns" => f64::from(hit.impulse_ns),
+            "delta_v_mps" => f64::from(hit.delta_v_mps),
+            "point" => Vector3::new(hit.contact_x_m, 0.0, hit.contact_z_m),
+        }
+    }
+
     /// 장애물·연석과 접촉한 상태인지.
     #[func]
     fn in_contact(&self) -> bool {
@@ -583,7 +632,7 @@ impl SimVehicle {
         GString::from(name)
     }
 
-    /// `config/camera.toml`의 입석 시점 값(`eye_m`, `pitch_deg`, `vertical_fov_deg`, `near_clip_m`).
+    /// `config/camera.toml`의 입석 시점 값(`eye_m`, `pitch_deg`, `vertical_fov_deg`, `near_clip_m`, (v1.9) `body_follow`).
     #[func]
     fn operator_view(&self) -> VarDictionary {
         let view = &self.operator_view;
@@ -593,6 +642,7 @@ impl SimVehicle {
             "pitch_deg" => view.pitch_deg,
             "vertical_fov_deg" => view.vertical_fov_deg,
             "near_clip_m" => view.near_clip_m,
+            "body_follow" => view.body_follow,
         }
     }
 

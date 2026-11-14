@@ -16,6 +16,13 @@ pub type FxWay = (
     Option<(i32, i64)>,
 );
 
+/// 시험 관계: (ID, 태그, 멤버 (종류 `"node"`·`"way"`, ID, 역할)).
+pub type FxRelation = (
+    u64,
+    Vec<(&'static str, &'static str)>,
+    Vec<(&'static str, u64, &'static str)>,
+);
+
 /// 시험 PBF 내용.
 #[derive(Debug, Clone, Default)]
 pub struct Fixture {
@@ -27,6 +34,10 @@ pub struct Fixture {
     pub replication: Option<(i64, i64)>,
     /// 노드를 DenseNodes로 쓸지.
     pub dense: bool,
+    /// 노드 태그 (노드 ID, 태그). 없는 노드는 태그 없음.
+    pub node_tags: Vec<(u64, Vec<(&'static str, &'static str)>)>,
+    /// 관계. 비어 있으면 관계 블록을 쓰지 않는다.
+    pub relations: Vec<FxRelation>,
 }
 
 /// 합성 기준점에서 (동쪽, 북쪽) m인 점의 1e-7° 정수 좌표 [위도, 경도].
@@ -145,7 +156,15 @@ fn blob(out: &mut Vec<u8>, kind: &str, data: &[u8]) {
 }
 
 impl Fixture {
-    /// PBF 바이트열을 만든다: 머리부 블록, 노드 블록, way 블록 순서.
+    /// 노드 ID의 태그(없으면 빈 목록).
+    fn tags_of(&self, id: u64) -> &[(&'static str, &'static str)] {
+        self.node_tags
+            .iter()
+            .find(|(node, _)| *node == id)
+            .map_or(&[], |(_, tags)| tags.as_slice())
+    }
+
+    /// PBF 바이트열을 만든다: 머리부 블록, 노드 블록, way 블록, (있으면) 관계 블록 순서.
     pub fn to_pbf(&self) -> Vec<u8> {
         let mut out = Vec::new();
         let mut header = Vec::new();
@@ -158,7 +177,7 @@ impl Fixture {
         }
         blob(&mut out, "OSMHeader", &header);
 
-        let strings = Strings::new();
+        let mut strings = Strings::new();
         let mut group = Vec::new();
         if self.dense {
             let ids: Vec<i64> = self.nodes.iter().map(|n| n.0 as i64).collect();
@@ -191,12 +210,31 @@ impl Fixture {
                 9,
                 &packed(deltas(&lons).into_iter().map(zigzag)),
             );
+            if !self.node_tags.is_empty() {
+                // keys_vals: 노드마다 (키, 값) 문자열 번호를 늘어놓고 0으로 끝낸다.
+                let mut keys_vals = Vec::new();
+                for node in &self.nodes {
+                    for (key, value) in self.tags_of(node.0) {
+                        keys_vals.push(strings.id(key));
+                        keys_vals.push(strings.id(value));
+                    }
+                    keys_vals.push(0);
+                }
+                field_bytes(&mut dense, 10, &packed(keys_vals));
+            }
             field_bytes(&mut group, 2, &dense);
         } else {
             for &(id, east, north, meta) in &self.nodes {
                 let [lat, lon] = e7(east, north);
                 let mut node = Vec::new();
                 field_varint(&mut node, 1, zigzag(id as i64));
+                let tags = self.tags_of(id);
+                if !tags.is_empty() {
+                    let keys: Vec<u64> = tags.iter().map(|(k, _)| strings.id(k)).collect();
+                    let vals: Vec<u64> = tags.iter().map(|(_, v)| strings.id(v)).collect();
+                    field_bytes(&mut node, 2, &packed(keys));
+                    field_bytes(&mut node, 3, &packed(vals));
+                }
                 if let Some(meta) = meta {
                     field_bytes(&mut node, 4, &info(meta));
                 }
@@ -224,6 +262,36 @@ impl Fixture {
             field_bytes(&mut group, 3, &way);
         }
         blob(&mut out, "OSMData", &primitive_block(&strings, &group));
+
+        if !self.relations.is_empty() {
+            let mut strings = Strings::new();
+            let mut group = Vec::new();
+            for (id, tags, members) in &self.relations {
+                let mut relation = Vec::new();
+                field_varint(&mut relation, 1, *id);
+                let keys: Vec<u64> = tags.iter().map(|(k, _)| strings.id(k)).collect();
+                let vals: Vec<u64> = tags.iter().map(|(_, v)| strings.id(v)).collect();
+                field_bytes(&mut relation, 2, &packed(keys));
+                field_bytes(&mut relation, 3, &packed(vals));
+                let roles: Vec<u64> = members.iter().map(|m| strings.id(m.2)).collect();
+                let ids: Vec<i64> = members.iter().map(|m| m.1 as i64).collect();
+                // 멤버 종류: 0 노드, 1 way, 2 관계.
+                let types = members.iter().map(|m| match m.0 {
+                    "node" => 0,
+                    "way" => 1,
+                    _ => 2,
+                });
+                field_bytes(&mut relation, 8, &packed(roles));
+                field_bytes(
+                    &mut relation,
+                    9,
+                    &packed(deltas(&ids).into_iter().map(zigzag)),
+                );
+                field_bytes(&mut relation, 10, &packed(types));
+                field_bytes(&mut group, 4, &relation);
+            }
+            blob(&mut out, "OSMData", &primitive_block(&strings, &group));
+        }
         out
     }
 }

@@ -1,4 +1,4 @@
-# Godot ↔ Rust 인터페이스 계약 (v1.5)
+# Godot ↔ Rust 인터페이스 계약 (v1.10)
 
 작성: 2026-11-08 Claude 초안, 2026-11-09 v1 고정(Codex가 동의한 v0.2와 Codex 추가 요청 2건 반영).
 목적: Claude(Rust, `crates/`)와 Codex(Godot, `godot/`)가 동시에 개발할 때 서로 기다리지 않도록
@@ -14,7 +14,12 @@ Godot에 노출할 클래스·메서드·시그널·좌표 규칙·실패 처리
 | v1.2 | 항목 추가(기존 이름·인자 변경 없음, 2026-11-10 Claude. Codex 사용량 한도 중 사용자 지시로 Godot 쪽도 Claude가 맞춤): 지도 코스 이름 `map:<파일>`(2절 `course`, 3절, 5-3 `SimReplay.run`), `SimCourse.course_files()`(3절), `SimTiles.country_outline()`·`country_bounds()`(7-3, 대한민국 범위 제한·경계 밖 가림, 사용자 지시 2026-11-09). 저장 경로 주행을 범위에 다시 넣음(7-4, 사용자 지시 "남은 플랜 완료"). Godot에 보내는 사람이 읽는 문구(명령 거부 사유, 코스 안내, 경로 선택 안내·경고·오류)는 한국어(1절). 코스 사전 `goal`(3절, 4-6 경로 끝 목표 표시) |
 | v1.3 | 항목 추가(기존 이름·인자 변경 없음, 2026-11-10 Claude, GD-5 Bevy 앱 제거 사용자 결정): `SimVehicle.calibration_lines()`(2절, Bevy 앱에서 옮긴 2-5 보정 측정. 주행 결과에는 영향 없음). Bevy 앱이 없어져 `sim-core` 문구가 영어인 이유는 시험과 개발 명령(`sim-tools`) 공용이다 |
 | v1.4 | 항목 추가(기존 이름·인자 변경 없음, 2026-11-10 Claude, Phase 5-1 시나리오 틀): `SimVehicle.scenario` 속성, `scenario_control()`·`scenario_status()`, 시나리오 시그널 4개(2절 2-1), `SimScenario.scenario_files()`(3-2). 시나리오 파일 형식은 `docs/scenarios.md` |
-| v1.5 | 항목 추가(기존 이름·인자 변경 없음, 2026-11-11 Claude, Phase 5-2~5-5): `SimVehicle.result_dir` 속성, `scenario_hazards()`, `scenario_status()`의 `result_lines`·`result_path`(2-1절). 끝날 때 결과 JSON 저장. 시나리오 장애물은 `course_data()` 충돌 경계에 들어간다 |
+| v1.5 | 항목 추가(기존 이름·인자 변경 없음, 2026-11-11 Claude, PLAN 4-8 자동 경로·4-9 건물·장소): `SimRoutePicker.request_places()`·`load_places_file()`·`place_outlines()`·`place_at()`·`search_places()`·`add_place()`·`point_labels()`, `poll()` 이벤트 `places_loaded`(7-2). 경로 계산 규칙 변경(일방통행·회전 제한·우회·교차로 단순화)은 `route()`·`status_lines()` 형식을 바꾸지 않는다. ※ `feature/phase5-scenarios`도 v1.5를 쓰므로 나중에 병합하는 쪽을 v1.6으로 올린다 |
+| v1.6 | 항목 추가(기존 이름·인자 변경 없음, 2026-11-12 Claude, PLAN 4-10 전국 장소 검색): `SimRoutePicker.search_nationwide()`·`add_search_hit()`, `poll()` 이벤트 `search_results`(7-2). ※ `feature/phase5-scenarios`(v1.5)를 나중에 병합하면 그쪽을 v1.7로 올린다 |
+| v1.7 | **항목 제거·추가**(2026-11-12 Claude, PLAN 4-11 전국 지도 자료 내장, 사용자 결정): 네트워크 지역 받기 `request_region()`·`cancel_region()`·`request_places()`·`cached_regions()`와 `poll()` 이벤트 `progress`·`region_loaded`·`places_loaded`·`failed`를 없앴다. 대신 `open_region()`(내장 전국 자료에서 바로 열기, 동기)·`data_status()`·`use_data_dir()`·`latlon_to_view()`를 더했다. `network`는 전국 장소 검색에만 쓴다. ※ `feature/phase5-scenarios`(v1.5)를 나중에 병합하면 그쪽을 v1.8로 올린다 |
+| v1.8 | 항목 추가(기존 이름·인자 변경 없음, 2026-11-12 Claude, PLAN 2-7 충돌 물리 반응): `SimVehicle.last_impact()`(2절 읽기 함수, 마지막 충돌의 틱·닿는 속도·충격량·속도 변화·접촉점), `scenario_status()`의 `max_impact_delta_v_mps`(2-1). `collided` 시그널은 인자 없이 그대로다. 충돌하면 바로 서지 않고 튕기거나 미끄러지므로 `in_contact()`는 "접촉 거리 안"이라는 뜻만 남는다. ※ `feature/phase5-scenarios`(v1.5)를 나중에 병합하면 그쪽을 v1.9로 올린다(v1.9가 먼저 들어가면 v1.10) |
+| v1.9 | 항목 추가(기존 이름·인자 변경 없음, 2026-11-13 Claude, PLAN 2-8 차체 서스펜션 움직임): `SimVehicle.body_pose()`(2절 읽기 함수, 차체 피치·롤·상하), `operator_view()`의 `body_follow`(카메라 설정, 입석 카메라가 차체 기울기를 따라가는 정도). 보이는 움직임만이며 주행·충돌·재생 결과는 바뀌지 않는다. ※ `feature/phase5-scenarios`(v1.5)를 나중에 병합하면 그쪽을 v1.10으로 올린다 |
+| v1.10 | 항목 추가(기존 이름·인자 변경 없음, 2026-11-11 Claude, Phase 5-2~5-5, 2026-11-14 병합 때 v1.5에서 번호만 올림): `SimVehicle.result_dir` 속성, `scenario_hazards()`, `scenario_status()`의 `result_lines`·`result_path`(2-1절). 끝날 때 결과 JSON 저장. 시나리오 장애물은 `course_data()` 충돌 경계에 들어간다 |
 
 > GD-5(v1.3)에서 Bevy 앱을 지웠다. 본문의 "Bevy 판과 같음"·Bevy 파일 경로는 계약을 정할 때의 기준을 기록한 것이며, 그 규칙은 지금 `sim-core`에 있다.
 
@@ -54,7 +59,7 @@ Godot 쪽은 이 노드의 **자식**으로 차체 메시·실내·카메라를 
 | `config_dir` | `String` | `""` | 비우면 `res://../config`. 테스트에서 다른 설정 폴더를 쓸 때만 지정. `_ready`에서 한 번만 읽는다 |
 | `read_input` | `bool` | `true` | `false`면 Godot 입력을 읽지 않고 `set_manual_input`/`send_command`만 쓴다(헤드리스 시험용). 실행 중 바꿀 수 있다(5-1 2단계) |
 | (v1.4) `scenario` | `String` | `""` | 시나리오 파일(상대 경로는 저장소 루트 기준). 비우면 시나리오 없이 `course`를 주행한다. 있으면 `course` 대신 파일의 `course`를 쓰고 2-1절 규칙을 따른다. `_ready`에서 한 번만 읽는다 |
-| (v1.5) `result_dir` | `String` | `""` | 시나리오 결과 파일 폴더. 비우면 저장소 루트의 `logs/scenarios`. `res://`·`user://`·절대 경로 또는 저장소 루트 기준 상대 경로. 끝날 때 읽는다(헤드리스 시험은 `user://`를 쓴다) |
+| (v1.10) `result_dir` | `String` | `""` | 시나리오 결과 파일 폴더. 비우면 저장소 루트의 `logs/scenarios`. `res://`·`user://`·절대 경로 또는 저장소 루트 기준 상대 경로. 끝날 때 읽는다(헤드리스 시험은 `user://`를 쓴다) |
 
 ### 상태 확인
 
@@ -76,7 +81,9 @@ Godot 쪽은 이 노드의 **자식**으로 차체 메시·실내·카메라를 
 | `engine_on()` | `bool` | 시동 상태 |
 | `emergency_active()` | `bool` | 비상 정지 중 |
 | `steer_angle_deg()` | `float` | 현재 바퀴 조향각(오른쪽 양수) |
-| `in_contact()` | `bool` | 장애물·연석과 접촉해 정지한 상태 |
+| `in_contact()` | `bool` | 장애물·연석과 접촉 거리 안에 있음. (v1.8) 충돌해도 바로 서지 않으므로 정지를 뜻하지 않는다 |
+| (v1.9) `body_pose()` | `Dictionary` | 차체 움직임(2-8) `{pitch_rad`(앞이 내려가면 양수)`, roll_rad`(오른쪽이 내려가면 양수)`, heave_m`(위가 양수)`}`. 평면 주행의 가속도로 계산한 **보이는 움직임만**이며 주행 경로·충돌·재생 결과에 영향이 없다. 강성·감쇠·무게중심 높이는 `config/vehicle.toml` `[suspension]` 임시값. 1차는 노면 높이 입력이 없어(4-7) `heave_m`은 0이다. `reset_course` 성공 시 0. 화면은 차체 메시만 기울이고 바퀴는 노면에 둔다 |
+| (v1.8) `last_impact()` | `Dictionary` | 마지막 충돌. 없거나 `reset_course` 성공 뒤면 빈 사전. `{tick: int`(충돌한 틱, `collided`를 보낸 틱)`, speed_mps`(닿기 직전 부호 있는 속도)`, normal_speed_mps`(접촉점이 장애물로 다가오던 속도, 0 이상)`, impulse_ns`(법선 충격량 N·s)`, delta_v_mps`(무게중심 속도 변화 크기)`, point: Vector3`(접촉점, y=0)`}`. 크기는 질량·관성·반발 계수 **임시값**으로 계산한 값이며 실제 충돌 거동이 아니다. 화면은 충돌 뒤 3초 동안 속도 변화·충격량을 HUD에 보인다 |
 | (v1.3) `calibration_lines()` | `PackedStringArray` | 보정 측정 한국어 5줄: 회전반경(후륜축)·최대 조향 최소 반경, 최대 제동 예상 정지거리, 진행 중 시험, 마지막 제동·가속 시험(회차 포함). 모두 시뮬레이터 임시값. 시험은 매 틱 측정하고 `reset_course` 성공 시 진행 중 시험만 버린다. 준비 전에는 빈 배열. 주행 화면은 `calibration` 코스에서만 표시한다 |
 | `view()` | `String` | `"front"`, `"rear"`, `"left"`, `"right"` (입석 시점 방향) |
 | `debug_camera()` | `bool` | 외부 디버그 카메라 켜짐 |
@@ -123,17 +130,17 @@ Godot 쪽은 이 노드의 **자식**으로 차체 메시·실내·카메라를 
 - 시간은 `running` 중 처리한 틱 수 × 1/64 s다. 일시정지·화면 프레임과 무관하게 같은 입력이면 같은 결과다.
 - 판정은 매 틱 운동 모델 뒤에: 입력 열·거리 누적 → 사건 기록(기어 오류·과도한 입력·비상 정지·충돌·복귀) → 지금 단계 완료(같은 틱에 여러 단계 가능)
   → 이벤트(메시지·보행자 대체 객체 등장) → 보행자 대체 객체 접촉·제동 반응 → 충돌 초과 실패 → 모든 단계 끝이면 성공 → 시간 초과 실패.
-- (v1.5) 시나리오 `[[obstacles]]`는 코스 충돌 경계(`kind = "obstacle"`)에 더해져 `course_data()`로 그대로 그린다.
+- (v1.10) 시나리오 `[[obstacles]]`는 코스 충돌 경계(`kind = "obstacle"`)에 더해져 `course_data()`로 그대로 그린다.
   보행자 대체 객체는 차량을 막지 않고 겹치기 시작하면 충돌로 센다(`collided` 시그널은 보내지 않는다. 코스 장애물 충돌만 보낸다).
-- (v1.5) 끝나는 순간(틱 안의 성공·실패, `end`) 결과 JSON(`scenario-result-v1`, `docs/scenarios.md`)을 `result_dir`에 저장한 뒤 `scenario_phase_changed`·`scenario_finished`를 보낸다.
+- (v1.10) 끝나는 순간(틱 안의 성공·실패, `end`) 결과 JSON(`scenario-result-v1`, `docs/scenarios.md`)을 `result_dir`에 저장한 뒤 `scenario_phase_changed`·`scenario_finished`를 보낸다.
   저장에 실패해도 주행은 계속되고 `godot_warn!`을 남기며 `result_lines` 마지막 줄이 실패 사유다. `restart`는 결과 요약을 비운다.
 - `reset_course`는 시나리오 중에도 기존 규칙대로 동작하며 시나리오 진행(단계·시간·거리)은 되돌리지 않는다. 처음부터 하려면 `restart`다.
 
 | 함수 | 반환 | 설명 |
 | --- | --- | --- |
 | `scenario_control(name: String)` | `bool` | `"start"`(briefing→running), `"pause"`(running→paused), `"resume"`(paused→running), `"restart"`(어느 단계든 → briefing, 차량을 시작 조건의 새 세션으로 바꾸고 `tick_count` 0, 시점 전방), `"end"`(끝나지 않았으면 → finished `aborted`). **대기열 없이 바로** 적용한다. 시나리오가 없거나 지금 단계에서 받을 수 없으면 `false`(상태 그대로), 모르는 이름은 `godot_error!` 뒤 `false` |
-| `scenario_status()` | `Dictionary` | 시나리오가 없으면 `{active: false}`. 있으면 `active`, `title`, `briefing`, `phase`, `phase_text`(한국어), `outcome`(끝났을 때만, 아니면 `""`), `step_index`(지금 단계 번호, 다 끝냈으면 단계 수), `step_count`, `guide`(지금 단계 안내, 다 끝냈으면 `""`), `elapsed_s`, `time_limit_s`(없으면 -1), `collisions`, `max_collisions`(없으면 -1), `message`(지금 띄울 메시지, 없으면 `""`), (v1.5) `result_lines`(`PackedStringArray`, 끝난 뒤 한국어 결과 요약: 기록 횟수·정지 오차·반응 시간·임시 점수·임시 기준 안내·결과 파일. 그 전에는 빈 배열), `result_path`(저장한 결과 파일의 절대 경로, 끝나기 전·저장 실패면 `""`) |
-| (v1.5) `scenario_hazards()` | `Array[Dictionary]` | 지금 보이는 보행자 대체 객체 `[{id, position: Vector3(x, 0, z), heading_rad, size: Vector3(폭, 높이, 앞뒤)}]`. 등장 전·사라진 뒤·시나리오 없음이면 빈 배열. `heading_rad`는 차량과 같은 규칙(0이면 -Z). 매 화면 프레임 읽어 그린다 |
+| `scenario_status()` | `Dictionary` | 시나리오가 없으면 `{active: false}`. 있으면 `active`, `title`, `briefing`, `phase`, `phase_text`(한국어), `outcome`(끝났을 때만, 아니면 `""`), `step_index`(지금 단계 번호, 다 끝냈으면 단계 수), `step_count`, `guide`(지금 단계 안내, 다 끝냈으면 `""`), `elapsed_s`, `time_limit_s`(없으면 -1), `collisions`, `max_collisions`(없으면 -1), `message`(지금 띄울 메시지, 없으면 `""`), (v1.8) `max_impact_delta_v_mps`(시작 뒤 가장 큰 충돌 속도 변화, 없으면 0), (v1.10) `result_lines`(`PackedStringArray`, 끝난 뒤 한국어 결과 요약: 기록 횟수·정지 오차·반응 시간·임시 점수·임시 기준 안내·결과 파일. 그 전에는 빈 배열), `result_path`(저장한 결과 파일의 절대 경로, 끝나기 전·저장 실패면 `""`) |
+| (v1.10) `scenario_hazards()` | `Array[Dictionary]` | 지금 보이는 보행자 대체 객체 `[{id, position: Vector3(x, 0, z), heading_rad, size: Vector3(폭, 높이, 앞뒤)}]`. 등장 전·사라진 뒤·시나리오 없음이면 빈 배열. `heading_rad`는 차량과 같은 규칙(0이면 -Z). 매 화면 프레임 읽어 그린다 |
 
 시그널(틱 안에서 생긴 것은 9번 `debug_camera_toggled` 뒤, `tick_finished` 앞에 처리 순서대로):
 
@@ -149,8 +156,10 @@ Godot 쪽은 이 노드의 **자식**으로 차체 메시·실내·카메라를 
 `operator_view() -> Dictionary`: `config/camera.toml` 값. 읽기 실패 항목은 기본값으로 채우고 `config_warnings()`에 적는다.
 
 ```
-{ "eye_m": Vector3, "pitch_deg": float, "vertical_fov_deg": float, "near_clip_m": float }
+{ "eye_m": Vector3, "pitch_deg": float, "vertical_fov_deg": float, "near_clip_m": float, "body_follow": float }
 ```
+
+(v1.9) `body_follow`(0..=1, 기본 0.5)는 입석 카메라가 `body_pose()`의 기울기·상하를 따라가는 비율이다. 0이면 카메라는 기울지 않는다(멀미 대비). 외부 디버그 카메라는 따라가지 않는다.
 
 네 방향 시점은 같은 눈 위치에서 yaw만 바꾼다: front 0, left +π/2, rear π, right -π/2(+Y축 기준, Bevy 판 `ViewDirection`과 같음).
 Godot 카메라 리그가 `view_changed`를 받아 yaw를 바꾼다. 시점 전환은 주행 입력에 영향을 주지 않는다.
@@ -341,14 +350,15 @@ Bevy 판 `src/picker/`(4-5·4-5b)의 계산·캐시·받기 부분은 Bevy와 �
 
 | 함수·속성 | 반환 | 설명 |
 | --- | --- | --- |
-| `network: bool` (속성) | — | 기본 `true`. `false`면 캐시만 쓰고, 캐시에 없으면 `failed` 이벤트. 헤드리스 시험은 `false` |
+| `network: bool` (속성) | — | 기본 `true`. (v1.7) 전국 장소 검색에만 쓴다: `false`면 저장한 검색 결과만. 지역 열기는 네트워크를 쓰지 않는다. 헤드리스 시험은 `false` |
 | `load_snapshot(path: String)` | `{ok, error}` | 스냅샷(지역 도로) 열기. 실패 시 이전 상태 유지. (v1.1) `path`는 스냅샷 **폴더** 또는 그 안의 `graph.osm.json` 파일 경로 둘 다 받는다(같은 폴더의 meta·`connectivity.json`을 함께 읽는다) |
-| `cached_regions()` | `Array[Rect2]` | **디스크 캐시**에 있는 지역 범위(Bevy `cached_regions(map_fetch::CACHE_DIR)`), 지도 좌표 |
 | `loaded_region()` | `Rect2` | 지금 열린 지역 범위. 없으면 크기 0 |
-| `view_to_latlon(view: Vector2)` | `PackedFloat64Array` | 지도 좌표를 `[lat, lon]`으로. Bevy 판 투영(`tiles::to_view`)의 역변환. 값이 유한하지 않거나 메르카토르 유효 위도(±85.05112878°) 밖이면 **빈 배열**(Godot은 받기 버튼을 끈다) |
-| `request_region(center_latlon: PackedFloat64Array)` | `{ok, error, request_id: int}` | 가운데 1.5 × 1.5 km 받기 시작(이미 받은 범위면 캐시만). 백그라운드 처리. 받는 중이면 `ok=false, error="already loading"`, `request_id` 0 |
-| `cancel_region()` | 없음 | 받는 중인 요청 취소. 취소·이전 요청의 결과는 버린다 |
-| `poll()` | `Array[Dictionary]` | 진행 이벤트 `{type: "progress"|"region_loaded"|"failed", message: String, request_id: int}`. 매 프레임 호출 |
+| `view_to_latlon(view: Vector2)` | `PackedFloat64Array` | 지도 좌표를 `[lat, lon]`으로. Bevy 판 투영(`tiles::to_view`)의 역변환. 값이 유한하지 않거나 메르카토르 유효 위도(±85.05112878°) 밖이면 **빈 배열** |
+| (v1.7) `latlon_to_view(latlon: PackedFloat64Array)` | `Vector2` | `[lat, lon]`을 지도 좌표로(시험·검색 결과용). 형식이 맞지 않으면 원점 |
+| (v1.7) `open_region(center_latlon: PackedFloat64Array)` | `{ok, error}` | 가운데 1.5 × 1.5 km 지역의 도로·회전 제한·건물·장소를 **내장 전국 자료**(`data/korea`)에서 연다. 함수 안에서 끝난다(측정 0.1 s 미만). 도로는 지역 스냅샷 `cache/regions/<자료 판>/<범위>.osm.json`으로 써서 저장 경로가 가리킨다. `error`는 한국어(자료 없음·형식 다름·도로 없음) |
+| (v1.7) `data_status()` | `{ok, error, data_time}` | 전국 자료를 열 수 있는지. 없으면 `ok=false`와 만드는 방법 안내(한국어). `data_time`은 원본 복제 시각(유닉스 초 문자열, 없으면 빈 문자열) |
+| (v1.7) `use_data_dir(dir: String)` | 없음 | 전국 자료 폴더를 바꾼다(저장소 루트 기준, 빈 문자열이면 `data/korea`). 시험이 작은 자료(`testdata/korea-yeosu`)를 쓸 때 부른다 |
+| `poll()` | `Array[Dictionary]` | 매 프레임 호출. (v1.7) 이벤트는 전국 검색 결과 `{type: "search_results", ok: bool, message, request_id, results: Array[Dictionary]}`뿐이다(`results` 항목은 `{index, name, address, kind, view: Vector2}`, 실패면 빈 배열이고 `message`는 한국어) |
 | `road_segments()` | `PackedVector2Array` | 그릴 도로 선분(짝수 개: from, to 반복), 지도 좌표 |
 | `road_usable()` | `PackedByteArray` | 선분별 경로 탐색 가능 여부(1/0) |
 | `add_point(view: Vector2)` | 없음 | 점 추가 |
@@ -359,11 +369,19 @@ Bevy 판 `src/picker/`(4-5·4-5b)의 계산·캐시·받기 부분은 Bevy와 �
 | `route()` | `{ok, error, line: PackedVector2Array, length_m: float, warnings: PackedStringArray}` | 현재 점에 대한 계산 결과. 항상 모든 키. 실패·2점 미만이면 `line` 빈 배열, `length_m` 0, 2점 미만은 `ok=false, error=""` |
 | `status_lines()` | `PackedStringArray` | Bevy 판 상태 문구(지역·점 수·경고·받기 진행) |
 | `save(name: String, overwrite: bool = false)` | `{ok, error, path: String}` | 경로 파일 저장(Bevy 판과 같은 형식·폴더). 실패면 `path=""` |
+| (v1.5) `load_places_file(path: String)` | `{ok, error}` | 장소 파일(`places.osm.json` 형식)을 직접 연다(시험·수동 확인용). 상대 경로는 저장소 루트 기준 |
+| (v1.5) `place_outlines()` | `Array[PackedVector2Array]` | 장소 윤곽(지도 좌표, 닫는 점 중복 없음). 점 장소는 점 하나짜리 배열. 순서는 장소 번호 |
+| (v1.5) `place_at(view: Vector2)` | `int` | 그 위치의 장소 번호(윤곽 안이면 가장 작은 건물, 아니면 15 m 안의 점 장소). 없으면 -1 |
+| (v1.5) `search_places(text: String)` | `Array[Dictionary]` | 이름 포함 검색(대소문자 무시, 짧은 이름 순, 최대 20개) `{index: int, name: String, kind: String}`. 빈 검색어는 빈 배열 |
+| (v1.5) `add_place(index: int)` | `{ok, error}` | 장소의 진입 지점(출입구, 없으면 윤곽에서 가장 가까운 탐색 가능 도로 위 점, 100 m 이내)을 점으로 끝에 더하고 경로를 다시 계산. 실패하면 점은 그대로이고 `error`는 한국어 |
+| (v1.5) `point_labels()` | `PackedStringArray` | 점마다 표시 이름(장소로 고른 점은 장소 이름, 그냥 찍은 점은 빈 문자열). `points()`와 길이가 같다. 저장한 경로 파일의 `point_labels`(표시용) |
+| (v1.6) `search_nationwide(text: String)` | `{ok, error, request_id: int}` | Nominatim 전국 장소 검색 시작(4-10). Enter·검색 버튼에서만 부른다(입력 중 자동완성 금지). 같은 검색어는 `cache/geocode` 저장분을 쓰고, `network=false`면 저장분만. 검색 중이면 `error="이미 검색 중입니다"`. 결과는 `poll()`의 `search_results` |
+| (v1.6) `add_search_hit(index: int)` | `{ok, error}` | 마지막 전국 검색 결과 `index`를 가장 가까운 탐색 가능 도로 위 점(100 m 이내)으로 이름과 함께 끝에 더하고 경로를 다시 계산. 열린 지역이 없거나 도로에서 멀면 실패(`error` 한국어) |
 
 - 점 편집 함수는 경로를 **동기로** 다시 계산한다(함수 안에서 끝남). 계산이 실패하면 이전 경로를 내보내지 않는다.
-- `request_region` 결과: 실패하면 기존 지역·점·경로를 그대로 둔다. 성공하면 지역을 **교체**하고 점·경로를 비운다(Bevy 판과 같음).
-- 네트워크는 `request_region`에서만 쓴다. 자료원은 Bevy 판과 같은 Overpass(4-4)다. 지도 표시·점 편집·저장으로 지역 자료를 자동으로 받지 않는다.
-- 객체가 해제되면(화면 이탈) 받기를 취소한다.
+- `open_region` 결과: 실패하면 기존 지역·점·경로를 그대로 둔다. 성공하면 지역을 **교체**하고 점·경로를 비운다.
+- (v1.7) 지역 자료는 네트워크로 받지 않는다(PLAN 4-11). 화면은 점이 없을 때 클릭한 곳·확대해 멈춘 화면 가운데·전국 검색 결과 위치로
+  `open_region`을 부르고, 점이 있으면 지역을 바꾸지 않는다(출발·도착은 한 지역 안, 4-11 2단계에서 풀 예정).
 - **신규 검사:** `save`의 `name`은 `[A-Za-z0-9_-]{1,64}`만 허용하고 `.toml`을 Rust가 붙인다(경로 구분자 금지).
   같은 이름이 있고 `overwrite=false`면 실패. 유효한 현재 경로가 없으면 `"no valid route to save"`.
 
@@ -553,7 +571,7 @@ v1 본문(1~8절)이 기준이다. 아래는 합의 과정 기록이며, 본문�
    - `request_visible(min, max, meters_per_px)`로 이름을 바꾼다(v0.1의 `scale`). `meters_per_px`는 화면 1 px에 해당하는 지도 m(Bevy `ortho.scale`과 같음, Godot `1 / Camera2D.zoom.x`).
      `min`은 북서(작은 x, 작은 y), `max`는 남동. 줌 선택은 Bevy `tiles::zoom_for_scale`과 같고 범위는 5..=19. 결과의 `rect`도 같은 지도 좌표다.
 
-7. **지역 요청 수명**
+7. **지역 요청 수명** — v1.7(PLAN 4-11)에서 네트워크 지역 받기를 없애 아래 내용은 지난 기록이다. 지금 규칙은 7-2 `open_region`을 따른다.
    - `request_region`은 `{ok, error, request_id: int}`. 받는 중에 다시 부르면 `ok=false, error="already loading"`(Bevy 판도 받는 중엔 무시). `cancel_region()`으로 취소하고, 취소·이전 요청의 결과는 버린다.
      `poll()` 이벤트에 `request_id`를 넣는다.
    - 실패하면 기존 지역·점·경로를 그대로 둔다. 성공하면 지역을 **교체**하고 점·경로를 비운다(Bevy 판과 같음).
