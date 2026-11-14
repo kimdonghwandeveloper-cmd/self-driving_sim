@@ -2,6 +2,9 @@
 //!
 //! `node`, `way`, `type=lanelet` relation의 `left`·`right`와 선택적 `centerline`만 읽는다.
 //! 형상 생성, 좌표 투영, 코스 조립과 Godot 연결은 후속 단계에서 맡는다.
+//!
+//! `<bounds>`는 `<osm>` 바로 아래 한 번만 허용하고 경고만 남긴다(좌표 계산에 쓰지 않음).
+//! JOSM 편집 표시 `action="delete"`·`visible="false"`는 아직 해석하지 않는다. 제외·거부 정책은 geometry/tool 단계에서 정한다.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -108,6 +111,19 @@ enum Parent {
     Relation,
 }
 
+impl Parent {
+    /// 오류 메시지에 쓸 사용자용 위치 문구(`inside osm root`, `inside way`, 루트 밖이면 `outside osm root`)를 돌려준다.
+    fn location(self, root: RootState) -> &'static str {
+        match self {
+            Self::None if root == RootState::Open => "inside osm root",
+            Self::None => "outside osm root",
+            Self::Node => "inside node",
+            Self::Way => "inside way",
+            Self::Relation => "inside relation",
+        }
+    }
+}
+
 /// `<osm>` 루트가 정확히 한 번 열리고 닫혔는지 추적한다.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RootState {
@@ -122,6 +138,7 @@ enum LeafElement {
     Nd,
     Member,
     Tag,
+    Bounds,
 }
 
 impl LeafElement {
@@ -131,6 +148,7 @@ impl LeafElement {
             Self::Nd => b"nd",
             Self::Member => b"member",
             Self::Tag => b"tag",
+            Self::Bounds => b"bounds",
         }
     }
 }
@@ -240,14 +258,24 @@ fn handle_tag(
 }
 
 /// 현재 부모에서 자식 없는 요소의 내용을 읽고 필요하면 닫는 태그를 기다린다.
+/// `<bounds>`는 루트 바로 아래 한 번만 받아 경고로 남긴다(`seen_bounds`로 중복 검사).
 fn handle_leaf(
     element: &BytesStart<'_>,
     parent: Parent,
+    root: RootState,
+    seen_bounds: &mut bool,
     current_way: &mut Option<RawWay>,
     current_relation: &mut Option<RawRelation>,
     warnings: &mut Vec<String>,
 ) -> Result<LeafElement, String> {
     match element.name().as_ref() {
+        b"bounds" if parent == Parent::None && root == RootState::Open => {
+            if std::mem::replace(seen_bounds, true) {
+                return Err("osm root has more than one bounds element".to_owned());
+            }
+            warnings.push("bounds element is ignored (not used for coordinates)".to_owned());
+            Ok(LeafElement::Bounds)
+        }
         b"nd" if parent == Parent::Way => {
             current_way
                 .as_mut()
@@ -269,9 +297,9 @@ fn handle_leaf(
             Ok(LeafElement::Tag)
         }
         name => Err(format!(
-            "element `{}` is not allowed inside {:?}",
+            "element `{}` is not allowed {}",
             String::from_utf8_lossy(name),
-            parent
+            parent.location(root)
         )),
     }
 }
@@ -414,6 +442,7 @@ pub fn parse_lanelet2(bytes: &[u8]) -> Result<LaneletMap, String> {
     let mut parent = Parent::None;
     let mut root = RootState::Before;
     let mut open_leaf: Option<LeafElement> = None;
+    let mut seen_bounds = false;
     let mut warnings = Vec::new();
     let mut buffer = Vec::new();
     loop {
@@ -516,6 +545,8 @@ pub fn parse_lanelet2(bytes: &[u8]) -> Result<LaneletMap, String> {
                 open_leaf = Some(handle_leaf(
                     &element,
                     parent,
+                    root,
+                    &mut seen_bounds,
                     &mut current_way,
                     &mut current_relation,
                     &mut warnings,
@@ -525,6 +556,8 @@ pub fn parse_lanelet2(bytes: &[u8]) -> Result<LaneletMap, String> {
                 handle_leaf(
                     &element,
                     parent,
+                    root,
+                    &mut seen_bounds,
                     &mut current_way,
                     &mut current_relation,
                     &mut warnings,
@@ -725,7 +758,23 @@ mod tests {
     #[test]
     fn rejects_unsupported_structure() {
         let unknown = changed("  <node id=\"1\"", "  <foo/>\n  <node id=\"1\"");
-        assert!(parse_lanelet2(&unknown).unwrap_err().contains("foo"));
+        assert_eq!(
+            parse_lanelet2(&unknown).unwrap_err(),
+            "element `foo` is not allowed inside osm root"
+        );
+        let member_in_way = changed(
+            "    <nd ref=\"2\"/>",
+            "    <member type=\"way\" ref=\"1\" role=\"left\"/>",
+        );
+        assert_eq!(
+            parse_lanelet2(&member_in_way).unwrap_err(),
+            "element `member` is not allowed inside way"
+        );
+        let after_root = changed("</osm>", "</osm>\n<foo/>");
+        assert_eq!(
+            parse_lanelet2(&after_root).unwrap_err(),
+            "element `foo` is not allowed outside osm root"
+        );
 
         let nested_node = changed(
             "    <nd ref=\"1\"/>",
@@ -742,6 +791,43 @@ mod tests {
             parse_lanelet2(&unclosed_root)
                 .unwrap_err()
                 .contains("closed osm root")
+        );
+    }
+
+    /// 루트 바로 아래 `<bounds>` 하나는 두 표기 모두 경고만 남기고 결과에 영향을 주지 않는다.
+    #[test]
+    fn bounds_under_root_is_ignored_with_warning() {
+        let plain = parse_lanelet2(straight_fixture()).unwrap();
+        let bounds = "<bounds minlat=\"34\" minlon=\"127\" maxlat=\"34.001\" maxlon=\"127.001\"/>";
+        for form in [bounds.to_owned(), bounds.replace("/>", "></bounds>")] {
+            let xml = changed("  <node id=\"1\"", &format!("  {form}\n  <node id=\"1\""));
+            let map = parse_lanelet2(&xml).unwrap();
+            assert_eq!(map.nodes, plain.nodes);
+            assert_eq!(map.ways, plain.ways);
+            assert_eq!(map.lanelets, plain.lanelets);
+            assert_eq!(
+                map.warnings,
+                ["bounds element is ignored (not used for coordinates)"]
+            );
+        }
+    }
+
+    /// `<bounds>`는 루트 바로 아래 한 번만 허용한다.
+    #[test]
+    fn rejects_misplaced_or_duplicate_bounds() {
+        let bounds = "<bounds minlat=\"34\" minlon=\"127\" maxlat=\"35\" maxlon=\"128\"/>";
+        let in_way = changed("    <nd ref=\"2\"/>", &format!("    {bounds}"));
+        assert_eq!(
+            parse_lanelet2(&in_way).unwrap_err(),
+            "element `bounds` is not allowed inside way"
+        );
+        let twice = changed(
+            "  <node id=\"1\"",
+            &format!("  {bounds}\n  {bounds}\n  <node id=\"1\""),
+        );
+        assert_eq!(
+            parse_lanelet2(&twice).unwrap_err(),
+            "osm root has more than one bounds element"
         );
     }
 
