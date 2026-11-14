@@ -70,6 +70,8 @@ pub struct LaneletMap {
     pub ways: BTreeMap<i64, LaneletWay>,
     /// relation ID 순으로 정렬된 도로 lanelet.
     pub lanelets: BTreeMap<i64, LaneletRelation>,
+    /// 변환에는 쓰지 않았지만 사용자가 확인해야 하는 입력 정보 경고.
+    pub warnings: Vec<String>,
     /// 입력 XML 원문 바이트의 SHA-256.
     pub sha256: String,
 }
@@ -101,8 +103,36 @@ struct RawRelation {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Parent {
     None,
+    Node,
     Way,
     Relation,
+}
+
+/// `<osm>` 루트가 정확히 한 번 열리고 닫혔는지 추적한다.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RootState {
+    Before,
+    Open,
+    Closed,
+}
+
+/// 빈 요소와 동등한 `<nd></nd>` 형식에서 기다리는 닫는 태그 종류.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LeafElement {
+    Nd,
+    Member,
+    Tag,
+}
+
+impl LeafElement {
+    /// 오류 메시지와 닫는 태그 검사에 쓸 XML 요소 이름을 돌려준다.
+    fn name(self) -> &'static [u8] {
+        match self {
+            Self::Nd => b"nd",
+            Self::Member => b"member",
+            Self::Tag => b"tag",
+        }
+    }
 }
 
 /// 속성 이름 하나를 UTF-8 문자열로 읽고 필수 여부를 검사한다.
@@ -180,6 +210,70 @@ fn insert_tag(
         return Err(format!("duplicate tag `{key}`"));
     }
     Ok(())
+}
+
+/// 태그를 부모 요소에 반영하거나, 최소 형식에서 버리는 정보라는 경고를 남긴다.
+fn handle_tag(
+    element: &BytesStart<'_>,
+    parent: Parent,
+    relation: Option<&mut RawRelation>,
+    warnings: &mut Vec<String>,
+) -> Result<(), String> {
+    let (key, value) = parse_tag(element)?;
+    match parent {
+        Parent::Relation => {
+            let relation = relation.expect("relation parent has a value");
+            if matches!(key.as_str(), "type" | "subtype" | "one_way") {
+                insert_tag(&mut relation.tags, key, value)?;
+            } else {
+                warnings.push(format!(
+                    "relation {} tag `{key}={value}` is not preserved",
+                    relation.id
+                ));
+            }
+        }
+        Parent::Node => warnings.push(format!("node tag `{key}={value}` is not preserved")),
+        Parent::Way => warnings.push(format!("way tag `{key}={value}` is not preserved")),
+        Parent::None => return Err("tag must be inside node, way, or relation".to_owned()),
+    }
+    Ok(())
+}
+
+/// 현재 부모에서 자식 없는 요소의 내용을 읽고 필요하면 닫는 태그를 기다린다.
+fn handle_leaf(
+    element: &BytesStart<'_>,
+    parent: Parent,
+    current_way: &mut Option<RawWay>,
+    current_relation: &mut Option<RawRelation>,
+    warnings: &mut Vec<String>,
+) -> Result<LeafElement, String> {
+    match element.name().as_ref() {
+        b"nd" if parent == Parent::Way => {
+            current_way
+                .as_mut()
+                .expect("way parent has a value")
+                .nodes
+                .push(osm_id(element, b"ref")?);
+            Ok(LeafElement::Nd)
+        }
+        b"member" if parent == Parent::Relation => {
+            current_relation
+                .as_mut()
+                .expect("relation parent has a value")
+                .members
+                .push(parse_member(element)?);
+            Ok(LeafElement::Member)
+        }
+        b"tag" if matches!(parent, Parent::Node | Parent::Way | Parent::Relation) => {
+            handle_tag(element, parent, current_relation.as_mut(), warnings)?;
+            Ok(LeafElement::Tag)
+        }
+        name => Err(format!(
+            "element `{}` is not allowed inside {:?}",
+            String::from_utf8_lossy(name),
+            parent
+        )),
+    }
 }
 
 /// 같은 역할이 두 번 나오지 않도록 lanelet way member를 찾는다.
@@ -318,15 +412,63 @@ pub fn parse_lanelet2(bytes: &[u8]) -> Result<LaneletMap, String> {
     let mut current_way: Option<RawWay> = None;
     let mut current_relation: Option<RawRelation> = None;
     let mut parent = Parent::None;
+    let mut root = RootState::Before;
+    let mut open_leaf: Option<LeafElement> = None;
+    let mut warnings = Vec::new();
     let mut buffer = Vec::new();
     loop {
         let event = reader
             .read_event_into(&mut buffer)
             .map_err(|error| format!("invalid Lanelet2 XML: {error}"))?;
+
+        if let Some(leaf) = open_leaf {
+            match event {
+                Event::End(element) if element.name().as_ref() == leaf.name() => {
+                    open_leaf = None;
+                    buffer.clear();
+                    continue;
+                }
+                Event::Text(ref text)
+                    if text
+                        .iter()
+                        .copied()
+                        .all(|byte: u8| byte.is_ascii_whitespace()) =>
+                {
+                    buffer.clear();
+                    continue;
+                }
+                Event::Comment(_) => {
+                    buffer.clear();
+                    continue;
+                }
+                _ => {
+                    return Err(format!(
+                        "element `{}` must not contain child content",
+                        String::from_utf8_lossy(leaf.name())
+                    ));
+                }
+            }
+        }
+
         match event {
+            Event::Decl(_) if root == RootState::Before => {}
+            Event::Start(element)
+                if element.name().as_ref() == b"osm"
+                    && root == RootState::Before
+                    && parent == Parent::None =>
+            {
+                root = RootState::Open;
+            }
+            Event::End(element)
+                if element.name().as_ref() == b"osm"
+                    && root == RootState::Open
+                    && parent == Parent::None =>
+            {
+                root = RootState::Closed;
+            }
             Event::Start(element) if element.name().as_ref() == b"way" => {
-                if parent != Parent::None {
-                    return Err("nested way is not allowed".to_owned());
+                if root != RootState::Open || parent != Parent::None {
+                    return Err("way must be a direct child of osm".to_owned());
                 }
                 current_way = Some(RawWay {
                     id: osm_id(&element, b"id")?,
@@ -335,8 +477,8 @@ pub fn parse_lanelet2(bytes: &[u8]) -> Result<LaneletMap, String> {
                 parent = Parent::Way;
             }
             Event::Start(element) if element.name().as_ref() == b"relation" => {
-                if parent != Parent::None {
-                    return Err("nested relation is not allowed".to_owned());
+                if root != RootState::Open || parent != Parent::None {
+                    return Err("relation must be a direct child of osm".to_owned());
                 }
                 current_relation = Some(RawRelation {
                     id: osm_id(&element, b"id")?,
@@ -345,7 +487,23 @@ pub fn parse_lanelet2(bytes: &[u8]) -> Result<LaneletMap, String> {
                 });
                 parent = Parent::Relation;
             }
-            Event::Start(element) | Event::Empty(element) if element.name().as_ref() == b"node" => {
+            Event::Start(element) if element.name().as_ref() == b"node" => {
+                if root != RootState::Open || parent != Parent::None {
+                    return Err("node must be a direct child of osm".to_owned());
+                }
+                let node = parse_node(&element)?;
+                if nodes.insert(node.id, node).is_some() {
+                    return Err(format!("duplicate node ID {}", node.id));
+                }
+                if nodes.len() > MAX_NODES {
+                    return Err(format!("node count exceeds {MAX_NODES}"));
+                }
+                parent = Parent::Node;
+            }
+            Event::Empty(element) if element.name().as_ref() == b"node" => {
+                if root != RootState::Open || parent != Parent::None {
+                    return Err("node must be a direct child of osm".to_owned());
+                }
                 let node = parse_node(&element)?;
                 if nodes.insert(node.id, node).is_some() {
                     return Err(format!("duplicate node ID {}", node.id));
@@ -354,37 +512,34 @@ pub fn parse_lanelet2(bytes: &[u8]) -> Result<LaneletMap, String> {
                     return Err(format!("node count exceeds {MAX_NODES}"));
                 }
             }
-            Event::Empty(element) if element.name().as_ref() == b"nd" && parent == Parent::Way => {
-                current_way
-                    .as_mut()
-                    .expect("way parent has a value")
-                    .nodes
-                    .push(osm_id(&element, b"ref")?);
+            Event::Start(element) => {
+                open_leaf = Some(handle_leaf(
+                    &element,
+                    parent,
+                    &mut current_way,
+                    &mut current_relation,
+                    &mut warnings,
+                )?);
             }
-            Event::Empty(element)
-                if element.name().as_ref() == b"member" && parent == Parent::Relation =>
-            {
-                current_relation
-                    .as_mut()
-                    .expect("relation parent has a value")
-                    .members
-                    .push(parse_member(&element)?);
+            Event::Empty(element) => {
+                handle_leaf(
+                    &element,
+                    parent,
+                    &mut current_way,
+                    &mut current_relation,
+                    &mut warnings,
+                )?;
             }
-            Event::Empty(element) if element.name().as_ref() == b"tag" => {
-                let (key, value) = parse_tag(&element)?;
-                match parent {
-                    Parent::Relation => insert_tag(
-                        &mut current_relation
-                            .as_mut()
-                            .expect("relation parent has a value")
-                            .tags,
-                        key,
-                        value,
-                    )?,
-                    Parent::Way | Parent::None => {}
+            Event::End(element) if element.name().as_ref() == b"node" => {
+                if parent != Parent::Node {
+                    return Err("node end without matching start".to_owned());
                 }
+                parent = Parent::None;
             }
             Event::End(element) if element.name().as_ref() == b"way" => {
+                if parent != Parent::Way {
+                    return Err("way end without matching start".to_owned());
+                }
                 let raw = current_way.take().ok_or("way end without start")?;
                 let way = LaneletWay {
                     id: raw.id,
@@ -399,6 +554,9 @@ pub fn parse_lanelet2(bytes: &[u8]) -> Result<LaneletMap, String> {
                 parent = Parent::None;
             }
             Event::End(element) if element.name().as_ref() == b"relation" => {
+                if parent != Parent::Relation {
+                    return Err("relation end without matching start".to_owned());
+                }
                 relations.push(
                     current_relation
                         .take()
@@ -414,13 +572,26 @@ pub fn parse_lanelet2(bytes: &[u8]) -> Result<LaneletMap, String> {
             {
                 return Err("unexpected text inside Lanelet2 XML".to_owned());
             }
+            Event::Text(_) | Event::Comment(_) => {}
             Event::Eof => break,
-            _ => {}
+            Event::End(element) => {
+                return Err(format!(
+                    "unexpected closing element `{}`",
+                    String::from_utf8_lossy(element.name().as_ref())
+                ));
+            }
+            Event::Decl(_) => return Err("XML declaration must precede osm".to_owned()),
+            Event::PI(_) | Event::DocType(_) | Event::CData(_) | Event::GeneralRef(_) => {
+                return Err("unsupported XML event in Lanelet2 input".to_owned());
+            }
         }
         buffer.clear();
     }
-    if parent != Parent::None {
+    if open_leaf.is_some() || parent != Parent::None {
         return Err("Lanelet2 XML ended inside an element".to_owned());
+    }
+    if root != RootState::Closed {
+        return Err("Lanelet2 XML must contain one closed osm root".to_owned());
     }
     validate_ways(&ways, &nodes)?;
     let mut lanelets = BTreeMap::new();
@@ -445,6 +616,7 @@ pub fn parse_lanelet2(bytes: &[u8]) -> Result<LaneletMap, String> {
         nodes,
         ways,
         lanelets,
+        warnings,
         sha256: super::road_snapshot::sha256_hex(bytes),
     })
 }
@@ -524,6 +696,79 @@ mod tests {
         let map = parse_lanelet2(xml.as_bytes()).unwrap();
         assert_eq!(map.nodes[&-1].lat, 34.0);
         assert_eq!(map.ways[&201].nodes[0], -1);
+        assert_eq!(map.warnings, ["node tag `ele=4.2` is not preserved"]);
+    }
+
+    /// 자식 없는 XML 요소는 축약형과 명시적인 여닫는 형식을 같은 의미로 읽는다.
+    #[test]
+    fn explicit_leaf_end_tags_preserve_data() {
+        let xml = String::from_utf8(straight_fixture().to_vec())
+            .unwrap()
+            .replace("<nd ref=\"2\"/>", "<nd ref=\"2\"></nd>")
+            .replace(
+                "<member type=\"way\" ref=\"202\" role=\"right\"/>",
+                "<member type=\"way\" ref=\"202\" role=\"right\"></member>",
+            )
+            .replace(
+                "<tag k=\"one_way\" v=\"yes\"/>",
+                "<tag k=\"one_way\" v=\"no\"></tag>",
+            );
+        let map = parse_lanelet2(xml.as_bytes()).unwrap();
+        assert_eq!(map.ways[&201].nodes, [1, 2, 3]);
+        assert_eq!(
+            map.lanelets[&301].direction,
+            LaneletDirection::Bidirectional
+        );
+    }
+
+    /// 알 수 없는 요소, 잘못 중첩된 요소와 닫히지 않은 루트를 거부한다.
+    #[test]
+    fn rejects_unsupported_structure() {
+        let unknown = changed("  <node id=\"1\"", "  <foo/>\n  <node id=\"1\"");
+        assert!(parse_lanelet2(&unknown).unwrap_err().contains("foo"));
+
+        let nested_node = changed(
+            "    <nd ref=\"1\"/>",
+            "    <node id=\"99\" lat=\"34\" lon=\"127\"/>\n    <nd ref=\"1\"/>",
+        );
+        assert!(
+            parse_lanelet2(&nested_node)
+                .unwrap_err()
+                .contains("node must be a direct child")
+        );
+
+        let unclosed_root = changed("</osm>", "");
+        assert!(
+            parse_lanelet2(&unclosed_root)
+                .unwrap_err()
+                .contains("closed osm root")
+        );
+    }
+
+    /// Autoware 로컬 좌표와 보존하지 않는 설명 태그를 경고로 돌려준다.
+    #[test]
+    fn warns_about_unpreserved_tags() {
+        let xml = changed(
+            "  <node id=\"1\" lat=\"34.0000000\" lon=\"127.0000000\"/>",
+            "  <node id=\"1\" lat=\"34.0000000\" lon=\"127.0000000\"><tag k=\"local_x\" v=\"1.5\"/><tag k=\"local_y\" v=\"2.5\"/></node>",
+        );
+        let xml = String::from_utf8(xml).unwrap().replace(
+            "    <tag k=\"type\" v=\"lanelet\"/>",
+            "    <tag k=\"name\" v=\"test lane\"/>\n    <tag k=\"type\" v=\"lanelet\"/>",
+        );
+        let map = parse_lanelet2(xml.as_bytes()).unwrap();
+        assert_eq!(map.warnings.len(), 3);
+        assert!(
+            map.warnings
+                .iter()
+                .any(|warning| warning.contains("local_x"))
+        );
+        assert!(
+            map.warnings
+                .iter()
+                .any(|warning| warning.contains("local_y"))
+        );
+        assert!(map.warnings.iter().any(|warning| warning.contains("name")));
     }
 
     /// 누락 node·way 참조와 2개 미만 node를 가진 way를 거부한다.
@@ -566,6 +811,15 @@ mod tests {
                 .unwrap_err()
                 .contains("duplicate `left`")
         );
+        let duplicate_relation = changed("relation id=\"301\"", "relation id=\"201\"");
+        let duplicate_relation = String::from_utf8(duplicate_relation)
+            .unwrap()
+            .replace("</osm>", "  <relation id=\"201\"></relation>\n</osm>");
+        assert!(
+            parse_lanelet2(duplicate_relation.as_bytes())
+                .unwrap_err()
+                .contains("duplicate relation ID")
+        );
     }
 
     /// 비정상 좌표, 잘못된 일방통행 값과 도로가 아닌 lanelet을 거부한다.
@@ -574,6 +828,12 @@ mod tests {
         let latitude = changed("lat=\"34.0000000\"", "lat=\"91\"");
         assert!(
             parse_lanelet2(&latitude)
+                .unwrap_err()
+                .contains("outside -90..=90")
+        );
+        let nan = changed("lat=\"34.0000000\"", "lat=\"NaN\"");
+        assert!(
+            parse_lanelet2(&nan)
                 .unwrap_err()
                 .contains("outside -90..=90")
         );
@@ -588,6 +848,12 @@ mod tests {
             parse_lanelet2(&subtype)
                 .unwrap_err()
                 .contains("subtype=road")
+        );
+        let missing_left = changed("    <member type=\"way\" ref=\"201\" role=\"left\"/>", "");
+        assert!(
+            parse_lanelet2(&missing_left)
+                .unwrap_err()
+                .contains("missing `left`")
         );
     }
 
