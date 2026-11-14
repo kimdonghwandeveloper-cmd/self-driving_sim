@@ -24,3 +24,5 @@ png = "=0.18.1"
 osmpbf = "=0.3.8"
 # PLAN 4-11 전국 지도 자료 조각 압축(deflate). 이미 osmpbf·png가 쓰는 판이라 새 외부 코드가 늘지 않는다.
 flate2 = "=1.1.10"
+# Lanelet2가 사용하는 OSM XML을 스트리밍 방식으로 읽는다.
+quick-xml = "=0.38.4"

@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<osm version="0.6" generator="self-driving-sim-test">
+  <node id="6" lat="34.0002000" lon="127.0000400"/>
+  <node id="4" lat="34.0000000" lon="127.0000400"/>
+  <node id="2" lat="34.0001000" lon="127.0000000"/>
+  <node id="5" lat="34.0001000" lon="127.0000400"/>
+  <node id="1" lat="34.0000000" lon="127.0000000"/>
+  <node id="3" lat="34.0002000" lon="127.0000000"/>
+  <way id="203"><nd ref="1"/><nd ref="3"/></way>
+  <way id="202"><nd ref="4"/><nd ref="5"/><nd ref="6"/></way>
+  <way id="201"><nd ref="1"/><nd ref="2"/><nd ref="3"/></way>
+  <relation id="301">
+    <tag k="one_way" v="yes"/>
+    <member type="way" ref="203" role="centerline"/>
+    <tag k="subtype" v="road"/>
+    <member type="way" ref="202" role="right"/>
+    <tag k="type" v="lanelet"/>
+    <member type="way" ref="201" role="left"/>
+  </relation>
+</osm>
