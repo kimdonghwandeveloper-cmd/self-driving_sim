@@ -7,6 +7,8 @@
 //! - `--audit-extract <세대 폴더> --pbf <PBF 파일>`: 세대 폴더를 원본 PBF와 보존 규칙으로 전수 대조한다.
 //! - `--compare-overpass <Overpass 스냅샷> --extract <세대 폴더> --pbf <PBF 파일> [--pick-points ...]`: 날짜가 다른
 //!   기존 Overpass 자료와의 차이를 분류해 출력한다(설명되지 않은 차이는 데이터 동등성 미확인).
+//! - `--check-result <결과 JSON>`: 시나리오 결과 파일(Phase 5-5)의 시나리오 내용과 입력 열을 `config/vehicle.toml`로
+//!   다시 돌려 같은 결과·사건 기록이 나오는지 확인한다. 같으면 성공 종료, 다르면 처음 다른 곳을 출력하고 오류 종료.
 //!
 //! - `--build-korea-data <PBF 파일> [--out <폴더>] [--clip <남,서,북,동>]`: 전국 PBF를 전국 지도 자료(`data/korea/`)로
 //!   바꾸고 개수·크기·시간을 출력한다(PLAN 4-11, 네트워크 없음). `--clip`은 시험 자료용으로 범위만 넣는다.
@@ -15,11 +17,14 @@
 //!
 //! 상대 경로(`cache/`, `config/`, `data/`)는 실행한 폴더 기준이므로 저장소 최상위에서 실행한다.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+use sim_core::config::{VEHICLE_CONFIG_PATH, VehicleConfig, parse_vehicle_config, read_config};
+use sim_core::scenario::result::replay_check;
 use sim_core::world::map::LatLon;
 use sim_core::world::map_fetch::{self, Bbox, FetchJob, FetchPolicy, FetchSettings};
+use sim_core::world::{CourseDef, CourseId, map};
 use sim_core::world::{
     anchor_probe, korea_data, osm_graph, pbf_audit, pbf_compare, pbf_extract, route_plan,
 };
@@ -104,8 +109,67 @@ fn main() -> ExitCode {
             }
         };
     }
+    if args.iter().any(|argument| argument == "--check-result") {
+        return match value_after("--check-result") {
+            Some(file) => check_result_command(file),
+            None => {
+                eprintln!("--check-result needs a scenario result JSON file");
+                ExitCode::FAILURE
+            }
+        };
+    }
     eprintln!("{USAGE}");
     ExitCode::FAILURE
+}
+
+/// 결과 파일을 다시 돌려 같은 결과·사건 기록이 나오는지 확인하고 출력한다(Phase 5-5).
+fn check_result_command(file: &str) -> ExitCode {
+    let json = match std::fs::read_to_string(file) {
+        Ok(json) => json,
+        Err(error) => {
+            eprintln!("cannot read {file}: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let config = match read_config(Path::new(VEHICLE_CONFIG_PATH), parse_vehicle_config) {
+        Ok(Some(config)) => config,
+        Ok(None) => {
+            eprintln!("{VEHICLE_CONFIG_PATH} not found; using defaults");
+            VehicleConfig::default()
+        }
+        Err(error) => {
+            eprintln!("{VEHICLE_CONFIG_PATH}: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    match replay_check(&json, build_course, &config) {
+        Ok(report) if report.matches => {
+            println!("replay matches: outcome {}", report.outcome);
+            ExitCode::SUCCESS
+        }
+        Ok(report) => {
+            println!(
+                "replay differs (outcome {}): {}",
+                report.outcome,
+                report.difference.unwrap_or_default()
+            );
+            ExitCode::FAILURE
+        }
+        Err(error) => {
+            eprintln!("cannot replay {file}: {error}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// 시나리오의 코스 이름(`training`, `calibration`, `map:<저장소 루트 기준 파일>`)으로 코스를 만든다.
+fn build_course(name: &str) -> Result<CourseDef, String> {
+    match name.trim().strip_prefix("map:") {
+        Some(path) => map::load_map_course(Path::new(path.trim())),
+        None => CourseId::parse(name)
+            .map(CourseId::build)
+            .ok_or_else(|| format!("unknown course: {name}")),
+    }
 }
 
 /// 명령을 주지 않았을 때 출력하는 사용법.
@@ -115,7 +179,8 @@ const USAGE: &str = "usage: sim-tools --fetch-map <south,west,north,east> [--off
        sim-tools --compare-overpass <overpass graph> --extract <folder> --pbf <pbf> [--pick-points <lat,lon;...>]
        sim-tools --build-korea-data <pbf> [--out <folder>] [--clip <south,west,north,east>]
        sim-tools --korea-region <lat,lon>
-       sim-tools --osm-anchors <lat,lon[;lat,lon...]> [--radius <m>]";
+       sim-tools --osm-anchors <lat,lon[;lat,lon...]> [--radius <m>]
+       sim-tools --check-result <scenario result json>";
 
 /// `--osm-anchors` 기본 조사 반경(m). 보정 접속점 허용 오차 상한(20 m)보다 넓게 본다.
 const DEFAULT_ANCHOR_RADIUS_M: f64 = 30.0;

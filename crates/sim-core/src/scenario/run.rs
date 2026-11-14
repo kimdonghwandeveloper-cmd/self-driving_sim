@@ -2,16 +2,24 @@
 //!
 //! [`ScenarioRun`]은 주행 세션([`DriveSession`])을 진행 중에만 한 틱씩 돌리고, 틱마다 현재 단계의 완료 조건·
 //! 이벤트 조건·실패 조건을 판정한다. 시간은 진행 중 틱 수 × [`DT`]라서 일시정지·화면 프레임과 무관하게 재현된다.
+//!
+//! 5-2~5-5: 진행 중 틱마다 기어 오류·과도한 입력·충돌·비상 정지·정지 위치·위험 등장·제동 반응을 기록하고
+//! ([`RecordEvent`]), 재현용 입력 열([`TrackEntry`])을 남긴다. 보행자 대체 객체는 등장 틱부터 정해진 경로를
+//! 일정 속도로 지나가며, 차체와 겹치면 충돌로 센다(차량을 막지는 않는다).
+
+use std::time::SystemTime;
 
 use glam::Vec2;
 
+use super::record::{RecordEvent, RecordKind, TrackEntry, push_track};
 use super::{Action, Condition, ScenarioDef, ScenarioError, StepDef};
 use crate::config::VehicleConfig;
 use crate::session::{DT, DeviceTick, DriveSession, TickReport};
-use crate::vehicle::collision::VEHICLE_FOOTPRINT;
+use crate::vehicle::collision::{GroundRect, VEHICLE_FOOTPRINT};
 use crate::vehicle::dynamics::Motion;
-use crate::vehicle::state::{EngineState, Gear, VehicleCommand};
+use crate::vehicle::state::{EngineState, Gear, VehicleCommand, VehicleInput};
 use crate::world::CourseDef;
+use crate::world::course::{Collider, ColliderKind};
 
 /// 시나리오가 끝난 방식.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -107,6 +115,32 @@ pub enum ScenarioUpdate {
     Finished(Outcome),
 }
 
+/// 등장한 보행자 대체 객체 하나의 상태.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct ActiveHazard {
+    /// `def.hazards` 번호.
+    def: usize,
+    /// 등장한 틱.
+    spawn_tick: u64,
+    /// 직전 틱에 차체와 겹쳐 있었는지(겹치기 시작한 틱에만 충돌로 센다).
+    touching: bool,
+    /// 제동 시작을 이미 기록했는지.
+    reacted: bool,
+}
+
+/// 화면에 그릴 보행자 대체 객체 하나(지금 틱의 자세).
+#[derive(Debug, Clone, PartialEq)]
+pub struct HazardView {
+    pub id: String,
+    /// 중심 (x, z) m.
+    pub center: Vec2,
+    /// 진행 방향(rad, 0이면 -Z).
+    pub heading_rad: f32,
+    /// 바닥 크기(폭, 앞뒤) m.
+    pub size_m: [f32; 2],
+    pub height_m: f32,
+}
+
 /// 시나리오 한 번의 실행 상태.
 #[derive(Debug, Clone)]
 pub struct ScenarioRun {
@@ -131,10 +165,24 @@ pub struct ScenarioRun {
     fired: Vec<bool>,
     /// 띄우고 있는 메시지와 사라질 틱.
     message: Option<(String, u64)>,
+    /// 시작 뒤 후진한 거리(m).
+    reversed_m: f32,
+    /// 사건 기록(일어난 순서).
+    records: Vec<RecordEvent>,
+    /// 재현용 입력 열.
+    track: Vec<TrackEntry>,
+    /// 직전 진행 틱의 연속 입력(과도한 입력의 시작 판정).
+    last_input: VehicleInput,
+    /// 등장한 보행자 대체 객체(등장 순서).
+    hazards: Vec<ActiveHazard>,
+    /// 처음 시작한 시각과 끝난 시각(벽시계, 결과 파일용). 재시작하면 지운다.
+    started_at: Option<SystemTime>,
+    ended_at: Option<SystemTime>,
 }
 
 impl ScenarioRun {
     /// 검사를 마친 시나리오와 코스로 실행 상태와 시작 조건을 맞춘 주행 세션을 만든다(시작 전 안내 단계).
+    /// 시나리오의 고정 장애물은 코스 충돌 경계에 더한다.
     /// 목표가 필요한 조건인데 코스에 목표가 없거나 시작 조건을 적용하지 못하면 오류다.
     pub fn new(
         def: ScenarioDef,
@@ -155,6 +203,16 @@ impl ScenarioRun {
                 ..Motion::default()
             };
         }
+        course
+            .colliders
+            .extend(def.obstacles.iter().map(|obstacle| Collider {
+                rect: GroundRect::axis_aligned(
+                    Vec2::from(obstacle.position_m),
+                    Vec2::from(obstacle.size_m),
+                ),
+                height_m: obstacle.height_m,
+                kind: ColliderKind::Obstacle,
+            }));
         let run = Self {
             fired: vec![false; def.events.len()],
             def,
@@ -168,6 +226,13 @@ impl ScenarioRun {
             step: 0,
             step_done_ticks: Vec::new(),
             message: None,
+            reversed_m: 0.0,
+            records: Vec::new(),
+            track: Vec::new(),
+            last_input: VehicleInput::default(),
+            hazards: Vec::new(),
+            started_at: None,
+            ended_at: None,
         };
         let drive = run.fresh_session()?;
         Ok((run, drive))
@@ -253,6 +318,78 @@ impl ScenarioRun {
             .map(|(text, _)| text.as_str())
     }
 
+    /// 진행 중 처리한 틱 수.
+    pub fn ticks(&self) -> u64 {
+        self.ticks
+    }
+
+    /// 시작 뒤 후진한 거리(m).
+    pub fn reversed_m(&self) -> f32 {
+        self.reversed_m
+    }
+
+    /// 시나리오 코스(시작 자세·시나리오 장애물 반영).
+    pub fn course(&self) -> &CourseDef {
+        &self.course
+    }
+
+    /// 사건 기록(일어난 순서).
+    pub fn records(&self) -> &[RecordEvent] {
+        &self.records
+    }
+
+    /// 재현용 입력 열.
+    pub fn track(&self) -> &[TrackEntry] {
+        &self.track
+    }
+
+    /// 처음 시작한 시각(벽시계). 시작 전이면 `None`.
+    pub fn started_at(&self) -> Option<SystemTime> {
+        self.started_at
+    }
+
+    /// 끝난 시각(벽시계). 끝나기 전이면 `None`.
+    pub fn ended_at(&self) -> Option<SystemTime> {
+        self.ended_at
+    }
+
+    /// 지금 보이는 보행자 대체 객체(등장했고 아직 사라지지 않은 것).
+    pub fn visible_hazards(&self) -> Vec<HazardView> {
+        self.hazards
+            .iter()
+            .filter_map(|active| {
+                let def = &self.def.hazards[active.def];
+                let (center, heading_rad) = def.pose_at(self.walked_m(active))?;
+                Some(HazardView {
+                    id: def.id.clone(),
+                    center,
+                    heading_rad,
+                    size_m: def.size_m,
+                    height_m: def.height_m,
+                })
+            })
+            .collect()
+    }
+
+    /// 등장 뒤 걸은 거리(m).
+    fn walked_m(&self, active: &ActiveHazard) -> f32 {
+        self.def.hazards[active.def].speed_mps * (self.ticks - active.spawn_tick) as f32 * DT
+    }
+
+    /// 사건 하나를 지금 틱으로 기록한다.
+    fn record(&mut self, kind: RecordKind) {
+        self.records.push(RecordEvent::new(self.ticks, kind));
+    }
+
+    /// 끝난 상태로 바꾸고 끝 사건·시각을 남긴다.
+    fn finish(&mut self, outcome: Outcome) {
+        self.phase = Phase::Finished(outcome);
+        self.ended_at = Some(SystemTime::now());
+        self.record(RecordKind::Finished {
+            outcome: outcome.name().to_owned(),
+        });
+    }
+
     /// 사용자 조작을 바로 적용한다. 재시작은 `drive`를 시작 조건의 새 세션으로 바꾼다.
     /// 지금 단계에서 받을 수 없는 조작이면 아무것도 바꾸지 않는다.
     pub fn control(
@@ -261,22 +398,34 @@ impl ScenarioRun {
         drive: &mut DriveSession,
     ) -> Result<(), ControlRejected> {
         self.phase = match (control, self.phase) {
-            (Control::Start, Phase::Briefing) | (Control::Resume, Phase::Paused) => Phase::Running,
+            (Control::Start, Phase::Briefing) => {
+                self.started_at = Some(SystemTime::now());
+                Phase::Running
+            }
+            (Control::Resume, Phase::Paused) => Phase::Running,
             (Control::Pause, Phase::Running) => Phase::Paused,
             (Control::End, Phase::Briefing | Phase::Running | Phase::Paused) => {
-                Phase::Finished(Outcome::Aborted)
+                self.finish(Outcome::Aborted);
+                return Ok(());
             }
             (Control::Restart, _) => {
                 // 시작 조건은 생성 때 한 번 적용해 봤으므로 다시 실패하지 않는다.
                 *drive = self.fresh_session().map_err(|_| ControlRejected)?;
                 self.ticks = 0;
                 self.travel_m = 0.0;
+                self.reversed_m = 0.0;
                 self.collisions = 0;
                 self.max_impact_delta_v_mps = 0.0;
                 self.step = 0;
                 self.step_done_ticks.clear();
                 self.fired.fill(false);
                 self.message = None;
+                self.records.clear();
+                self.track.clear();
+                self.last_input = VehicleInput::default();
+                self.hazards.clear();
+                self.started_at = None;
+                self.ended_at = None;
                 Phase::Briefing
             }
             _ => return Err(ControlRejected),
@@ -286,7 +435,8 @@ impl ScenarioRun {
 
     /// 진행 중이면 주행 세션을 한 틱 돌리고 단계·이벤트·끝 조건을 판정한다. 진행 중이 아니면 `None`(세션은 그대로).
     ///
-    /// 판정 순서: 충돌·거리 누적 → 단계 완료(같은 틱에 여러 단계 가능) → 이벤트 → 충돌 초과 실패 → 성공 → 시간 초과 실패.
+    /// 판정 순서: 입력 열·거리 누적 → 사건 기록(기어 오류·과도한 입력·비상 정지·충돌·복귀) → 단계 완료
+    /// (같은 틱에 여러 단계 가능) → 이벤트 → 보행자 대체 객체 접촉·제동 반응 → 충돌 초과 실패 → 성공 → 시간 초과 실패.
     pub fn tick(
         &mut self,
         drive: &mut DriveSession,
@@ -295,35 +445,52 @@ impl ScenarioRun {
         if !self.is_running() {
             return None;
         }
+        let speed_before = drive.state().speed_mps();
         let report = drive.tick(device);
         let mut updates = Vec::new();
         self.ticks += 1;
-        self.travel_m += drive.state().speed_mps().abs() * DT;
-        if let Some(hit) = report.collided {
-            self.collisions += 1;
-            self.max_impact_delta_v_mps = self.max_impact_delta_v_mps.max(hit.delta_v_mps);
+        let input = drive.state().input();
+        push_track(&mut self.track, input, &report.results);
+        let speed = drive.state().speed_mps();
+        self.travel_m += speed.abs() * DT;
+        if speed < 0.0 {
+            self.reversed_m += -speed * DT;
         }
+        self.record_tick(&report, drive, input, speed_before);
         while let Some(step) = self.def.steps.get(self.step) {
             if !self.holds(&step.done, drive) {
                 break;
             }
+            let (id, stop_error) = (step.id.clone(), self.stop_error(&step.done, drive));
             self.step_done_ticks.push(self.ticks);
             updates.push(ScenarioUpdate::StepDone(self.step));
             self.step += 1;
+            self.record(RecordKind::StepDone { step: id.clone() });
+            if let Some((error_m, center)) = stop_error {
+                self.record(RecordKind::StopPosition {
+                    step: id,
+                    error_m,
+                    x_m: center.x,
+                    z_m: center.y,
+                });
+            }
         }
         for index in 0..self.def.events.len() {
             if self.fired[index] || !self.holds(&self.def.events[index].when, drive) {
                 continue;
             }
             self.fired[index] = true;
-            match &self.def.events[index].action {
+            match self.def.events[index].action.clone() {
                 Action::Message { text, duration_s } => {
                     let duration_ticks = (duration_s / DT).round().max(1.0) as u64;
                     self.message = Some((text.clone(), self.ticks + duration_ticks));
-                    updates.push(ScenarioUpdate::Message(text.clone()));
+                    updates.push(ScenarioUpdate::Message(text));
                 }
+                Action::SpawnHazard { hazard } => self.spawn_hazard(&hazard, drive),
             }
         }
+        self.check_hazards(drive);
+        self.last_input = input;
         let outcome = if self
             .def
             .end
@@ -344,10 +511,141 @@ impl ScenarioRun {
             None
         };
         if let Some(outcome) = outcome {
-            self.phase = Phase::Finished(outcome);
+            self.finish(outcome);
             updates.push(ScenarioUpdate::Finished(outcome));
         }
         Some((report, updates))
+    }
+
+    /// 틱 결과와 입력으로 기어 오류·과도한 입력(과속·급제동·급조향)·비상 정지·충돌·시작 위치 복귀를 기록하고
+    /// 충돌 수를 센다. 과도한 입력은 기준을 처음 넘은 틱(직전 틱은 기준 아래)에만 기록한다. 급제동·급조향의
+    /// 속도는 틱 시작 속도, 과속은 틱 시작과 끝 속도로 본다.
+    fn record_tick(
+        &mut self,
+        report: &TickReport,
+        drive: &DriveSession,
+        input: VehicleInput,
+        speed_before: f32,
+    ) {
+        let speed_kmh = speed_before.abs() * 3.6;
+        for result in &report.results {
+            if !result.accepted && result.command.starts_with("gear_") {
+                self.record(RecordKind::GearError {
+                    command: result.command.clone(),
+                    reason: result.reason.clone(),
+                });
+            }
+        }
+        let limits = self.def.record.clone();
+        let speed_after_kmh = drive.state().speed_mps().abs() * 3.6;
+        if speed_kmh <= limits.speed_limit_kmh && speed_after_kmh > limits.speed_limit_kmh {
+            self.record(RecordKind::OverSpeed {
+                speed_kmh: speed_after_kmh,
+            });
+        }
+        if self.last_input.brake < limits.harsh_brake
+            && input.brake >= limits.harsh_brake
+            && speed_kmh >= limits.harsh_brake_kmh
+        {
+            self.record(RecordKind::HarshBrake {
+                value: input.brake,
+                speed_kmh,
+            });
+        }
+        if self.last_input.steering.abs() < limits.harsh_steer
+            && input.steering.abs() >= limits.harsh_steer
+            && speed_kmh >= limits.harsh_steer_kmh
+        {
+            self.record(RecordKind::HarshSteer {
+                value: input.steering,
+                speed_kmh,
+            });
+        }
+        if report.emergency_changed == Some(true) {
+            self.record(RecordKind::EmergencyStop { speed_kmh });
+        }
+        if let Some(impact) = report.collided {
+            self.collisions += 1;
+            self.max_impact_delta_v_mps = self.max_impact_delta_v_mps.max(impact.delta_v_mps);
+            self.record(RecordKind::Collision {
+                speed_kmh: impact.speed_mps.abs() * 3.6,
+                x_m: impact.x_m,
+                z_m: impact.z_m,
+                hazard: None,
+            });
+        }
+        if report.course_reset {
+            self.record(RecordKind::CourseReset);
+        }
+    }
+
+    /// 위치 정지 조건이면 지금 차체 중심과 목표 중심까지의 오차(m)와 차체 중심을 돌려준다.
+    fn stop_error(&self, condition: &Condition, drive: &DriveSession) -> Option<(f32, Vec2)> {
+        let center = VEHICLE_FOOTPRINT.rect_at(drive.motion()).center;
+        let target = match condition {
+            Condition::StopIn { position_m, .. } => Vec2::from(*position_m),
+            Condition::StopAtGoal { .. } => VEHICLE_FOOTPRINT.rect_at(&self.course.goal?).center,
+            _ => return None,
+        };
+        Some((center.distance(target), center))
+    }
+
+    /// 보행자 대체 객체 `id`를 지금 틱에 등장시키고 등장 사건을 기록한다.
+    fn spawn_hazard(&mut self, id: &str, drive: &DriveSession) {
+        let Some(index) = self.def.hazards.iter().position(|hazard| hazard.id == id) else {
+            return;
+        };
+        let start = Vec2::from(self.def.hazards[index].path_m[0]);
+        let center = VEHICLE_FOOTPRINT.rect_at(drive.motion()).center;
+        self.hazards.push(ActiveHazard {
+            def: index,
+            spawn_tick: self.ticks,
+            touching: false,
+            reacted: false,
+        });
+        self.record(RecordKind::HazardAppeared {
+            hazard: id.to_owned(),
+            x_m: start.x,
+            z_m: start.y,
+            speed_kmh: drive.state().speed_mps().abs() * 3.6,
+            distance_m: center.distance(start),
+        });
+    }
+
+    /// 등장한 보행자 대체 객체마다 차체와 새로 겹쳤으면 충돌로 세고, 아직 제동하지 않았는데 제동 입력이
+    /// 기준 이상이면 제동 시작(반응 시간)을 기록한다.
+    fn check_hazards(&mut self, drive: &DriveSession) {
+        let body = VEHICLE_FOOTPRINT.rect_at(drive.motion());
+        let speed_kmh = drive.state().speed_mps().abs() * 3.6;
+        let braking = drive.state().input().brake >= self.def.record.reaction_brake;
+        for index in 0..self.hazards.len() {
+            let active = self.hazards[index];
+            let def = &self.def.hazards[active.def];
+            let id = def.id.clone();
+            let pose = def.pose_at(self.walked_m(&active));
+            let touching = pose
+                .is_some_and(|(center, heading)| body.overlaps(&def.rect_at(center, heading), 0.0));
+            let distance_m = pose.map_or(-1.0, |(center, _)| body.center.distance(center));
+            if touching && !active.touching {
+                self.collisions += 1;
+                self.record(RecordKind::Collision {
+                    speed_kmh,
+                    x_m: drive.motion().x_m,
+                    z_m: drive.motion().z_m,
+                    hazard: Some(id.clone()),
+                });
+            }
+            self.hazards[index].touching = touching;
+            if braking && !active.reacted {
+                self.hazards[index].reacted = true;
+                self.record(RecordKind::BrakeStart {
+                    hazard: id,
+                    reaction_s: (self.ticks - active.spawn_tick) as f32 * DT,
+                    speed_kmh,
+                    distance_m,
+                });
+            }
+        }
     }
 
     /// 조건이 지금(틱 끝) 맞는지 판정한다. 위치는 차체 중심 기준이다.
@@ -359,6 +657,8 @@ impl ScenarioRun {
         };
         match condition {
             Condition::EngineOn {} => state.engine() == EngineState::Ready,
+            Condition::EngineOff {} => state.engine() == EngineState::Off,
+            Condition::Reversed { distance_m } => self.reversed_m >= *distance_m,
             Condition::Gear { gear } => state.gear() == gear.gear(),
             Condition::Stopped {} => state.is_stopped(),
             Condition::SpeedAtLeast { kmh } => state.speed_mps().abs() * 3.6 >= *kmh,

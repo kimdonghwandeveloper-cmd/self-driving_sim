@@ -1,0 +1,83 @@
+# 시나리오 A · 기본 조작(Phase 5-2). 형식 설명은 docs/scenarios.md.
+# 시동 → D → 직선 주행 → 정지선 앞 정지 → R → 후진 → 정지 → P → 시동 끄기(종료).
+# 기록: 기어 변경 오류(움직이는 중 R 등), 과도한 입력(과속·급제동·급조향), 정지 위치 오차.
+# 모든 값은 훈련용 임시값이며 교육 담당자가 확인한 시나리오·기준이 아니다.
+# 좌표는 training 코스 지면 (x, z) m(시작 후륜축이 원점, 전방 -Z, 정지선 z = -20), 위치 조건은 차체 중심 기준이다.
+# 차체 앞끝이 정지선에 닿으면 차체 중심은 z ≈ -17.9다(후륜축→중심 1.4 m, 차체 길이 4.2 m).
+
+format = 1
+title = "시나리오 A · 기본 조작"
+briefing = """시동을 켜고 D로 출발해 정지선 바로 앞에 멈춥니다. 완전히 멈춘 뒤 R로 바꿔 8 m 이상 후진하고,
+멈춰서 P로 바꾼 뒤 시동을 끄면 끝납니다.
+기어는 차가 완전히 멈췄을 때만 바뀝니다. 12 km/h 넘는 과속, 10 km/h 이상에서의 급제동·급조향이 기록됩니다."""
+course = "training"
+
+[start]
+engine_on = false
+gear = "P"
+
+[[steps]]
+id = "engine"
+guide = "시동을 켜세요(키보드 Enter · 게임패드 Start)."
+done = { kind = "engine_on" }
+
+[[steps]]
+id = "drive"
+guide = "기어를 D로 바꾸세요(키보드 J · 게임패드 X)."
+done = { kind = "gear", gear = "D" }
+
+[[steps]]
+id = "go"
+guide = "가속(W · 왼쪽 스틱 위)해 차로 가운데로 똑바로 나아가세요."
+done = { kind = "travel", distance_m = 6.0 }
+
+[[steps]]
+id = "stop-line"
+guide = "미리 속도를 줄여 정지선 바로 앞에 멈추세요(제동 S · 왼쪽 스틱 아래)."
+done = { kind = "stop_in", position_m = [0.0, -17.9], radius_m = 1.5 }
+
+[[steps]]
+id = "reverse"
+guide = "완전히 멈춘 상태에서 기어를 R로 바꾸세요(키보드 L · 게임패드 B)."
+done = { kind = "gear", gear = "R" }
+
+[[steps]]
+id = "back"
+guide = "뒤쪽을 확인하고(키보드 2 · 뒤 시점) 천천히 8 m 이상 후진하세요."
+done = { kind = "reversed", distance_m = 8.0 }
+
+[[steps]]
+id = "stop-back"
+guide = "제동해 멈추세요."
+done = { kind = "stopped" }
+
+[[steps]]
+id = "park"
+guide = "기어를 P로 바꾸세요(키보드 I · 게임패드 Y)."
+done = { kind = "gear", gear = "P" }
+
+[[steps]]
+id = "engine-off"
+guide = "시동을 끄면 끝납니다(키보드 Enter · 게임패드 Start)."
+done = { kind = "engine_off" }
+
+[[events]]
+id = "approach"
+when = { kind = "travel", distance_m = 9.0 }
+action = { kind = "message", text = "정지선이 가까워집니다. 미리 속도를 줄이세요.", duration_s = 4.0 }
+
+[[events]]
+id = "stopped-at-line"
+when = { kind = "step_done", step = "stop-line" }
+action = { kind = "message", text = "정지선 앞에 멈췄습니다. 이제 R로 바꿉니다.", duration_s = 3.0 }
+
+[[events]]
+id = "reversing"
+when = { kind = "step_done", step = "reverse" }
+action = { kind = "message", text = "후진 최고 속도는 낮습니다. 뒤쪽 벽에 닿지 않게 주의하세요.", duration_s = 4.0 }
+
+[end]
+time_limit_s = 240.0
+
+[record]
+speed_limit_kmh = 12.0
