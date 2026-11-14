@@ -8,6 +8,7 @@ pub mod course;
 pub mod course_files;
 pub mod junction;
 pub mod korea_data;
+pub mod lanelet2;
 pub mod map;
 pub mod map_fetch;
 pub mod map_patch;
