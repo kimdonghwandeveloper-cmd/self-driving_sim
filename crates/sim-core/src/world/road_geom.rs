@@ -236,7 +236,8 @@ pub fn build_geometry(points: &[Vec2], spec: &RoadSpec) -> Result<RoadGeometry, 
         })
         .collect();
 
-    let mut centerline = vec![points[0]];
+    let mut centerline = Vec::with_capacity(n * 4);
+    centerline.push(points[0]);
     let step = spec.arc_step_deg.to_radians();
     for i in 1..n - 1 {
         let radius = radii[i - 1];

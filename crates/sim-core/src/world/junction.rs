@@ -75,15 +75,24 @@ pub fn junction_shape(
     order.sort_by(|&a, &b| angle(arms[a].direction).total_cmp(&angle(arms[b].direction)));
     let count = order.len();
     // PLAN 기준값: 다른 팔의 최대 반폭 + 모서리 반경.
-    let mut cut: Vec<f32> = (0..arms.len())
-        .map(|i| {
-            let other = arms
-                .iter()
-                .enumerate()
-                .filter(|(j, _)| *j != i)
-                .map(|(_, arm)| arm.half_width_m)
-                .fold(0.0f32, f32::max);
-            (other + corner_radius_m).max(arms[i].min_cut_m)
+    let (mut max1, mut max2) = (0.0f32, 0.0f32);
+    for arm in arms {
+        if arm.half_width_m > max1 {
+            max2 = max1;
+            max1 = arm.half_width_m;
+        } else if arm.half_width_m > max2 {
+            max2 = arm.half_width_m;
+        }
+    }
+    let mut cut: Vec<f32> = arms
+        .iter()
+        .map(|arm| {
+            let other = if (arm.half_width_m - max1).abs() < 1.0e-5 {
+                max2
+            } else {
+                max1
+            };
+            (other + corner_radius_m).max(arm.min_cut_m)
         })
         .collect();
     let step = arc_step_deg.to_radians();
@@ -149,7 +158,7 @@ pub fn junction_shape(
         };
         corner_paths.push((i, j, path));
     }
-    let mut boundary = Vec::new();
+    let mut boundary = Vec::with_capacity(count * 8);
     let mut corners = Vec::with_capacity(count);
     for (i, j, path) in corner_paths {
         let (a, b) = (arms[i], arms[j]);

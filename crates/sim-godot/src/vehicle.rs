@@ -729,9 +729,6 @@ impl SimVehicle {
         debug_before: bool,
     ) {
         let (view, debug_camera) = (self.view, self.debug_camera);
-        let step_ids: Vec<String> = self.run.as_ref().map_or_else(Vec::new, |run| {
-            run.def().steps.iter().map(|step| step.id.clone()).collect()
-        });
         let mut base = self.base_mut();
         for result in &report.results {
             let command = GString::from(result.command.as_str()).to_variant();
@@ -775,10 +772,17 @@ impl SimVehicle {
         for update in updates {
             match update {
                 ScenarioUpdate::StepDone(index) => {
-                    let id = step_ids.get(*index).map_or("", String::as_str);
+                    let id_gstr = {
+                        let id_str = self
+                            .run
+                            .as_ref()
+                            .and_then(|run| run.def().steps.get(*index))
+                            .map_or("", |step| step.id.as_str());
+                        GString::from(id_str)
+                    };
                     self.base_mut().emit_signal(
                         "scenario_step_done",
-                        &[(*index as i64).to_variant(), GString::from(id).to_variant()],
+                        &[(*index as i64).to_variant(), id_gstr.to_variant()],
                     );
                 }
                 ScenarioUpdate::Message(text) => {
