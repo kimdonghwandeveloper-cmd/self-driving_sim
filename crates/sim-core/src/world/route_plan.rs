@@ -584,23 +584,30 @@ impl SearchGraph {
             return Err(format!("route turns back at node {}", triple[1]));
         }
         for pair in nodes.windows(2) {
-            let edges: Vec<&Edge> = self
-                .adjacent
-                .get(&pair[0])
-                .into_iter()
-                .flatten()
-                .filter(|edge| edge.to == pair[1])
-                .collect();
-            if edges.is_empty() {
+            let Some(edges) = self.adjacent.get(&pair[0]) else {
+                return Err(format!(
+                    "route goes from node {} to node {} against a one-way road or without a road segment",
+                    pair[0], pair[1]
+                ));
+            };
+            let mut has_target = false;
+            let mut allowed_edge = None;
+            for edge in edges {
+                if edge.to == pair[1] {
+                    has_target = true;
+                    if way == NO_WAY || self.turn_allowed(way, pair[0], edge.way) {
+                        allowed_edge = Some(edge);
+                        break;
+                    }
+                }
+            }
+            if !has_target {
                 return Err(format!(
                     "route goes from node {} to node {} against a one-way road or without a road segment",
                     pair[0], pair[1]
                 ));
             }
-            let Some(edge) = edges
-                .iter()
-                .find(|edge| way == NO_WAY || self.turn_allowed(way, pair[0], edge.way))
-            else {
+            let Some(edge) = allowed_edge else {
                 return Err(format!(
                     "route breaks a turn restriction at node {}",
                     pair[0]

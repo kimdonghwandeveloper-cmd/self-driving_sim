@@ -467,18 +467,15 @@ fn road_shapes(points: &[Vec2], closed: bool, width_m: f32) -> Vec<(Vec<Vec2>, O
     let n = points.len();
     let segment_count = if closed { n } else { n - 1 };
     let direction = |i: usize| (points[(i + 1) % n] - points[i]).normalize();
-    let mut shapes = Vec::new();
+    let mut shapes =
+        Vec::with_capacity(segment_count + if closed { n } else { n.saturating_sub(2) } + 2);
     for i in 0..segment_count {
         let (a, b) = (points[i], points[(i + 1) % n]);
         let side = right_of(direction(i)) * half;
         shapes.push((vec![a - side, b - side, b + side, a + side], None));
     }
-    let joints: Vec<usize> = if closed {
-        (0..n).collect()
-    } else {
-        (1..n - 1).collect()
-    };
-    for i in joints {
+    let joints_range = if closed { 0..n } else { 1..n - 1 };
+    for i in joints_range {
         let before = direction((i + segment_count - 1) % segment_count);
         let after = direction(i % segment_count);
         let turn = before.angle_to(after);
@@ -507,12 +504,12 @@ fn road_shapes(points: &[Vec2], closed: bool, width_m: f32) -> Vec<(Vec<Vec2>, O
 /// 끝점 `end`에서 바깥 방향 `outward`로 볼록한 반지름 `radius`의 반원 다각형을 만든다.
 fn cap(end: Vec2, outward: Vec2, radius: f32) -> Vec<Vec2> {
     let side = right_of(outward);
-    (0..=CAP_SEGMENTS)
-        .map(|k| {
-            let angle = std::f32::consts::PI * (k as f32 / CAP_SEGMENTS as f32 - 0.5);
-            end + (outward * angle.cos() + side * angle.sin()) * radius
-        })
-        .collect()
+    let mut points = Vec::with_capacity(CAP_SEGMENTS + 1);
+    for k in 0..=CAP_SEGMENTS {
+        let angle = std::f32::consts::PI * (k as f32 / CAP_SEGMENTS as f32 - 0.5);
+        points.push(end + (outward * angle.cos() + side * angle.sin()) * radius);
+    }
+    points
 }
 
 /// 경계 조각 바깥쪽에 붙는 연석 직사각형을 만든다(긴 축이 조각 방향).
@@ -540,7 +537,7 @@ pub fn merge_segments(segments: &[BoundarySegment]) -> Vec<BoundarySegment> {
             }
         })
         .collect();
-    let mut starts: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
+    let mut starts: HashMap<(i64, i64), Vec<usize>> = HashMap::with_capacity(oriented.len());
     for (index, (a, _)) in oriented.iter().enumerate() {
         starts.entry(key(*a)).or_default().push(index);
     }
@@ -723,7 +720,7 @@ fn areas_of(polygon: &[Vec2]) -> Vec<Area> {
 /// 반시계 단순 다각형을 귀 자르기로 삼각형들로 나눈다. 넓이가 거의 0인 삼각형은 뺀다.
 fn triangulate(points: &[Vec2]) -> Vec<[Vec2; 3]> {
     let mut remaining: Vec<Vec2> = points.to_vec();
-    let mut triangles = Vec::new();
+    let mut triangles = Vec::with_capacity(points.len().saturating_sub(2));
     while remaining.len() > 3 {
         let n = remaining.len();
         let ear = (0..n).find(|&i| {
@@ -791,8 +788,10 @@ pub struct PolygonIndex<'a> {
 impl<'a> PolygonIndex<'a> {
     /// 다각형 목록으로 격자를 만든다.
     pub fn new(polygons: &'a [Vec<Vec2>]) -> Self {
-        let mut polygon_cells: HashMap<(i32, i32), Vec<usize>> = HashMap::new();
-        let mut edge_cells: HashMap<(i32, i32), Vec<(usize, usize)>> = HashMap::new();
+        let mut polygon_cells: HashMap<(i32, i32), Vec<usize>> =
+            HashMap::with_capacity(polygons.len() * 2);
+        let mut edge_cells: HashMap<(i32, i32), Vec<(usize, usize)>> =
+            HashMap::with_capacity(polygons.len() * 8);
         for (owner, polygon) in polygons.iter().enumerate() {
             let low = polygon.iter().copied().fold(Vec2::INFINITY, Vec2::min);
             let high = polygon.iter().copied().fold(Vec2::NEG_INFINITY, Vec2::max);
