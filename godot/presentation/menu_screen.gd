@@ -35,7 +35,7 @@ func _ready() -> void:
 	title.add_theme_font_size_override("font_size", 30)
 	column.add_child(title)
 	var info := Label.new()
-	info.text = "개발 코스 또는 지도 코스를 골라 주행합니다.\n지도 코스는 OSM 도로로 만든 가상 교육 코스입니다(실측 아님)."
+	info.text = "개발 코스 또는 지도 코스를 골라 주행합니다.\n지도 코스는 가상 교육 코스입니다. 출처와 실측 여부를 확인하세요."
 	if not ClassDB.class_exists("SimVehicle"):
 		info.text = "주행 기능 연결 전 · 정지 미리보기\n코스와 네 방향 시야를 확인할 수 있습니다."
 	column.add_child(info)
@@ -46,7 +46,10 @@ func _ready() -> void:
 		_add_course("여수 엑스포 · 내 맵 도로", DriveScreen.YEOSU_CUSTOM_ROADS_COURSE)
 	if ClassDB.class_exists("SimCourse") and ClassDB.class_has_method("SimCourse", "course_files"):
 		for file in ClassDB.class_call_static("SimCourse", "course_files"):
-			_add_course("지도: " + str(file.label), str(file.course))
+			var label := "지도: " + str(file.label)
+			if str(file.course) == "map:assets/maps/lanelet2-demo/course.toml":
+				label = "Lanelet2 예제 · 합성 직선 (실제 지도 아님)"
+			_add_course(label, str(file.course))
 	if ClassDB.class_exists("SimScenario"):
 		for file in ClassDB.class_call_static("SimScenario", "scenario_files"):
 			_add_course("시나리오: " + str(file.label), "scenario:" + str(file.path))

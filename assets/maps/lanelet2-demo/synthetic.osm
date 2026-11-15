@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Project-authored synthetic geometry; no real-world road is represented. -->
+<osm version="0.6" generator="self-driving-sim-synthetic">
+  <node id="1" lat="34.000000" lon="127.000000"/>
+  <node id="2" lat="34.000270" lon="127.000000"/>
+  <node id="3" lat="34.000540" lon="127.000000"/>
+  <node id="4" lat="34.000000" lon="127.000040"/>
+  <node id="5" lat="34.000270" lon="127.000040"/>
+  <node id="6" lat="34.000540" lon="127.000040"/>
+  <way id="201"><nd ref="1"/><nd ref="2"/></way>
+  <way id="202"><nd ref="4"/><nd ref="5"/></way>
+  <way id="203"><nd ref="2"/><nd ref="3"/></way>
+  <way id="204"><nd ref="5"/><nd ref="6"/></way>
+  <relation id="301">
+    <member type="way" ref="201" role="left"/>
+    <member type="way" ref="202" role="right"/>
+    <tag k="type" v="lanelet"/><tag k="subtype" v="road"/>
+  </relation>
+  <relation id="302">
+    <member type="way" ref="203" role="left"/>
+    <member type="way" ref="204" role="right"/>
+    <tag k="type" v="lanelet"/><tag k="subtype" v="road"/>
+  </relation>
+</osm>

@@ -1,6 +1,6 @@
 //! Lanelet2 geometry의 연결 그래프에서 경로를 골라 주행 가능한 [`CourseDef`]로 조립한다.
 //!
-//! 이 단계는 파일 입출력과 Godot 연결을 하지 않는다. 선택 경로의 실제 좌우 경계를 노면과 연석에
+//! 코스 설정 파일과 Lanelet2 원본을 읽고, 선택 경로의 실제 좌우 경계를 노면과 연석에
 //! 사용하고, 연결 중심선을 시작·목표 자세 및 안내선으로 제공한다.
 
 use std::collections::{BTreeMap, VecDeque};
@@ -77,15 +77,15 @@ impl Lanelet2CourseFile {
                 "invalid origin [{lat}, {lon}]: latitude must be in [-85, 85] and longitude in [-180, 180]"
             ));
         }
-        if self.start_lanelet <= 0 {
+        if self.start_lanelet == 0 {
             return Err(format!(
-                "start_lanelet ID must be a positive integer, got {}",
+                "start_lanelet ID must be nonzero, got {}",
                 self.start_lanelet
             ));
         }
-        if self.goal_lanelet <= 0 {
+        if self.goal_lanelet == 0 {
             return Err(format!(
-                "goal_lanelet ID must be a positive integer, got {}",
+                "goal_lanelet ID must be nonzero, got {}",
                 self.goal_lanelet
             ));
         }
@@ -813,6 +813,28 @@ goal_lanelet = 301
         assert_eq!(first.traversal, second.traversal);
     }
 
+    /// JOSM 임시 relation의 음수 ID도 설정 파일에서 선택해 주행 코스로 연다.
+    #[test]
+    fn loads_negative_relation_ids() {
+        let temp_dir =
+            std::env::temp_dir().join(format!("sds-negative-lanelet-{}", std::process::id()));
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        let osm = include_str!("../../../../testdata/lanelet2/synthetic-straight.osm")
+            .replace("relation id=\"301\"", "relation id=\"-301\"");
+        std::fs::write(temp_dir.join("negative.osm"), osm).unwrap();
+        let text = r#"
+format = "lanelet2-course-v1"
+name = "negative-id"
+osm = "negative.osm"
+origin = [34.0, 127.0]
+start_lanelet = -301
+goal_lanelet = -301
+"#;
+        let loaded = load_lanelet2_course_full(text, &temp_dir).unwrap();
+        assert_eq!(loaded.traversal[0].id, -301);
+        std::fs::remove_dir_all(temp_dir).unwrap();
+    }
+
     /// 잘못된 입력(누락된 파일, 비정상 위경도, 잘못된 ID, 지원되지 않는 버전 등)을 명확한 원인 오류로 거부한다.
     #[test]
     fn rejects_invalid_inputs_with_informative_errors() {
@@ -862,7 +884,7 @@ goal_lanelet = 301
         let err = load_lanelet2_course_full(bad_lat, root).unwrap_err();
         assert!(err.contains("invalid origin"), "{err}");
 
-        // 6. 음수 또는 0인 lanelet ID
+        // 6. 0인 lanelet ID (JOSM 임시 ID인 음수는 허용)
         let bad_id = r#"
 format = "lanelet2-course-v1"
 name = "bad-id"
@@ -935,6 +957,13 @@ goal_lanelet = 301
         let existing_path = root.join("testdata/yeosu-expo/route-junctions.toml");
         let existing_course = super::super::map::load_map_course(&existing_path).unwrap();
         existing_course.validate().unwrap();
+
+        // 사용자 제작 맵 형식도 Lanelet2 분기 추가 뒤 그대로 읽힌다.
+        let road_lines = root.join("testdata/yeosu-expo/custom-roads.toml");
+        super::super::map::load_map_course(&road_lines)
+            .unwrap()
+            .validate()
+            .unwrap();
 
         let _ = std::fs::remove_dir_all(&temp_dir);
     }
