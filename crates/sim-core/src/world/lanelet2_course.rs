@@ -4,14 +4,158 @@
 //! 사용하고, 연결 중심선을 시작·목표 자세 및 안내선으로 제공한다.
 
 use std::collections::{BTreeMap, VecDeque};
+use std::path::Path;
 
 use glam::Vec2;
+use serde::{Deserialize, Serialize};
 
 use super::course::{Collider, ColliderKind, CourseDef, Strip};
 use super::lanelet2::LaneletDirection;
 use super::lanelet2_geometry::{LaneletGeometry, LaneletGeometryMap};
 use super::{map, road_geom, route};
 use crate::vehicle::GroundRect;
+
+/// Lanelet2 코스 설정 파일의 형식 이름.
+pub const LANELET2_COURSE_FORMAT: &str = "lanelet2-course-v1";
+/// 하위 호환용 Lanelet2 코스 형식 이름.
+pub const LANELET2_COURSE_FORMAT_COMPAT: &str = "lanelet2-v1";
+
+/// Lanelet2 코스 설정 파일(TOML).
+///
+/// Lanelet2 .osm 지도 파일, 좌표 원점 및 시작·목표 lanelet relation ID와 출처/이용조건/안내 문구를 정의한다.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Lanelet2CourseFile {
+    /// 형식 이름([`LANELET2_COURSE_FORMAT`] 또는 [`LANELET2_COURSE_FORMAT_COMPAT`]).
+    pub format: String,
+    /// 로그 및 표시에 사용하는 코스 이름.
+    pub name: String,
+    /// Lanelet2 .osm XML 파일 상대 경로 (설정 파일 위치 기준).
+    #[serde(alias = "source")]
+    pub osm: String,
+    /// 지역 좌표 원점 [위도, 경도](deg).
+    pub origin: [f64; 2],
+    /// 시작 lanelet relation ID.
+    #[serde(alias = "start")]
+    pub start_lanelet: i64,
+    /// 목표 lanelet relation ID.
+    #[serde(alias = "goal")]
+    pub goal_lanelet: i64,
+    /// 지도 출처 표기 (선택 사항).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attribution: Option<String>,
+    /// 이용 조건 안내 (선택 사항).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terms: Option<String>,
+    /// 주행 화면에 표시할 추가 안내 문구 목록.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub notices: Vec<String>,
+}
+
+impl Lanelet2CourseFile {
+    /// 설정 파일 필드의 유효성(형식 이름, 코스 이름, 파일 경로, 원점 위경도, 시작/목표 ID)을 검사한다.
+    pub fn validate(&self) -> Result<(), String> {
+        if self.format != LANELET2_COURSE_FORMAT && self.format != LANELET2_COURSE_FORMAT_COMPAT {
+            return Err(format!(
+                "unsupported format `{}`: expected `{LANELET2_COURSE_FORMAT}`",
+                self.format
+            ));
+        }
+        if self.name.trim().is_empty() {
+            return Err("course name cannot be empty".to_owned());
+        }
+        if self.osm.trim().is_empty() {
+            return Err("osm file path cannot be empty".to_owned());
+        }
+        let [lat, lon] = self.origin;
+        if !(lat.is_finite()
+            && lon.is_finite()
+            && (-85.0..=85.0).contains(&lat)
+            && (-180.0..=180.0).contains(&lon))
+        {
+            return Err(format!(
+                "invalid origin [{lat}, {lon}]: latitude must be in [-85, 85] and longitude in [-180, 180]"
+            ));
+        }
+        if self.start_lanelet <= 0 {
+            return Err(format!(
+                "start_lanelet ID must be a positive integer, got {}",
+                self.start_lanelet
+            ));
+        }
+        if self.goal_lanelet <= 0 {
+            return Err(format!(
+                "goal_lanelet ID must be a positive integer, got {}",
+                self.goal_lanelet
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Lanelet2 코스 설정 파일 구조체와 기준 디렉터리 경로를 받아 OSM 파일을 파싱·기하 변환하여 코스를 생성한다.
+pub fn build_lanelet2_course_from_file(
+    file: &Lanelet2CourseFile,
+    base_dir: &Path,
+) -> Result<LaneletCourse, String> {
+    file.validate()?;
+    let osm_path = base_dir.join(&file.osm);
+    let bytes = std::fs::read(&osm_path)
+        .map_err(|error| format!("cannot read osm file {}: {error}", osm_path.display()))?;
+    let map = super::lanelet2::parse_lanelet2(&bytes).map_err(|error| {
+        format!(
+            "failed to parse Lanelet2 OSM ({}): {error}",
+            osm_path.display()
+        )
+    })?;
+    let origin = map::LatLon {
+        lat: file.origin[0],
+        lon: file.origin[1],
+    };
+    let geometry = super::lanelet2_geometry::build_lanelet_geometry(&map, origin)
+        .map_err(|error| format!("failed to build Lanelet2 geometry: {error}"))?;
+
+    let mut notices = Vec::new();
+    if let Some(attr) = file.attribution.as_deref().filter(|s| !s.trim().is_empty()) {
+        notices.push(attr.to_owned());
+    }
+    if let Some(terms) = file.terms.as_deref().filter(|s| !s.trim().is_empty()) {
+        notices.push(terms.to_owned());
+    }
+    for notice in &file.notices {
+        if !notice.trim().is_empty() {
+            notices.push(notice.clone());
+        }
+    }
+
+    build_lanelet_course(
+        &geometry,
+        &file.name,
+        file.start_lanelet,
+        file.goal_lanelet,
+        notices,
+    )
+}
+
+/// Lanelet2 코스 설정 파일 TOML 문자열과 기준 디렉터리를 받아 코스 정의(`CourseDef`)를 반환한다(기존 map 로더 연동용).
+pub fn load_lanelet2_course(text: &str, base_dir: &Path) -> Result<CourseDef, String> {
+    load_lanelet2_course_full(text, base_dir).map(|lanelet_course| lanelet_course.course)
+}
+
+/// Lanelet2 코스 설정 파일 TOML 문자열과 기준 디렉터리를 받아 코스 정의와 안내선(`LaneletCourse`)을 반환한다.
+pub fn load_lanelet2_course_full(text: &str, base_dir: &Path) -> Result<LaneletCourse, String> {
+    let file: Lanelet2CourseFile =
+        toml::from_str(text).map_err(|error| format!("invalid Lanelet2 course TOML: {error}"))?;
+    build_lanelet2_course_from_file(&file, base_dir)
+}
+
+/// 지정한 경로의 Lanelet2 코스 설정 파일(TOML)을 읽어 코스(`LaneletCourse`)를 생성한다.
+pub fn load_lanelet2_course_file(path: &Path) -> Result<LaneletCourse, String> {
+    let text = std::fs::read_to_string(path)
+        .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
+    let base_dir = path.parent().unwrap_or(Path::new("."));
+    load_lanelet2_course_full(&text, base_dir)
+}
 
 /// 지도 코스와 같이 사용하는 연석 두께(m).
 const CURB_THICKNESS_M: f32 = 0.3;
@@ -535,5 +679,263 @@ mod tests {
                 .unwrap_err()
                 .contains("guide starts")
         );
+    }
+
+    /// 파일 및 설정으로부터 직선 Lanelet2 코스를 로드하고 검증 및 주행 시험을 수행한다.
+    #[test]
+    fn loads_straight_course_from_file_and_osm() {
+        let root = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."));
+        let toml_text = r#"
+format = "lanelet2-course-v1"
+name = "synthetic-straight-course"
+osm = "testdata/lanelet2/synthetic-straight.osm"
+origin = [34.0, 127.0]
+start_lanelet = 301
+goal_lanelet = 301
+attribution = "Synthetic Lanelet2 test dataset"
+terms = "For simulation and testing only"
+notices = ["Drive within lane limits"]
+"#;
+        let loaded = load_lanelet2_course_full(toml_text, root).unwrap();
+        assert_eq!(loaded.course.name, "synthetic-straight-course");
+        assert_eq!(loaded.traversal.len(), 1);
+        assert_eq!(loaded.traversal[0].id, 301);
+        assert!(!loaded.course.strips.is_empty());
+        assert!(loaded.course.goal.is_some());
+        assert!(
+            loaded
+                .course
+                .notices
+                .iter()
+                .any(|n| n.contains("Synthetic Lanelet2"))
+        );
+        assert!(
+            loaded
+                .course
+                .notices
+                .iter()
+                .any(|n| n.contains("Drive within lane limits"))
+        );
+        loaded.course.validate().unwrap();
+
+        // map 로더 연동 함수를 통한 CourseDef 로드 검증
+        let course_def = load_lanelet2_course(toml_text, root).unwrap();
+        assert_eq!(course_def.name, "synthetic-straight-course");
+        course_def.validate().unwrap();
+
+        let driven = super::super::test_drive::follow_path(&loaded.course, &loaded.guide, 3.0);
+        assert_eq!(driven.impacts, 0, "{driven:?}");
+    }
+
+    /// 곡선 Lanelet2 OSM 데이터로부터 코스를 로드하고 유효성을 검증한다.
+    #[test]
+    fn loads_curved_course_from_osm() {
+        let temp_dir =
+            std::env::temp_dir().join(format!("sds-curved-lanelet-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).unwrap();
+
+        // 90도 곡선 2개 연결 OSM 생성
+        let curved_osm = r#"<?xml version="1.0" encoding="UTF-8"?>
+<osm version="0.6" generator="test">
+  <node id="1" lat="34.0000000" lon="127.0000000"/>
+  <node id="2" lat="34.0001000" lon="127.0000200"/>
+  <node id="3" lat="34.0002000" lon="127.0000600"/>
+  <node id="4" lat="34.0000000" lon="127.0000400"/>
+  <node id="5" lat="34.0001000" lon="127.0000600"/>
+  <node id="6" lat="34.0002000" lon="127.0001000"/>
+  <node id="7" lat="34.0000000" lon="127.0000200"/>
+  <node id="8" lat="34.0001000" lon="127.0000400"/>
+  <node id="9" lat="34.0002000" lon="127.0000800"/>
+  <way id="201">
+    <nd ref="1"/>
+    <nd ref="2"/>
+    <nd ref="3"/>
+  </way>
+  <way id="202">
+    <nd ref="4"/>
+    <nd ref="5"/>
+    <nd ref="6"/>
+  </way>
+  <way id="203">
+    <nd ref="7"/>
+    <nd ref="8"/>
+    <nd ref="9"/>
+  </way>
+  <relation id="501">
+    <member type="way" ref="201" role="left"/>
+    <member type="way" ref="202" role="right"/>
+    <member type="way" ref="203" role="centerline"/>
+    <tag k="type" v="lanelet"/>
+    <tag k="subtype" v="road"/>
+    <tag k="one_way" v="yes"/>
+  </relation>
+</osm>
+"#;
+        let osm_path = temp_dir.join("curved.osm");
+        std::fs::write(&osm_path, curved_osm).unwrap();
+
+        let toml_content = r#"
+format = "lanelet2-course-v1"
+name = "curved-sample"
+osm = "curved.osm"
+origin = [34.0, 127.0]
+start_lanelet = 501
+goal_lanelet = 501
+"#;
+        let toml_path = temp_dir.join("course.toml");
+        std::fs::write(&toml_path, toml_content).unwrap();
+
+        let loaded = load_lanelet2_course_file(&toml_path).unwrap();
+        assert_eq!(loaded.course.name, "curved-sample");
+        loaded.course.validate().unwrap();
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    /// 동일한 설정 파일을 다시 열었을 때 완벽히 동일한 코스가 생성되는지 결정성을 검증한다.
+    #[test]
+    fn deterministic_reloading_produces_identical_course() {
+        let root = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."));
+        let toml_text = r#"
+format = "lanelet2-course-v1"
+name = "deterministic-test"
+osm = "testdata/lanelet2/synthetic-straight.osm"
+origin = [34.0, 127.0]
+start_lanelet = 301
+goal_lanelet = 301
+"#;
+        let first = load_lanelet2_course_full(toml_text, root).unwrap();
+        let second = load_lanelet2_course_full(toml_text, root).unwrap();
+        assert_eq!(first, second);
+        assert_eq!(first.course, second.course);
+        assert_eq!(first.guide, second.guide);
+        assert_eq!(first.traversal, second.traversal);
+    }
+
+    /// 잘못된 입력(누락된 파일, 비정상 위경도, 잘못된 ID, 지원되지 않는 버전 등)을 명확한 원인 오류로 거부한다.
+    #[test]
+    fn rejects_invalid_inputs_with_informative_errors() {
+        let root = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."));
+
+        // 1. 존재하지 않는 설정 파일 경로
+        let missing_path = root.join("assets/maps/non-existent-course.toml");
+        assert!(load_lanelet2_course_file(&missing_path).is_err());
+
+        // 2. 존재하지 않는 OSM 파일 참조
+        let missing_osm_toml = r#"
+format = "lanelet2-course-v1"
+name = "missing-osm"
+osm = "testdata/lanelet2/non-existent.osm"
+origin = [34.0, 127.0]
+start_lanelet = 301
+goal_lanelet = 301
+"#;
+        let err = load_lanelet2_course_full(missing_osm_toml, root).unwrap_err();
+        assert!(err.contains("cannot read osm file"), "{err}");
+
+        // 3. 잘못된 TOML 구문
+        let bad_toml = "invalid toml {[[";
+        assert!(load_lanelet2_course_full(bad_toml, root).is_err());
+
+        // 4. 지원하지 않는 형식 버전
+        let bad_format = r#"
+format = "lanelet2-v999"
+name = "bad-format"
+osm = "testdata/lanelet2/synthetic-straight.osm"
+origin = [34.0, 127.0]
+start_lanelet = 301
+goal_lanelet = 301
+"#;
+        let err = load_lanelet2_course_full(bad_format, root).unwrap_err();
+        assert!(err.contains("unsupported format"), "{err}");
+
+        // 5. 비정상적인 원점 위도/경도
+        let bad_lat = r#"
+format = "lanelet2-course-v1"
+name = "bad-lat"
+osm = "testdata/lanelet2/synthetic-straight.osm"
+origin = [90.5, 127.0]
+start_lanelet = 301
+goal_lanelet = 301
+"#;
+        let err = load_lanelet2_course_full(bad_lat, root).unwrap_err();
+        assert!(err.contains("invalid origin"), "{err}");
+
+        // 6. 음수 또는 0인 lanelet ID
+        let bad_id = r#"
+format = "lanelet2-course-v1"
+name = "bad-id"
+osm = "testdata/lanelet2/synthetic-straight.osm"
+origin = [34.0, 127.0]
+start_lanelet = 0
+goal_lanelet = 301
+"#;
+        let err = load_lanelet2_course_full(bad_id, root).unwrap_err();
+        assert!(err.contains("start_lanelet ID"), "{err}");
+
+        // 7. OSM 내에 존재하지 않는 lanelet ID 참조
+        let not_found_id = r#"
+format = "lanelet2-course-v1"
+name = "not-found-id"
+osm = "testdata/lanelet2/synthetic-straight.osm"
+origin = [34.0, 127.0]
+start_lanelet = 9999
+goal_lanelet = 9999
+"#;
+        let err = load_lanelet2_course_full(not_found_id, root).unwrap_err();
+        assert!(err.contains("9999 not found"), "{err}");
+    }
+
+    /// map 모듈의 `load_map_course`에서 새 Lanelet2 형식과 기존 형식들이 정상 분기 처리되는지 검증한다.
+    #[test]
+    fn map_course_loader_dispatches_lanelet2_and_existing_formats() {
+        let root = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."));
+        let temp_dir =
+            std::env::temp_dir().join(format!("sds-map-dispatch-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).unwrap();
+
+        // 테스트용 OSM 파일을 임시 폴더로 복사
+        let osm_src = root.join("testdata/lanelet2/synthetic-straight.osm");
+        let osm_dest = temp_dir.join("straight.osm");
+        std::fs::copy(&osm_src, &osm_dest).unwrap();
+
+        // 1. Lanelet2 형식 파일
+        let lanelet2_toml = r#"
+format = "lanelet2-course-v1"
+name = "dispatch-lanelet2"
+osm = "straight.osm"
+origin = [34.0, 127.0]
+start_lanelet = 301
+goal_lanelet = 301
+"#;
+        let lanelet2_path = temp_dir.join("course.toml");
+        std::fs::write(&lanelet2_path, lanelet2_toml).unwrap();
+        let course = super::super::map::load_map_course(&lanelet2_path).unwrap();
+        assert_eq!(course.name, "dispatch-lanelet2");
+        course.validate().unwrap();
+
+        // 2. 하위 호환 lanelet2-v1 형식
+        let compat_toml = r#"
+format = "lanelet2-v1"
+name = "compat-lanelet2"
+osm = "straight.osm"
+origin = [34.0, 127.0]
+start_lanelet = 301
+goal_lanelet = 301
+"#;
+        let compat_path = temp_dir.join("compat.toml");
+        std::fs::write(&compat_path, compat_toml).unwrap();
+        let compat_course = super::super::map::load_map_course(&compat_path).unwrap();
+        assert_eq!(compat_course.name, "compat-lanelet2");
+        compat_course.validate().unwrap();
+
+        // 3. 기존 testdata 코스(route-junctions.toml) 회귀 검증
+        let existing_path = root.join("testdata/yeosu-expo/route-junctions.toml");
+        let existing_course = super::super::map::load_map_course(&existing_path).unwrap();
+        existing_course.validate().unwrap();
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 }
