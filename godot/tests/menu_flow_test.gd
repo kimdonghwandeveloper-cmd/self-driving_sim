@@ -4,9 +4,13 @@
 #                        godot --headless --fixed-fps 64 --path godot --script res://tests/menu_flow_test.gd
 extends SceneTree
 
-## 메뉴에 저장 경로로 보일 시험 경로 파일(시험 중에만 두고 지운다). 여수 고정 코스는 메뉴에서 빠졌으므로(PLAN 4-11)
+const DriveScreen = preload("res://presentation/drive_screen.gd")
+
+## 메뉴에 저장 경로로 보일 시험 경로 파일(시험 중에만 두고 지운다). 여수 시험 자료는 메뉴에 바로 나오지 않으므로(PLAN 4-11)
 ## 시험 자료 경로를 저장 경로 자리(`cache/routes`)에 복사해 쓴다.
 const SAVED_NAME := "menu-flow-test.toml"
+## 메뉴에 나와도 되는 여수 전용 항목(OSM 배경 8e39fd7, 내 맵 도로 PLAN 4-11b). 그 밖의 `testdata/yeosu-expo` 코스는 메뉴에 나오면 안 된다.
+const YEOSU_MENU_COURSES := [DriveScreen.YEOSU_COURSE, DriveScreen.YEOSU_CUSTOM_ROADS_COURSE]
 ## 메뉴에서 고를 코스(개발 코스 하나, 저장 경로 하나).
 const COURSES := ["training", "map:cache/routes/" + SAVED_NAME]
 ## 주행 화면에서 기다릴 물리 틱 수.
@@ -49,7 +53,8 @@ func _run() -> void:
 	for course in COURSES:
 		await _drive_and_return(course)
 	_check(main.screen.has_signal("quit_requested"), "메뉴에 종료 요청 시그널 없음")
-	_check(not Array(main.screen.course_names).any(func(name): return str(name).contains("yeosu-expo")), "여수 고정 코스가 메뉴에 남음")
+	for name in main.screen.course_names:
+		_check(not str(name).contains("yeosu-expo") or str(name) in YEOSU_MENU_COURSES, "여수 시험 자료가 전용 항목 밖에서 메뉴에 나옴: " + str(name))
 	main.free()
 	DirAccess.remove_absolute(_repo_path("cache/routes/" + SAVED_NAME))
 	if failures.is_empty():
