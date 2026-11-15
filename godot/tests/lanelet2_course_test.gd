@@ -58,15 +58,17 @@ func _check_drive(drive: Node) -> void:
 	vehicle.call("send_command", "engine_toggle")
 	vehicle.call("send_command", "gear_drive")
 	var goal: Vector3 = data.goal.position
+	var touched := false
 	for tick in 2048:
 		var speed := float(vehicle.call("speed_mps"))
 		vehicle.call("set_manual_input", clampf((3.0 - speed) * 0.5, 0.0, 0.5), 0.0, 0.0)
 		await physics_frame
+		touched = touched or bool(vehicle.call("in_contact"))
 		if vehicle.position.distance_to(goal) < 5.0:
 			break
 	_check(vehicle.position.distance_to(data.start.position) > 35.0, "차선 연결부를 통과하지 못함")
 	_check(vehicle.position.distance_to(goal) < 5.0, "목표 근처에 도달하지 못함")
-	_check(not bool(vehicle.call("in_contact")), "연석 또는 벽에 닿음")
+	_check(not touched, "주행 도중 연석 또는 벽에 닿음")
 	vehicle.call("set_manual_input", 0.0, 1.0, 0.0)
 	for tick in 640:
 		await physics_frame
