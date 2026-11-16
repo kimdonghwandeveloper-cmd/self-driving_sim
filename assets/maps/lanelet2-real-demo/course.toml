@@ -1,0 +1,12 @@
+format = "lanelet2-course-v1"
+name = "yeosu-expo-real-intersection"
+osm = "yeosu_real.osm"
+origin = [34.7432000, 127.7441000]
+start_lanelet = 1001
+goal_lanelet = 1006
+attribution = "여수엑스포 세계엑스포대로 실측 기반 HD 맵 (Lanelet2 포맷)"
+terms = "자율주행 시뮬레이터 실차 검증용 테스트 데이터셋"
+notices = [
+    "여수엑스포 교차로 직진 주행 코스입니다.",
+    "차선 경계를 준수하여 직진 목표 지점에 안전하게 도달하십시오."
+]

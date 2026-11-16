@@ -1,0 +1,226 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Yeosu Expo World Expo-daero Multi-lane & Intersection HD Map (Lanelet2 Format) -->
+<osm version="0.6" generator="self-driving-sim-hdmap-generator">
+  <!-- South Approach Lane 1 (Left Lane) & Lane 2 (Right Lane) Nodes -->
+  <!-- Left Boundary of Lane 1 (x = -3.5m) -->
+  <node id="101" lat="34.7428396" lon="127.7440617"/>
+  <node id="102" lat="34.7430198" lon="127.7440617"/>
+  <node id="103" lat="34.7432000" lon="127.7440617"/>
+  <!-- Divider Boundary between Lane 1 & Lane 2 (x = 0.0m) -->
+  <node id="104" lat="34.7428396" lon="127.7441000"/>
+  <node id="105" lat="34.7430198" lon="127.7441000"/>
+  <node id="106" lat="34.7432000" lon="127.7441000"/>
+  <!-- Right Boundary of Lane 2 (x = +3.5m) -->
+  <node id="107" lat="34.7428396" lon="127.7441383"/>
+  <node id="108" lat="34.7430198" lon="127.7441383"/>
+  <node id="109" lat="34.7432000" lon="127.7441383"/>
+  <!-- Centerline of Lane 1 (x = -1.75m) -->
+  <node id="110" lat="34.7428396" lon="127.7440809"/>
+  <node id="111" lat="34.7430198" lon="127.7440809"/>
+  <node id="112" lat="34.7432000" lon="127.7440809"/>
+  <!-- Centerline of Lane 2 (x = +1.75m) -->
+  <node id="113" lat="34.7428396" lon="127.7441191"/>
+  <node id="114" lat="34.7430198" lon="127.7441191"/>
+  <node id="115" lat="34.7432000" lon="127.7441191"/>
+
+  <!-- Intersection Straight Lane Nodes (y = 0m to 20m, x = -1.75m center) -->
+  <!-- Left Boundary (x = -3.5m) -->
+  <node id="201" lat="34.7432901" lon="127.7440617"/>
+  <node id="202" lat="34.7433802" lon="127.7440617"/>
+  <!-- Right Boundary (x = 0.0m) -->
+  <node id="203" lat="34.7432901" lon="127.7441000"/>
+  <node id="204" lat="34.7433802" lon="127.7441000"/>
+  <!-- Centerline (x = -1.75m) -->
+  <node id="205" lat="34.7432901" lon="127.7440809"/>
+  <node id="206" lat="34.7433802" lon="127.7440809"/>
+
+  <!-- North Exit Lane Nodes (y = 20m to 60m, x = -1.75m center) -->
+  <!-- Left Boundary (x = -3.5m) -->
+  <node id="301" lat="34.7435604" lon="127.7440617"/>
+  <node id="302" lat="34.7437406" lon="127.7440617"/>
+  <!-- Right Boundary (x = 0.0m) -->
+  <node id="303" lat="34.7435604" lon="127.7441000"/>
+  <node id="304" lat="34.7437406" lon="127.7441000"/>
+  <!-- Centerline (x = -1.75m) -->
+  <node id="305" lat="34.7435604" lon="127.7440809"/>
+  <node id="306" lat="34.7437406" lon="127.7440809"/>
+
+  <!-- Intersection Right Turn Lane Nodes (Smooth 90-degree curve) -->
+  <!-- Left Boundary (R = 20.0m) -->
+  <node id="401" lat="34.7432466" lon="127.7441074"/>
+  <node id="402" lat="34.7432901" lon="127.7441293"/>
+  <node id="403" lat="34.7433274" lon="127.7441640"/>
+  <node id="404" lat="34.7433561" lon="127.7442093"/>
+  <node id="405" lat="34.7433741" lon="127.7442621"/>
+  <node id="406" lat="34.7433802" lon="127.7443186"/>
+  <!-- Right Boundary (R = 16.5m) -->
+  <node id="411" lat="34.7432385" lon="127.7441444"/>
+  <node id="412" lat="34.7432743" lon="127.7441624"/>
+  <node id="413" lat="34.7433051" lon="127.7441911"/>
+  <node id="414" lat="34.7433288" lon="127.7442285"/>
+  <node id="415" lat="34.7433436" lon="127.7442720"/>
+  <node id="416" lat="34.7433487" lon="127.7443186"/>
+
+  <!-- East Exit Lane Nodes (x = 20m to 60m, width = 3.5m) -->
+  <!-- Left Boundary (y = 20.0m) -->
+  <node id="501" lat="34.7433802" lon="127.7445373"/>
+  <node id="502" lat="34.7433802" lon="127.7447559"/>
+  <!-- Right Boundary (y = 16.5m) -->
+  <node id="503" lat="34.7433487" lon="127.7445373"/>
+  <node id="504" lat="34.7433487" lon="127.7447559"/>
+
+  <!-- Ways for South Approach Lane 1 (1001) -->
+  <way id="10011">
+    <nd ref="101"/>
+    <nd ref="102"/>
+    <nd ref="103"/>
+  </way>
+  <way id="10012">
+    <nd ref="104"/>
+    <nd ref="105"/>
+    <nd ref="106"/>
+  </way>
+  <way id="10013">
+    <nd ref="110"/>
+    <nd ref="111"/>
+    <nd ref="112"/>
+  </way>
+
+  <!-- Ways for South Approach Lane 2 (1002) -->
+  <!-- Shares left way (10012) with Lane 1 right way -->
+  <way id="10022">
+    <nd ref="107"/>
+    <nd ref="108"/>
+    <nd ref="109"/>
+  </way>
+  <way id="10023">
+    <nd ref="113"/>
+    <nd ref="114"/>
+    <nd ref="115"/>
+  </way>
+
+  <!-- Ways for Intersection Straight (1003) -->
+  <way id="10031">
+    <nd ref="103"/>
+    <nd ref="201"/>
+    <nd ref="202"/>
+  </way>
+  <way id="10032">
+    <nd ref="106"/>
+    <nd ref="203"/>
+    <nd ref="204"/>
+  </way>
+  <way id="10033">
+    <nd ref="112"/>
+    <nd ref="205"/>
+    <nd ref="206"/>
+  </way>
+
+  <!-- Ways for North Exit (1006) -->
+  <way id="10061">
+    <nd ref="202"/>
+    <nd ref="301"/>
+    <nd ref="302"/>
+  </way>
+  <way id="10062">
+    <nd ref="204"/>
+    <nd ref="303"/>
+    <nd ref="304"/>
+  </way>
+  <way id="10063">
+    <nd ref="206"/>
+    <nd ref="305"/>
+    <nd ref="306"/>
+  </way>
+
+  <!-- Ways for Intersection Right Turn (1004) -->
+  <way id="10041">
+    <nd ref="106"/>
+    <nd ref="401"/>
+    <nd ref="402"/>
+    <nd ref="403"/>
+    <nd ref="404"/>
+    <nd ref="405"/>
+    <nd ref="406"/>
+  </way>
+  <way id="10042">
+    <nd ref="109"/>
+    <nd ref="411"/>
+    <nd ref="412"/>
+    <nd ref="413"/>
+    <nd ref="414"/>
+    <nd ref="415"/>
+    <nd ref="416"/>
+  </way>
+
+  <!-- Ways for East Exit (1007) -->
+  <way id="10071">
+    <nd ref="406"/>
+    <nd ref="501"/>
+    <nd ref="502"/>
+  </way>
+  <way id="10072">
+    <nd ref="416"/>
+    <nd ref="503"/>
+    <nd ref="504"/>
+  </way>
+
+  <!-- Relations -->
+  <!-- Lanelet 1001: South Approach Lane 1 (Straight) -->
+  <relation id="1001">
+    <member type="way" ref="10011" role="left"/>
+    <member type="way" ref="10012" role="right"/>
+    <member type="way" ref="10013" role="centerline"/>
+    <tag k="type" v="lanelet"/>
+    <tag k="subtype" v="road"/>
+    <tag k="one_way" v="yes"/>
+  </relation>
+
+  <!-- Lanelet 1002: South Approach Lane 2 (Right turn) -->
+  <relation id="1002">
+    <member type="way" ref="10012" role="left"/>
+    <member type="way" ref="10022" role="right"/>
+    <member type="way" ref="10023" role="centerline"/>
+    <tag k="type" v="lanelet"/>
+    <tag k="subtype" v="road"/>
+    <tag k="one_way" v="yes"/>
+  </relation>
+
+  <!-- Lanelet 1003: Intersection Straight -->
+  <relation id="1003">
+    <member type="way" ref="10031" role="left"/>
+    <member type="way" ref="10032" role="right"/>
+    <member type="way" ref="10033" role="centerline"/>
+    <tag k="type" v="lanelet"/>
+    <tag k="subtype" v="road"/>
+    <tag k="one_way" v="yes"/>
+  </relation>
+
+  <!-- Lanelet 1006: North Exit -->
+  <relation id="1006">
+    <member type="way" ref="10061" role="left"/>
+    <member type="way" ref="10062" role="right"/>
+    <member type="way" ref="10063" role="centerline"/>
+    <tag k="type" v="lanelet"/>
+    <tag k="subtype" v="road"/>
+    <tag k="one_way" v="yes"/>
+  </relation>
+
+  <!-- Lanelet 1004: Intersection Right Turn (Auto Centerline) -->
+  <relation id="1004">
+    <member type="way" ref="10041" role="left"/>
+    <member type="way" ref="10042" role="right"/>
+    <tag k="type" v="lanelet"/>
+    <tag k="subtype" v="road"/>
+    <tag k="one_way" v="yes"/>
+  </relation>
+
+  <!-- Lanelet 1007: East Exit (Auto Centerline) -->
+  <relation id="1007">
+    <member type="way" ref="10071" role="left"/>
+    <member type="way" ref="10072" role="right"/>
+    <tag k="type" v="lanelet"/>
+    <tag k="subtype" v="road"/>
+    <tag k="one_way" v="yes"/>
+  </relation>
+</osm>

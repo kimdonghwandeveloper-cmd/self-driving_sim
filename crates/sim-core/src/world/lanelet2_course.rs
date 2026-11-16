@@ -967,4 +967,74 @@ goal_lanelet = 301
 
         let _ = std::fs::remove_dir_all(&temp_dir);
     }
+
+    /// 실제 도로 WGS84 좌표 기반 Lanelet2 HD 맵에서 직진 및 우회전 다차선 경로를 로드하고 무충돌 주행을 검증한다.
+    #[test]
+    fn loads_real_hd_map_straight_and_turn_routes() {
+        let root = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."));
+
+        // 1. 직진 경로 (1001 -> 1003 -> 1006)
+        let straight_toml = r#"
+format = "lanelet2-course-v1"
+name = "yeosu-real-straight"
+osm = "testdata/lanelet2/yeosu-real-intersection.osm"
+origin = [34.7432000, 127.7441000]
+start_lanelet = 1001
+goal_lanelet = 1006
+attribution = "Yeosu Expo World Expo-daero HD Map"
+notices = ["Straight intersection traversal"]
+"#;
+        let straight_course = load_lanelet2_course_full(straight_toml, root).unwrap();
+        assert_eq!(straight_course.course.name, "yeosu-real-straight");
+        assert_eq!(straight_course.traversal.len(), 3);
+        assert_eq!(straight_course.traversal[0].id, 1001);
+        assert_eq!(straight_course.traversal[1].id, 1003);
+        assert_eq!(straight_course.traversal[2].id, 1006);
+        straight_course.course.validate().unwrap();
+
+        let straight_drive = super::super::test_drive::follow_path(
+            &straight_course.course,
+            &straight_course.guide,
+            3.0,
+        );
+        assert_eq!(straight_drive.impacts, 0, "{straight_drive:?}");
+
+        // 2. 우회전 경로 (1002 -> 1004 -> 1007)
+        let turn_toml = r#"
+format = "lanelet2-course-v1"
+name = "yeosu-real-right-turn"
+osm = "testdata/lanelet2/yeosu-real-intersection.osm"
+origin = [34.7432000, 127.7441000]
+start_lanelet = 1002
+goal_lanelet = 1007
+attribution = "Yeosu Expo World Expo-daero HD Map"
+notices = ["Right turn intersection traversal"]
+"#;
+        let turn_course = load_lanelet2_course_full(turn_toml, root).unwrap();
+        assert_eq!(turn_course.course.name, "yeosu-real-right-turn");
+        assert_eq!(turn_course.traversal.len(), 3);
+        assert_eq!(turn_course.traversal[0].id, 1002);
+        assert_eq!(turn_course.traversal[1].id, 1004);
+        assert_eq!(turn_course.traversal[2].id, 1007);
+        turn_course.course.validate().unwrap();
+
+        let turn_drive =
+            super::super::test_drive::follow_path(&turn_course.course, &turn_course.guide, 3.0);
+        assert_eq!(turn_drive.impacts, 0, "{turn_drive:?}");
+    }
+
+    /// assets 디렉터리에 등록된 실제 HD 맵 예제 코스 파일이 정상 로드되는지 검증한다.
+    #[test]
+    fn loads_real_map_demo_assets_course() {
+        let root = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."));
+        let course_path = root.join("assets/maps/lanelet2-real-demo/course.toml");
+        let loaded = load_lanelet2_course_file(&course_path).unwrap();
+        assert_eq!(loaded.course.name, "yeosu-expo-real-intersection");
+        assert_eq!(loaded.traversal.len(), 3);
+        loaded.course.validate().unwrap();
+
+        let from_map_loader = super::super::map::load_map_course(&course_path).unwrap();
+        assert_eq!(from_map_loader.name, "yeosu-expo-real-intersection");
+        from_map_loader.validate().unwrap();
+    }
 }
