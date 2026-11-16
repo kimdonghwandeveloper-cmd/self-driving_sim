@@ -186,6 +186,13 @@ func update_state(kmh: float, gear: String, description: String, values: Diction
 
 
 ## 초기화 실패는 접힌 창에 숨기지 않고 고정 경고와 상세 정보로 보여 준다.
+func show_alert(message: String) -> void:
+	alert.text = message
+	state.text = message
+	alert_panel.show()
+
+
+## 초기화 실패는 접힌 창에 숨기지 않고 고정 경고와 상세 정보로 보여 준다.
 func show_failure(message: String) -> void:
 	speed.text = "—"
 	gears.text = "주행 중지"

@@ -534,3 +534,5 @@ func _dismiss_warnings() -> void:
 func _command_rejected(command: String, _source: String, reason: String) -> void:
 	command_notice = "%s: %s" % [command, reason]
 	command_notice_until = Time.get_ticks_msec() + 4000
+	if is_instance_valid(dashboard):
+		dashboard.show_alert(command_notice)
