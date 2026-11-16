@@ -29,8 +29,10 @@ func _run() -> void:
 	map._check_data()
 	map.coordinates.text = "34.75264,127.74712"
 	map._jump_coordinate_button()
-	for frame in 4:
+	var requested_region: Rect2 = map.opened_region
+	for frame in 45:
 		await process_frame
+	_check(map.opened_region == requested_region, "좌표 이동 후 멈췄는데 다른 지역이 자동으로 열림")
 	_check(map.data_ok and map.roads.size() > 100, "자료 또는 지역 열기 실패")
 	_check(map.drive_button.disabled, "선택 전 주행 허용")
 	var region: Rect2 = map.opened_region

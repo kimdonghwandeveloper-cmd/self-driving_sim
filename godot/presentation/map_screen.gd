@@ -692,6 +692,10 @@ func _fit_rect(bounds: Rect2) -> void:
 	camera.zoom = Vector2.ONE * zoom_value
 	camera.position = bounds.get_center() - Vector2(0, 150.0 / zoom_value)
 	_clamp_camera()
+	# 도구 줄을 피하려고 옮긴 카메라 위치를 새 지역 요청으로 오해하지 않는다. 사용자가 움직이면 자동 열기가 다시 시작된다.
+	last_camera = camera.position
+	last_zoom = camera.zoom.x
+	still_time = AUTO_OPEN_DELAY_S
 
 ## 로컬 스냅샷(graph*.osm.json) 파일 선택 창을 연다.
 func _open_snapshot() -> void:
