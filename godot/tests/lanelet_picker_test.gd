@@ -15,7 +15,9 @@ func _init() -> void:
 func _run() -> void:
 	var main: Node = load("res://main.tscn").instantiate()
 	root.add_child(main)
-	await process_frame
+	root.size = Vector2i(1280, 720)
+	for frame in 4:
+		await process_frame
 	await _click(main.screen.lanelet_map_button.get_global_rect().get_center())
 	var screen: Control = main.screen
 	_check(screen.has_method("_pick"), "Lanelet2 메뉴 진입 실패")
