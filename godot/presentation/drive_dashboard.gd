@@ -17,7 +17,7 @@ func _ready() -> void:
 	panel.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE)
 	panel.offset_left = 20
 	panel.offset_right = -20
-	panel.offset_top = -310
+	panel.offset_top = -270
 	panel.offset_bottom = -100
 	var style := StyleBoxFlat.new()
 	style.bg_color = Color("101e2bee")

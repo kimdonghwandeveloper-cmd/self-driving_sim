@@ -73,6 +73,8 @@ func _run() -> void:
 	_check(not drive.failure.is_empty() and drive.dashboard.state.is_visible_in_tree(), "실패 상태가 숨겨짐")
 	_check(drive.dashboard.state.text.contains("코스를 열 수 없습니다"), "실패 원인 표시 없음")
 	main.free()
+	for frame in 3:
+		await process_frame
 	_finish()
 
 

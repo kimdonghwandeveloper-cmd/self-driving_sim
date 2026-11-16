@@ -140,6 +140,8 @@ func start(course_name: String, force_preview: bool = false) -> void:
 	scenario_box.visible = _has_scenario()
 	if is_preview:
 		notice.text += "\n정지 미리보기 · 1 전방 / 2 후방 / 3 좌측 / 4 우측 / C 외부"
+	notice.get_parent().get_parent().visible = not notice.text.is_empty()
+	_refresh_dashboard()
 
 ## `course_name` 코스의 Rust 차량(또는 정지 미리보기) 노드를 만들어 장면에 넣는다. 준비 결과는 `is_ready`로 본다.
 ## `scenario:<파일>`이면 차량의 `scenario` 속성에 파일을 넣고 코스는 시나리오 파일이 정한다.

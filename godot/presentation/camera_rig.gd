@@ -41,7 +41,8 @@ func _update_pose() -> void:
 		rotation = Vector3.ZERO
 		# 대각선 사선 뷰에서 차량 상단/후방에서 시원하게 내려다보는 탑다운 3인칭 뷰로 배치
 		camera.position = Vector3(0, 10.5, 3.2)
-		camera.look_at(to_global(Vector3(0, 0.5, -3.5)), Vector3.UP)
+		# 하단 계기판 위로 차체가 보이도록 차량 중심 부근을 내려다본다.
+		camera.look_at(to_global(Vector3(0, 0.5, -1.0)), Vector3.UP)
 		camera.cull_mask = 3
 	else:
 		position = eye
