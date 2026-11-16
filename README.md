@@ -293,6 +293,18 @@ cargo run --locked -p sim-tools -- --compare-overpass testdata/yeosu-expo/graph-
 cargo run --locked -p sim-tools -- --check-result logs/scenarios/<세션 ID>.json
 ```
 
+## Lanelet2 지도에서 경로 선택
+
+메뉴의 **Lanelet2 · 출발·도착 선택**에서 등록된 Lanelet2 지도를 엽니다.
+차선 내부를 클릭해 출발, 도착 순서로 고르면 연결 경로와 실제 시작·목표 위치가 표시됩니다.
+휠로 확대하고 오른쪽 드래그로 이동할 수 있습니다. **이 경로로 주행**은 선택 결과를
+`cache/routes/lanelet2-selected-*.toml`에 새로 저장한 뒤 주행 화면을 엽니다.
+저장된 경로는 메인 메뉴에서도 다시 선택할 수 있으며 원본 지도·코스 설정은 변경하지 않습니다.
+
+선택 단위는 차선이며 정확히 클릭한 위치에서 시작하지 않습니다. 기존 코스 생성기의
+차선 개수 기준 최단 경로 정책을 사용하고, 동률 경로·끊긴 연결·허용되지 않는 역방향은 거부합니다.
+차로 변경·신호·교통 규칙은 지원하지 않습니다. 지도 출처와 실측 여부는 각 자료의 증빙을 별도로 확인해야 합니다.
+
 ## 구성과 기준
 
 - `Cargo.toml`: 작업 공간 설정(루트 패키지 없음)

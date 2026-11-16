@@ -68,6 +68,8 @@ func _ready() -> void:
 		return
 	picker = ClassDB.instantiate("SimLaneletPicker")
 	for file in ClassDB.class_call_static("SimCourse", "course_files"):
+		if file.saved:
+			continue
 		var path := str(file.course).trim_prefix("map:")
 		var absolute := ProjectSettings.globalize_path("res://..").path_join(path)
 		# TOML은 ConfigFile 대상이 아니므로 형식 식별 줄만 읽고 실제 검증은 Rust 로더에 맡긴다.

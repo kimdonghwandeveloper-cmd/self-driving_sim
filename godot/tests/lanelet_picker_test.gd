@@ -29,6 +29,19 @@ func _run() -> void:
 		main.free()
 		_finish()
 		return
+	var intersection: int = screen.paths.find("assets/maps/lanelet2-real-demo/course.toml")
+	_check(intersection >= 0, "교차로 지도 없음")
+	if intersection >= 0:
+		screen._open(intersection)
+		for pair in [[1001, 1006], [1002, 1007]]:
+			screen._reset()
+			screen._pick(pair[0])
+			screen._pick(pair[1])
+			_check(not screen.start_button.disabled, "교차로 직진·우회전 선택 실패")
+		screen._reset()
+		screen._pick(1001)
+		screen._pick(1007)
+		_check(screen.start_button.disabled, "차로 변경 없는 잘못된 연결을 허용함")
 	screen.maps.select(index)
 	screen._open(index)
 	for frame in 4:
@@ -64,14 +77,15 @@ func _run() -> void:
 	if drive.has_method("start"):
 		_check(drive.failure.is_empty() and drive.fallback_notice.is_empty(), "선택 경로 대신 대체 코스가 열림")
 		var name := str(drive.vehicle.get("course"))
-		_check(name.begins_with("map:cache/lanelet2-routes/"), "선택 파일을 사용하지 않음")
+		_check(name.begins_with("map:cache/routes/lanelet2-selected-"), "선택 파일을 사용하지 않음")
 		var data: Dictionary = drive.vehicle.call("course_data")
 		_check(data.strips.size() == 2, "선택 경로 형상 불일치")
 		var replay: Dictionary = ClassDB.class_call_static("SimCourse", "build", name)
 		_check(replay.get("start") == data.start and replay.get("goal") == data.goal, "선택 파일 재로드 불일치")
 		main._show_menu()
 		await process_frame
-		if name.begins_with("map:cache/lanelet2-routes/"):
+		_check(name in main.screen.course_names, "저장 경로가 메뉴 목록에서 사라짐")
+		if name.begins_with("map:cache/routes/lanelet2-selected-"):
 			DirAccess.remove_absolute(ProjectSettings.globalize_path("res://..").path_join(name.trim_prefix("map:")))
 	# 실패한 지도 열기가 이전 지도의 모델을 재사용하지 않아야 한다.
 	var picker: RefCounted = ClassDB.instantiate("SimLaneletPicker")

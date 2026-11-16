@@ -75,7 +75,7 @@ impl SimLaneletPicker {
             .unwrap_or_default()
             .as_nanos();
         let relative = format!(
-            "cache/lanelet2-routes/selected-{}-{stamp}.toml",
+            "cache/routes/lanelet2-selected-{}-{stamp}.toml",
             std::process::id()
         );
         match model.save(start, goal, &repo_path(&relative)) {
