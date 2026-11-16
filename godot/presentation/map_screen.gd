@@ -16,6 +16,7 @@ var drive_button := Button.new()
 var cities := OptionButton.new()
 var coordinates := LineEdit.new()
 var toolbar := VBoxContainer.new()
+var toolbar_panel := PanelContainer.new()
 
 var camera := Camera2D.new()
 var roads := PackedVector2Array()
@@ -273,9 +274,15 @@ func _services(canvas: CanvasLayer) -> void:
 		tiles.set("offline", offline)
 		if tiles.has_method("country_outline"):
 			_set_country(tiles.call("country_outline"), tiles.call("country_bounds"))
-	toolbar.position = Vector2(24, 64)
+	toolbar_panel.position = Vector2(16, 60)
+	var panel_style := StyleBoxFlat.new()
+	panel_style.bg_color = Color(0.04, 0.08, 0.13, 0.94)
+	panel_style.set_content_margin_all(8)
+	panel_style.set_corner_radius_all(8)
+	toolbar_panel.add_theme_stylebox_override("panel", panel_style)
+	canvas.add_child(toolbar_panel)
 	toolbar.add_theme_constant_override("separation", 8)
-	canvas.add_child(toolbar)
+	toolbar_panel.add_child(toolbar)
 	var controls := HFlowContainer.new()
 	toolbar.add_child(controls)
 	var undo := Button.new()
@@ -336,7 +343,7 @@ func _services(canvas: CanvasLayer) -> void:
 
 ## 창 크기에 맞춰 도구 줄을 줄바꿈하고 지도를 가리는 안내 높이를 제한한다.
 func _layout_toolbar() -> void:
-	toolbar.size.x = maxf(300.0, get_viewport_rect().size.x - 48.0)
+	toolbar_panel.size.x = maxf(300.0, get_viewport_rect().size.x - 32.0)
 
 ## 온라인 검색 없이도 전국 지역으로 이동할 수 있도록 도시·직접 좌표 입력을 제공한다.
 func _build_region_controls() -> void:
@@ -594,7 +601,14 @@ func _process(delta: float) -> void:
 		save_button.disabled = not bool(result.ok)
 		drive_button.disabled = not bool(result.ok)
 		var hint := "" if data_ok else "\n" + data_error
-		var text := (feedback + "\n" if not feedback.is_empty() else "") + (hint + "\n" if not data_ok else "전국 OSM 자료 준비됨 · 한 지역 1.5 km 내 짧은 주행\n") + "우클릭: 이동 / 휠: 확대 / 도로 클릭: 출발 → 도착 / Shift+클릭: 점 삭제\n" + "\n".join(picker.call("status_lines"))
+		var route_hint := "도로 위 출발 → 도착 순서로 클릭하세요."
+		if result.ok:
+			route_hint = "선택 경로 %.0f m · '선택 경로로 주행'으로 시작" % float(result.length_m)
+		elif points.size() >= 2:
+			route_hint = "경로 생성 실패: " + str(result.error)
+		elif points.size() == 1:
+			route_hint = "출발 선택됨 · 같은 지역 안의 도착 도로를 클릭하세요."
+		var text := (feedback + "\n" if not feedback.is_empty() else "") + (hint + "\n" if not data_ok else "전국 OSM 자료 준비됨 · 한 지역 1.5 km 내 짧은 주행\n") + route_hint + "\n우클릭: 이동 / 휠: 확대 / 도로 클릭: 점 추가 / Shift+클릭: 점 삭제\n" + "\n".join(picker.call("status_lines"))
 		# 글자가 바뀔 때만 넣는다(같은 글자를 매 프레임 넣으면 글자 배치를 다시 한다).
 		if status.text != text:
 			status.text = text
