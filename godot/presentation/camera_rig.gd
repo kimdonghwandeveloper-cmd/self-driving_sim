@@ -27,20 +27,22 @@ func apply_view(direction: String) -> void:
 	current_view = direction
 	_update_pose()
 
-## 외부 차체를 볼 수 있는 디버그 카메라로 전환한다.
+## 외부 차체를 위에서 내려다보는 탑다운(Overhead Top-Down) 3인칭 카메라로 전환한다.
 func set_external(enabled: bool) -> void:
 	external = enabled
 	_update_pose()
 
-## 외부 보기와 실내 보기의 자세·레이어를 적용한다.
+## 외부 탑다운 보기와 실내 운전자 보기의 카메라 자세와 렌더 레이어를 적용한다.
 func _update_pose() -> void:
 	if not is_instance_valid(camera):
 		return
 	if external:
 		position = Vector3.ZERO
 		rotation = Vector3.ZERO
-		camera.position = Vector3(8, 6, 8)
-		camera.look_at(to_global(Vector3(0, 1, -1.4)), Vector3.UP)
+		# 대각선 사선 뷰에서 차량 상단/후방에서 시원하게 내려다보는 탑다운 3인칭 뷰로 배치
+		camera.position = Vector3(0, 10.5, 3.2)
+		# 하단 계기판 위로 차체가 보이도록 차량 중심 부근을 내려다본다.
+		camera.look_at(to_global(Vector3(0, 0.5, -1.0)), Vector3.UP)
 		camera.cull_mask = 3
 	else:
 		position = eye

@@ -14,6 +14,7 @@ func _ready() -> void:
 	add_child(canvas)
 	back_button.position = Vector2(20, 20)
 	back_button.text = "메뉴로 돌아가기  (Esc)"
+	back_button.focus_mode = Control.FOCUS_NONE
 	back_button.pressed.connect(_show_menu)
 	canvas.add_child(back_button)
 	_show_menu()

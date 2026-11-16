@@ -5,6 +5,7 @@ const Preview = preload("res://preview/vehicle_preview.gd")
 const CourseMesh = preload("res://presentation/course_mesh.gd")
 const Visual = preload("res://presentation/vehicle_visual.gd")
 const Rig = preload("res://presentation/camera_rig.gd")
+const Dashboard = preload("res://presentation/drive_dashboard.gd")
 ## GLB의 미터 원점을 공유하는 여수 고정 코스. 저장 경로는 시작점이 달라 이 배경을 쓰지 않는다.
 const YEOSU_COURSE := "map:testdata/yeosu-expo/course.toml"
 ## 사용자 제작 맵의 도로 면을 그대로 노면·연석으로 쓰는 여수 코스. 배경 GLB와 같은 원점을 쓴다.
@@ -19,7 +20,7 @@ const GROUND_MARGIN_M := 300.0
 const INPUT_NAMES := {"keyboard": "키보드", "gamepad": "게임패드", "manual": "외부 입력", "none": "없음"}
 const VIEW_NAMES := {"front": "전방", "rear": "후방", "left": "좌측", "right": "우측"}
 ## 외부(디버그) 시점에서 보이는 차체가 임시 모델임을 알리는 문구.
-const EXTERIOR_NOTICE := "외부 시점 · 차체 외관은 임시 모델이며 충돌 판정 차체와 크기가 다릅니다"
+const EXTERIOR_NOTICE := "탑다운 외부 시점 · 차체 외관은 임시 모델입니다"
 ## 1인칭 전방이 아닌 시점일 때 시선과 진행 방향이 다름을 알리는 문구.
 const SIDE_VIEW_NOTICE := "현재 시선은 차량 전방과 다릅니다"
 ## 충돌 뒤 HUD에 충격 크기를 보이는 시간(물리 틱 수, 64 Hz에서 3초, 표시용 임시값, 2-7).
@@ -82,6 +83,8 @@ var command_notice_until := 0
 var ground := MeshInstance3D.new()
 ## 도로 이탈 판정용 도로 면 격자(칸 → 그 칸에 걸친 면 다각형 목록). 내 맵 도로 코스에서만 채운다.
 var road_cells := {}
+## 실제 상태를 표시하는 전용 계기판.
+var dashboard: Control
 
 ## 전달받은 코스로 화면을 만들고 실패 시 메시를 생성하지 않는다.
 func start(course_name: String, force_preview: bool = false) -> void:
@@ -137,6 +140,9 @@ func start(course_name: String, force_preview: bool = false) -> void:
 	scenario_box.visible = _has_scenario()
 	if is_preview:
 		notice.text += "\n정지 미리보기 · 1 전방 / 2 후방 / 3 좌측 / 4 우측 / C 외부"
+	dashboard.configure_course(data)
+	dashboard.add_notices(notice)
+	_refresh_dashboard()
 
 ## `course_name` 코스의 Rust 차량(또는 정지 미리보기) 노드를 만들어 장면에 넣는다. 준비 결과는 `is_ready`로 본다.
 ## `scenario:<파일>`이면 차량의 `scenario` 속성에 파일을 넣고 코스는 시나리오 파일이 정한다.
@@ -249,68 +255,61 @@ func _ui() -> void:
 	overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	canvas.add_child(overlay)
-	var panel := VBoxContainer.new()
-	panel.set_anchors_and_offsets_preset(Control.PRESET_TOP_LEFT)
-	panel.offset_left = 20
-	panel.offset_top = 64
-	panel.add_theme_constant_override("separation", 8)
-	overlay.add_child(panel)
-	var hud_box := _backdrop()
-	panel.add_child(hud_box)
-	hud_box.add_child(hud)
+	dashboard = Dashboard.new()
+	overlay.add_child(dashboard)
+	dashboard.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	hud.visible = false
+	overlay.add_child(hud)
+	var messages := MarginContainer.new()
+	messages.set_anchors_and_offsets_preset(Control.PRESET_TOP_LEFT)
+	messages.offset_left = 20
+	messages.offset_top = 68
+	messages.offset_right = 500
+	messages.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	overlay.add_child(messages)
+	var column := VBoxContainer.new()
+	column.add_theme_constant_override("separation", 6)
+	column.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	messages.add_child(column)
 	scenario_box = _backdrop()
 	scenario_box.hide()
-	panel.add_child(scenario_box)
+	column.add_child(scenario_box)
 	var scenario_column := VBoxContainer.new()
-	scenario_column.add_theme_constant_override("separation", 6)
 	scenario_box.add_child(scenario_column)
 	scenario_column.add_child(scenario_label)
 	scenario_column.add_child(scenario_message)
-	var scenario_row := HBoxContainer.new()
-	scenario_column.add_child(scenario_row)
+	var row := HFlowContainer.new()
+	scenario_column.add_child(row)
 	for entry in [["go", "시작·계속 (F5)"], ["pause", "일시정지 (F6)"], ["restart", "재시작 (F7)"], ["end", "종료 (F8)"]]:
 		var button := Button.new()
 		button.text = entry[1]
-		# 버튼이 포커스를 가지면 Enter·Space(시동·비상 정지 키)가 버튼을 누르게 되므로 포커스를 받지 않는다.
 		button.focus_mode = Control.FOCUS_NONE
 		button.pressed.connect(_scenario_action.bind(entry[0]))
-		scenario_row.add_child(button)
+		row.add_child(button)
 		scenario_buttons[entry[0]] = button
 	calibration_box = _backdrop()
 	calibration_box.hide()
-	panel.add_child(calibration_box)
+	column.add_child(calibration_box)
 	calibration_box.add_child(calibration_label)
-	panel.add_child(warnings_label)
-	var notice_box := _backdrop()
-	notice_box.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_RIGHT)
-	notice_box.grow_horizontal = Control.GROW_DIRECTION_BEGIN
-	notice_box.grow_vertical = Control.GROW_DIRECTION_BEGIN
-	notice_box.offset_right = -12
-	notice_box.offset_bottom = -12
-	overlay.add_child(notice_box)
-	notice_box.add_child(notice)
-	for label in [hud, notice, warnings_label, calibration_label, scenario_label, scenario_message]:
+	column.add_child(warnings_label)
+	dismiss.text = "설정 경고 닫기"
+	dismiss.pressed.connect(_dismiss_warnings)
+	dismiss.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+	dismiss.focus_mode = Control.FOCUS_NONE
+	column.add_child(dismiss)
+	notice.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	notice.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	notice.add_theme_font_size_override("font_size", 12)
+	dashboard.add_notices(notice)
+	for label in [notice, warnings_label, calibration_label, scenario_label, scenario_message]:
 		label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		label.add_theme_color_override("font_color", Color.WHITE)
 		label.add_theme_color_override("font_shadow_color", Color.BLACK)
 		label.add_theme_constant_override("shadow_offset_x", 1)
 		label.add_theme_constant_override("shadow_offset_y", 1)
-	warnings_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	warnings_label.custom_minimum_size.x = 640
-	hud.add_theme_font_size_override("font_size", 22)
-	notice.add_theme_font_size_override("font_size", 14)
-	calibration_label.add_theme_font_size_override("font_size", 16)
-	scenario_label.add_theme_font_size_override("font_size", 18)
-	scenario_message.add_theme_font_size_override("font_size", 20)
+	warnings_label.add_theme_color_override("font_color", Color("ffd27a"))
 	scenario_message.add_theme_color_override("font_color", SCENARIO_MESSAGE_COLOR)
-	for label in [scenario_label, scenario_message]:
-		label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-		label.custom_minimum_size.x = 560
-	notice.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	dismiss.text = "설정 경고 닫기"
-	dismiss.pressed.connect(_dismiss_warnings)
-	dismiss.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
-	panel.add_child(dismiss)
 
 ## 읽기 함수만 호출해 주행 상태를 표시한다.
 func _process(_delta: float) -> void:
@@ -346,6 +345,31 @@ func _process(_delta: float) -> void:
 	if scenario_box.visible:
 		_update_scenario(vehicle.call("scenario_status"))
 		_update_hazards(vehicle.call("scenario_hazards"))
+
+	_refresh_dashboard()
+
+## Rust 상태만 읽어 계기판을 갱신하며 물리 상태는 변경하지 않는다.
+func _refresh_dashboard() -> void:
+	if not is_instance_valid(dashboard):
+		return
+	var metrics: Dictionary = vehicle.call("evaluation_metrics") if not is_preview else {"active": false}
+	var alerts := PackedStringArray()
+	if bool(vehicle.call("emergency_active")):
+		alerts.append("비상 정지 작동 · Backspace로 해제")
+	if not road_cells.is_empty() and not on_road(vehicle.position):
+		alerts.append(OFF_ROAD_NOTICE)
+	var impact := _impact_line(vehicle.call("last_impact"), int(vehicle.call("tick_count")))
+	if not impact.is_empty():
+		alerts.append(impact)
+	if Time.get_ticks_msec() < command_notice_until:
+		alerts.append(command_notice)
+	dashboard.update_state(float(vehicle.call("speed_kmh")), str(vehicle.call("gear")),
+		hud.text, metrics, float(vehicle.call("tick_count")) / 64.0, {
+			"engine_on": bool(vehicle.call("engine_on")),
+			"view": "탑다운" if rig.external else VIEW_NAMES.get(rig.current_view, "전방"),
+			"alert": "\n".join(alerts),
+		})
+	dashboard.update_vehicle(vehicle.position, vehicle.rotation.y)
 
 ## 차체 움직임(`SimVehicle.body_pose`, 계약 v1.9)으로 차체를 기울이고, 입석 카메라는 `body_follow`만큼 따라가게 한다.
 func _apply_body_pose(pose: Dictionary) -> void:
@@ -475,12 +499,17 @@ func _fail(message: String) -> void:
 	if message.is_empty():
 		message = "차량을 준비하지 못했습니다(사유 없음)."
 	failure = message
+	# 초기화 실패 때 트리에 붙지 않은 카메라 받침도 해제한다.
+	if is_instance_valid(camera_mount) and camera_mount.get_parent() == null:
+		camera_mount.free()
 	if is_instance_valid(vehicle):
 		vehicle.set_physics_process(false)
 		vehicle.hide()
 	if is_instance_valid(scene_content):
 		scene_content.hide()
 	hud.text = "코스를 열 수 없습니다\n" + message
+	if is_instance_valid(dashboard):
+		dashboard.show_failure(hud.text)
 	notice.text = "상단 메뉴로 돌아가세요."
 	warnings_label.hide()
 	dismiss.hide()
@@ -505,3 +534,5 @@ func _dismiss_warnings() -> void:
 func _command_rejected(command: String, _source: String, reason: String) -> void:
 	command_notice = "%s: %s" % [command, reason]
 	command_notice_until = Time.get_ticks_msec() + 4000
+	if is_instance_valid(dashboard):
+		dashboard.show_alert(command_notice)
