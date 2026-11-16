@@ -55,14 +55,10 @@ impl SimLaneletPicker {
         match model.preview(start, goal) {
             Ok(course) => {
                 let ids: PackedInt64Array = course.traversal.iter().map(|s| s.id).collect();
-                let start = course.course.start.position;
-                let goal = course
-                    .course
-                    .goal
-                    .expect("validated course has goal")
-                    .position;
+                let start = course.course.start;
+                let goal = course.course.goal.expect("validated course has goal");
                 vdict! { "ok" => true, "ids" => ids, "guide" => points(&course.guide),
-                "start" => Vector2::new(start.x, start.y), "goal" => Vector2::new(goal.x, goal.y) }
+                "start" => Vector2::new(start.x_m, start.z_m), "goal" => Vector2::new(goal.x_m, goal.z_m) }
             }
             Err(error) => failure(&error),
         }
