@@ -140,7 +140,8 @@ func start(course_name: String, force_preview: bool = false) -> void:
 	scenario_box.visible = _has_scenario()
 	if is_preview:
 		notice.text += "\n정지 미리보기 · 1 전방 / 2 후방 / 3 좌측 / 4 우측 / C 외부"
-	notice.get_parent().get_parent().visible = not notice.text.is_empty()
+	dashboard.configure_course(data)
+	dashboard.add_notices(notice)
 	_refresh_dashboard()
 
 ## `course_name` 코스의 Rust 차량(또는 정지 미리보기) 노드를 만들어 장면에 넣는다. 준비 결과는 `is_ready`로 본다.
@@ -260,10 +261,10 @@ func _ui() -> void:
 	hud.visible = false
 	overlay.add_child(hud)
 	var messages := MarginContainer.new()
-	messages.set_anchors_and_offsets_preset(Control.PRESET_TOP_WIDE)
+	messages.set_anchors_and_offsets_preset(Control.PRESET_TOP_LEFT)
 	messages.offset_left = 20
 	messages.offset_top = 68
-	messages.offset_right = -20
+	messages.offset_right = 500
 	messages.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	overlay.add_child(messages)
 	var column := VBoxContainer.new()
@@ -296,20 +297,10 @@ func _ui() -> void:
 	dismiss.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 	dismiss.focus_mode = Control.FOCUS_NONE
 	column.add_child(dismiss)
-	var notice_box := _backdrop()
-	notice_box.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE)
-	notice_box.offset_left = 20
-	notice_box.offset_right = -20
-	notice_box.offset_top = -88
-	notice_box.offset_bottom = -12
-	overlay.add_child(notice_box)
-	var scroll := ScrollContainer.new()
-	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	notice_box.add_child(scroll)
 	notice.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	notice.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	notice.add_theme_font_size_override("font_size", 12)
-	scroll.add_child(notice)
+	dashboard.add_notices(notice)
 	for label in [notice, warnings_label, calibration_label, scenario_label, scenario_message]:
 		label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -362,8 +353,23 @@ func _refresh_dashboard() -> void:
 	if not is_instance_valid(dashboard):
 		return
 	var metrics: Dictionary = vehicle.call("evaluation_metrics") if not is_preview else {"active": false}
+	var alerts := PackedStringArray()
+	if bool(vehicle.call("emergency_active")):
+		alerts.append("비상 정지 작동 · Backspace로 해제")
+	if not road_cells.is_empty() and not on_road(vehicle.position):
+		alerts.append(OFF_ROAD_NOTICE)
+	var impact := _impact_line(vehicle.call("last_impact"), int(vehicle.call("tick_count")))
+	if not impact.is_empty():
+		alerts.append(impact)
+	if Time.get_ticks_msec() < command_notice_until:
+		alerts.append(command_notice)
 	dashboard.update_state(float(vehicle.call("speed_kmh")), str(vehicle.call("gear")),
-		hud.text, metrics, float(vehicle.call("tick_count")) / 64.0)
+		hud.text, metrics, float(vehicle.call("tick_count")) / 64.0, {
+			"engine_on": bool(vehicle.call("engine_on")),
+			"view": "탑다운" if rig.external else VIEW_NAMES.get(rig.current_view, "전방"),
+			"alert": "\n".join(alerts),
+		})
+	dashboard.update_vehicle(vehicle.position, vehicle.rotation.y)
 
 ## 차체 움직임(`SimVehicle.body_pose`, 계약 v1.9)으로 차체를 기울이고, 입석 카메라는 `body_follow`만큼 따라가게 한다.
 func _apply_body_pose(pose: Dictionary) -> void:
