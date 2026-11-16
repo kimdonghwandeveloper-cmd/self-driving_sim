@@ -33,6 +33,13 @@ func _run() -> void:
 	for frame in 45:
 		await process_frame
 	_check(map.opened_region == requested_region, "좌표 이동 후 멈췄는데 다른 지역이 자동으로 열림")
+	for window_size in [Vector2i(800, 600), Vector2i(1280, 720)]:
+		root.size = window_size
+		for frame in 4:
+			await process_frame
+		_check(map.get_viewport_rect().encloses(map.toolbar_panel.get_global_rect()), "지도 도구 줄이 창 밖으로 나감")
+	map._fit_region()
+	await process_frame
 	_check(map.data_ok and map.roads.size() > 100, "자료 또는 지역 열기 실패")
 	_check(map.drive_button.disabled, "선택 전 주행 허용")
 	var region: Rect2 = map.opened_region
