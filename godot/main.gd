@@ -52,6 +52,7 @@ func _show_map() -> void:
 	back_button.show()
 	screen = Map.instantiate()
 	add_child(screen)
+	screen.drive_requested.connect(_show_drive)
 
 ## Lanelet2 경로 선택 화면에서 검증된 코스만 기존 주행 화면으로 넘긴다.
 func _show_lanelet_map() -> void:
