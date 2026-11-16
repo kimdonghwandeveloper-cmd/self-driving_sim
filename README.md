@@ -318,6 +318,26 @@ cargo run --locked -p sim-tools -- --check-result logs/scenarios/<세션 ID>.jso
 
 ## Godot 시험과 첫 import 검사
 
+### Lanelet2 최소 연동
+
+확장을 빌드한 뒤 Godot 메인 메뉴에서 **Lanelet2 예제 · 합성 직선 (실제 지도 아님)**을 선택하고
+"선택한 코스 열기"를 누릅니다. 약 60 m의 합성 직선 차선 두 개를 기존 차량으로 주행하며,
+노면·연석·시작·목표와 출처 안내를 표시합니다. 실제 여수 지도나 실측 HD 맵이 아닙니다.
+
+사용자 코스는 `assets/maps/<폴더>/*.toml`에 두면 같은 목록에 나옵니다. 예제 설정은
+`assets/maps/lanelet2-demo/course.toml`을 참고하세요. `osm` 경로는 설정 파일 위치 기준이며,
+`origin = [위도, 경도]`, `start_lanelet`, `goal_lanelet`을 지정합니다. JOSM 음수 임시 ID도 지원합니다.
+원본과 설정을 보존한 상태에서 다시 열면 같은 코스를 생성합니다. 원본 변경을 해시로 차단하는 기능은 없습니다.
+
+경로는 통과 차선 수가 최소인 유일 경로만 허용합니다. 선택 차로 양쪽을 연석으로 처리하며,
+차로 변경·신호·정지선·임의 HD 맵 전체 호환은 지원하지 않습니다. 파일·ID·도형 오류는
+화면에 사유와 함께 표시하고 기존 정책대로 개발 코스(training)로 대체합니다.
+
+헤드리스 검증: `godot --headless --fixed-fps 64 --path godot --script res://tests/lanelet2_course_test.gd`.
+메뉴 선택, 두 차선 연결부 주행, 목표·출처 표시, 재로드, 없는 원본·잘못된 ID 안내를 확인합니다.
+
+### 기존 코스 및 화면 시험
+
 Windows에서 확장을 빌드한 뒤 다음 명령으로 초기화하고 시험합니다(워크트리 최상위).
 
 ```powershell

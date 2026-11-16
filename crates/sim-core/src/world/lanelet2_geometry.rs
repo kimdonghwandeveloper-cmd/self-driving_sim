@@ -426,19 +426,34 @@ fn validate_simple_surface(id: i64, left: &[Vec2], right: &[Vec2]) -> Result<(),
 
 /// 두 닫힌 선분이 끝점 접촉을 포함해 교차하는지 검사한다.
 fn segments_intersect(a: Vec2, b: Vec2, c: Vec2, d: Vec2) -> bool {
-    let orient = |p: Vec2, q: Vec2, r: Vec2| (q - p).perp_dot(r - p);
+    let orient = orientation_sign;
     let o1 = orient(a, b, c);
     let o2 = orient(a, b, d);
     let o3 = orient(c, d, a);
     let o4 = orient(c, d, b);
-    if o1.abs() <= GEOMETRY_EPSILON_M && point_on_segment(c, a, b)
-        || o2.abs() <= GEOMETRY_EPSILON_M && point_on_segment(d, a, b)
-        || o3.abs() <= GEOMETRY_EPSILON_M && point_on_segment(a, c, d)
-        || o4.abs() <= GEOMETRY_EPSILON_M && point_on_segment(b, c, d)
+    if o1 == 0 && point_on_segment(c, a, b)
+        || o2 == 0 && point_on_segment(d, a, b)
+        || o3 == 0 && point_on_segment(a, c, d)
+        || o4 == 0 && point_on_segment(b, c, d)
     {
         return true;
     }
-    (o1 > 0.0) != (o2 > 0.0) && (o3 > 0.0) != (o4 > 0.0)
+    o1 * o2 < 0 && o3 * o4 < 0
+}
+
+/// 직선까지의 수직 거리를 미터 단위 허용오차와 비교해 방향 부호를 분류한다.
+fn orientation_sign(a: Vec2, b: Vec2, point: Vec2) -> i8 {
+    let edge = b.as_dvec2() - a.as_dvec2();
+    let relative = point.as_dvec2() - a.as_dvec2();
+    let area = edge.perp_dot(relative);
+    let tolerance = f64::from(GEOMETRY_EPSILON_M) * edge.length();
+    if area.abs() <= tolerance {
+        0
+    } else if area > 0.0 {
+        1
+    } else {
+        -1
+    }
 }
 
 /// 점이 주어진 선분의 축 정렬 경계 안에 있는지 검사한다.
@@ -489,8 +504,7 @@ fn point_in_polygon_or_boundary(point: Vec2, polygon: &[Vec2]) -> bool {
     for index in 0..polygon.len() {
         let a = polygon[index];
         let b = polygon[(index + 1) % polygon.len()];
-        if (b - a).perp_dot(point - a).abs() <= GEOMETRY_EPSILON_M && point_on_segment(point, a, b)
-        {
+        if orientation_sign(a, b, point) == 0 && point_on_segment(point, a, b) {
             return true;
         }
         if (a.y > point.y) != (b.y > point.y) {
@@ -519,6 +533,95 @@ mod tests {
     /// 시험 지도에 제안 원점을 적용해 geometry를 만든다.
     fn build_auto(map: &LaneletMap) -> Result<LaneletGeometryMap, String> {
         build_lanelet_geometry(map, suggest_lanelet_origin(map)?)
+    }
+
+    /// 합성 경계를 OSM XML로 직렬화해 파서부터 주행까지 전체 흐름을 검사한다.
+    fn drive_xml_boundaries(left: &[Vec2], right: &[Vec2]) {
+        let origin = LatLon {
+            lat: 34.0,
+            lon: 127.0,
+        };
+        let mut xml = String::from("<osm version=\"0.6\">");
+        let count = left.len();
+        for (index, point) in left.iter().chain(right).enumerate() {
+            let lat = origin.lat - f64::from(point.y) / 111_195.0;
+            let lon = origin.lon + f64::from(point.x) / (111_195.0 * origin.lat.to_radians().cos());
+            xml.push_str(&format!(
+                "<node id=\"{}\" lat=\"{lat:.12}\" lon=\"{lon:.12}\"/>",
+                index + 1
+            ));
+        }
+        for (way, offset) in [(201, 0), (202, count)] {
+            xml.push_str(&format!("<way id=\"{way}\">"));
+            for index in 0..count {
+                xml.push_str(&format!("<nd ref=\"{}\"/>", offset + index + 1));
+            }
+            xml.push_str("</way>");
+        }
+        xml.push_str("<relation id=\"301\"><member type=\"way\" ref=\"201\" role=\"left\"/><member type=\"way\" ref=\"202\" role=\"right\"/><tag k=\"type\" v=\"lanelet\"/><tag k=\"subtype\" v=\"road\"/></relation></osm>");
+        let parsed = parse_lanelet2(xml.as_bytes()).unwrap();
+        let geometry = build_lanelet_geometry(&parsed, origin).unwrap();
+        let built = super::super::lanelet2_course::build_lanelet_course(
+            &geometry,
+            "xml",
+            301,
+            301,
+            Vec::new(),
+        )
+        .unwrap();
+        for speed in [3.0, 8.0] {
+            let driven = super::super::test_drive::follow_path(&built.course, &built.guide, speed);
+            assert_eq!(driven.impacts, 0, "{driven:?}");
+            assert!(driven.remaining_m < 12.0, "{driven:?}");
+        }
+    }
+
+    /// 0~89도 직선이 투영·재표본화 후에도 자기교차로 오판되지 않는지 확인한다.
+    #[test]
+    fn rotated_straights_parse_build_and_drive() {
+        for degrees in 0..90 {
+            let angle = (degrees as f32).to_radians();
+            let forward = Vec2::new(angle.sin(), -angle.cos());
+            let right = Vec2::new(angle.cos(), angle.sin());
+            let left_points = [-2.0 * right, 60.0 * forward - 2.0 * right];
+            let right_points = [2.0 * right, 60.0 * forward + 2.0 * right];
+            drive_xml_boundaries(&left_points, &right_points);
+        }
+    }
+
+    /// 반경 30m 곡선을 OSM XML에서 생성해 실제 운동·충돌 모델로 주행한다.
+    #[test]
+    fn curved_xml_parses_builds_and_drives() {
+        let boundary = |radius: f32| {
+            (0..=24)
+                .map(|index| {
+                    let angle = index as f32 / 24.0 * std::f32::consts::FRAC_PI_2;
+                    Vec2::new(30.0 - radius * angle.cos(), -radius * angle.sin())
+                })
+                .collect::<Vec<_>>()
+        };
+        drive_xml_boundaries(&boundary(32.0), &boundary(28.0));
+    }
+
+    /// 허용오차 안의 분리 선분은 통과하고 겹침·접촉·횡단은 교차로 판정한다.
+    #[test]
+    fn intersection_tolerance_preserves_real_contacts() {
+        let a = Vec2::ZERO;
+        let b = Vec2::new(2.0, 2.0);
+        assert!(!segments_intersect(
+            a,
+            b,
+            Vec2::new(3.0, 3.000001),
+            Vec2::new(4.0, 3.999999)
+        ));
+        assert!(segments_intersect(a, b, Vec2::ONE, Vec2::splat(3.0)));
+        assert!(segments_intersect(a, b, b, Vec2::new(3.0, 1.0)));
+        assert!(segments_intersect(
+            a,
+            b,
+            Vec2::new(0.0, 2.0),
+            Vec2::new(2.0, 0.0)
+        ));
     }
 
     /// 정상 직선 lanelet을 도로 면과 명시적 중심선으로 변환한다.
