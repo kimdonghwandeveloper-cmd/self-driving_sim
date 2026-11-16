@@ -1,9 +1,8 @@
 extends Control
 ## 첨부 UI 시안 기반의 자율주행 교육 시뮬레이터 메인 메뉴 화면.
-## 코스/시나리오 선택, 조작법 안내, 환경 설정 및 프로그램 종료 기능을 제공한다.
+## 순수 Godot UI 노드로 구성되어 코스/시나리오 선택, 시뮬레이션 시작, 조작법 안내, 환경 설정 및 프로그램 종료 기능을 제공한다.
 
 const DriveScreen = preload("res://presentation/drive_screen.gd")
-const BG_TEXTURE_PATH := "res://assets/ui/main_menu_bg.png"
 
 signal drive_requested(course: String)
 signal map_requested
@@ -16,89 +15,206 @@ var course_names := PackedStringArray()
 var _controls_dialog: Control
 var _settings_dialog: Control
 
-## 메인 메뉴 화면 레이아웃과 배경, 헤더, 우측 메뉴 카드, 팝업 다이얼로그를 초기화한다.
+## 메인 메뉴 화면 레이아웃과 배경, 헤더, 좌측 브랜딩, 우측 인터랙티브 카드, 팝업 다이얼로그를 초기화한다.
 func _ready() -> void:
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	_build_background()
+	_build_procedural_background()
 	_build_header()
-	_build_main_card()
-	_build_footer_tag()
+	_build_content_layout()
 	_build_dialogs()
 	_populate_courses()
 	courses.grab_focus()
 
-## 여수 엑스포 셔틀버스 고화질 배경 이미지를 배치하고, 미존재 시 딥블루 그라데이션으로 대체한다.
-func _build_background() -> void:
-	if ResourceLoader.exists(BG_TEXTURE_PATH):
-		var bg_tex := load(BG_TEXTURE_PATH) as Texture2D
-		if bg_tex != null:
-			var tex_rect := TextureRect.new()
-			tex_rect.texture = bg_tex
-			tex_rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-			tex_rect.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
-			tex_rect.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-			tex_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
-			add_child(tex_rect)
-			return
+## 고해상도 다크 테크 그라데이션 및 그리드 액센트로 세련된 프로시저럴 배경을 구성한다.
+func _build_procedural_background() -> void:
+	# 베이스 딥 다크 블루 배경
+	var bg_rect := ColorRect.new()
+	bg_rect.color = Color("0a111a")
+	bg_rect.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	bg_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(bg_rect)
 
-	var fallback_bg := ColorRect.new()
-	fallback_bg.color = Color("0d1721")
-	fallback_bg.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	add_child(fallback_bg)
+	# 상단-하단 그라데이션 오버레이 패널
+	var grad_panel := Panel.new()
+	grad_panel.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	grad_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var grad_style := StyleBoxFlat.new()
+	grad_style.bg_color = Color(0.06, 0.12, 0.18, 0.65)
+	grad_style.border_width_bottom = 2
+	grad_style.border_color = Color(0.2, 0.4, 0.5, 0.25)
+	grad_panel.add_theme_stylebox_override("panel", grad_style)
+	add_child(grad_panel)
 
-## 좌측 상단 로고와 우측 상단 버전 표기를 구성한다.
+## 좌측 상단 시뮬레이터 로고와 우측 상단 시스템 버전 뱃지를 구성한다.
 func _build_header() -> void:
 	var top_bar := MarginContainer.new()
 	top_bar.set_anchors_and_offsets_preset(Control.PRESET_TOP_WIDE)
-	top_bar.add_theme_constant_override("margin_left", 36)
-	top_bar.add_theme_constant_override("margin_top", 28)
-	top_bar.add_theme_constant_override("margin_right", 36)
+	top_bar.add_theme_constant_override("margin_left", 48)
+	top_bar.add_theme_constant_override("margin_top", 32)
+	top_bar.add_theme_constant_override("margin_right", 48)
+	top_bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(top_bar)
 
 	var header_hbox := HBoxContainer.new()
 	header_hbox.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	header_hbox.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	top_bar.add_child(header_hbox)
 
-	var logo_vbox := VBoxContainer.new()
-	logo_vbox.add_theme_constant_override("separation", 0)
-	header_hbox.add_child(logo_vbox)
+	var logo_badge := PanelContainer.new()
+	var badge_style := StyleBoxFlat.new()
+	badge_style.bg_color = Color(0.12, 0.22, 0.30, 0.85)
+	badge_style.corner_radius_top_left = 8
+	badge_style.corner_radius_top_right = 8
+	badge_style.corner_radius_bottom_left = 8
+	badge_style.corner_radius_bottom_right = 8
+	badge_style.border_width_left = 1
+	badge_style.border_width_top = 1
+	badge_style.border_width_right = 1
+	badge_style.border_width_bottom = 1
+	badge_style.border_color = Color("4ee1d4")
+	logo_badge.add_theme_stylebox_override("panel", badge_style)
+	header_hbox.add_child(logo_badge)
 
-	var logo_title := Label.new()
-	logo_title.text = "🚗 DRIVE TRAINING"
-	logo_title.add_theme_font_size_override("font_size", 17)
-	logo_title.add_theme_color_override("font_color", Color.WHITE)
-	logo_vbox.add_child(logo_title)
+	var badge_margin := MarginContainer.new()
+	badge_margin.add_theme_constant_override("margin_left", 14)
+	badge_margin.add_theme_constant_override("margin_top", 6)
+	badge_margin.add_theme_constant_override("margin_right", 14)
+	badge_margin.add_theme_constant_override("margin_bottom", 6)
+	logo_badge.add_child(badge_margin)
 
-	var logo_sub := Label.new()
-	logo_sub.text = "    SIMULATOR"
-	logo_sub.add_theme_font_size_override("font_size", 12)
-	logo_sub.add_theme_color_override("font_color", Color("90a4ae"))
-	logo_vbox.add_child(logo_sub)
+	var logo_text := Label.new()
+	logo_text.text = "🚗 DRIVE TRAINING SIMULATOR"
+	logo_text.add_theme_font_size_override("font_size", 13)
+	logo_text.add_theme_color_override("font_color", Color("4ee1d4"))
+	badge_margin.add_child(logo_text)
 
 	var spacer := Control.new()
 	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	spacer.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	header_hbox.add_child(spacer)
 
 	var version_label := Label.new()
-	version_label.text = "v0.1.0"
-	version_label.add_theme_font_size_override("font_size", 15)
-	version_label.add_theme_color_override("font_color", Color("b0bec5"))
+	version_label.text = "v0.1.0 • Godot 4 & Rust GDExtension"
+	version_label.add_theme_font_size_override("font_size", 13)
+	version_label.add_theme_color_override("font_color", Color("78909c"))
 	header_hbox.add_child(version_label)
 
-## 우측 메인 타이틀 및 인터랙티브 액션 버튼 카드(글래스모피즘 스타일)를 구성한다.
-func _build_main_card() -> void:
-	var right_margin := MarginContainer.new()
-	right_margin.set_anchors_and_offsets_preset(Control.PRESET_RIGHT_WIDE)
-	right_margin.add_theme_constant_override("margin_right", 54)
-	right_margin.add_theme_constant_override("margin_top", 100)
-	right_margin.add_theme_constant_override("margin_bottom", 60)
-	add_child(right_margin)
+## 좌측 정보 영역과 우측 인터랙티브 메뉴 카드를 포함하는 메인 2열 레이아웃을 생성한다.
+func _build_content_layout() -> void:
+	var main_margin := MarginContainer.new()
+	main_margin.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	main_margin.add_theme_constant_override("margin_left", 56)
+	main_margin.add_theme_constant_override("margin_top", 96)
+	main_margin.add_theme_constant_override("margin_right", 56)
+	main_margin.add_theme_constant_override("margin_bottom", 40)
+	main_margin.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(main_margin)
 
+	var hbox := HBoxContainer.new()
+	hbox.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	hbox.add_theme_constant_override("separation", 48)
+	hbox.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	main_margin.add_child(hbox)
+
+	# 1. 좌측 브랜딩 및 시스템 안내 영역
+	var left_vbox := VBoxContainer.new()
+	left_vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	left_vbox.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	left_vbox.add_theme_constant_override("separation", 20)
+	left_vbox.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	hbox.add_child(left_vbox)
+
+	_build_left_branding(left_vbox)
+
+	# 2. 우측 인터랙티브 액션 카드 영역
+	var right_container := VBoxContainer.new()
+	right_container.size_flags_horizontal = Control.SIZE_SHRINK_END
+	right_container.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	right_container.custom_minimum_size = Vector2(440, 0)
+	hbox.add_child(right_container)
+
+	_build_right_menu_card(right_container)
+
+## 좌측 시뮬레이터 타이틀, 설명 및 실시간 기능 목록을 렌더링한다.
+func _build_left_branding(parent: VBoxContainer) -> void:
+	var title_accent := Label.new()
+	title_accent.text = "AUTONOMOUS VEHICLE"
+	title_accent.add_theme_font_size_override("font_size", 20)
+	title_accent.add_theme_color_override("font_color", Color("4ee1d4"))
+	parent.add_child(title_accent)
+
+	var main_title := Label.new()
+	main_title.text = "자율주행 운전 교육 시뮬레이터"
+	main_title.add_theme_font_size_override("font_size", 34)
+	main_title.add_theme_color_override("font_color", Color.WHITE)
+	parent.add_child(main_title)
+
+	var desc := Label.new()
+	desc.text = "고정밀 HD 맵(Lanelet2)과 64Hz 물리 동역학 엔진 기반의\n실시간 자율주행 차량 거동 및 안전 평가 시뮬레이션 환경"
+	desc.add_theme_font_size_override("font_size", 15)
+	desc.add_theme_color_override("font_color", Color("b0bec5"))
+	desc.add_theme_constant_override("line_spacing", 6)
+	parent.add_child(desc)
+
+	var sep := HSeparator.new()
+	sep.custom_minimum_size.x = 240
+	parent.add_child(sep)
+
+	var features_vbox := VBoxContainer.new()
+	features_vbox.add_theme_constant_override("separation", 10)
+	parent.add_child(features_vbox)
+
+	var feats := [
+		"✓  Lanelet2 실측 HD 맵 및 차선 위상 토폴로지 지원",
+		"✓  64 Hz 고정밀 차량 동역학 및 타이어 충돌 해석",
+		"✓  실시간 경로 이탈 오차(CTE) 및 정밀 주행 성과 메트릭",
+		"✓  상단 탑다운(Top-down) 3인칭 및 운전자 1인칭 시점"
+	]
+	for f in feats:
+		var f_lbl := Label.new()
+		f_lbl.text = f
+		f_lbl.add_theme_font_size_override("font_size", 14)
+		f_lbl.add_theme_color_override("font_color", Color("90a4ae"))
+		features_vbox.add_child(f_lbl)
+
+	var spacer := Control.new()
+	spacer.custom_minimum_size.y = 12
+	parent.add_child(spacer)
+
+	var loc_badge := PanelContainer.new()
+	loc_badge.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+	var loc_style := StyleBoxFlat.new()
+	loc_style.bg_color = Color(0.08, 0.15, 0.22, 0.75)
+	loc_style.corner_radius_top_left = 10
+	loc_style.corner_radius_top_right = 10
+	loc_style.corner_radius_bottom_left = 10
+	loc_style.corner_radius_bottom_right = 10
+	loc_style.border_width_left = 1
+	loc_style.border_width_top = 1
+	loc_style.border_width_right = 1
+	loc_style.border_width_bottom = 1
+	loc_style.border_color = Color(0.3, 0.5, 0.65, 0.4)
+	loc_badge.add_theme_stylebox_override("panel", loc_style)
+	parent.add_child(loc_badge)
+
+	var loc_m := MarginContainer.new()
+	loc_m.add_theme_constant_override("margin_left", 14)
+	loc_m.add_theme_constant_override("margin_top", 6)
+	loc_m.add_theme_constant_override("margin_right", 14)
+	loc_m.add_theme_constant_override("margin_bottom", 6)
+	loc_badge.add_child(loc_m)
+
+	var loc_text := Label.new()
+	loc_text.text = "📍 여수 엑스포역 공원 · 스마트 시티 테스트베드"
+	loc_text.add_theme_font_size_override("font_size", 12)
+	loc_text.add_theme_color_override("font_color", Color("cfd8dc"))
+	loc_m.add_child(loc_text)
+
+## 우측 글래스모피즘 메인 액션 카드(코스 선택 및 버튼 목록)를 구성한다.
+func _build_right_menu_card(parent: VBoxContainer) -> void:
 	var card_panel := PanelContainer.new()
-	card_panel.custom_minimum_size = Vector2(430, 0)
-	card_panel.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	var panel_style := StyleBoxFlat.new()
-	panel_style.bg_color = Color(0.06, 0.12, 0.18, 0.78)
+	panel_style.bg_color = Color(0.07, 0.13, 0.20, 0.88)
 	panel_style.corner_radius_top_left = 18
 	panel_style.corner_radius_top_right = 18
 	panel_style.corner_radius_bottom_left = 18
@@ -107,45 +223,42 @@ func _build_main_card() -> void:
 	panel_style.border_width_top = 1
 	panel_style.border_width_right = 1
 	panel_style.border_width_bottom = 1
-	panel_style.border_color = Color(0.28, 0.45, 0.55, 0.45)
+	panel_style.border_color = Color("3ed8c9")
+	panel_style.shadow_color = Color(0, 0, 0, 0.45)
+	panel_style.shadow_size = 16
+	panel_style.shadow_offset = Vector2(0, 8)
 	card_panel.add_theme_stylebox_override("panel", panel_style)
-	right_margin.add_child(card_panel)
+	parent.add_child(card_panel)
 
 	var card_margin := MarginContainer.new()
 	for side in ["left", "top", "right", "bottom"]:
-		card_margin.add_theme_constant_override("margin_" + side, 30)
+		card_margin.add_theme_constant_override("margin_" + side, 28)
 	card_panel.add_child(card_margin)
 
 	var column := VBoxContainer.new()
 	column.add_theme_constant_override("separation", 18)
 	card_margin.add_child(column)
 
-	# 타이틀 영역
-	var title_vbox := VBoxContainer.new()
-	title_vbox.add_theme_constant_override("separation", 4)
-	column.add_child(title_vbox)
+	# 카드 헤더
+	var card_title_vbox := VBoxContainer.new()
+	card_title_vbox.add_theme_constant_override("separation", 2)
+	column.add_child(card_title_vbox)
 
-	var title_accent := Label.new()
-	title_accent.text = "DRIVING"
-	title_accent.add_theme_font_size_override("font_size", 34)
-	title_accent.add_theme_color_override("font_color", Color("4ee1d4"))
-	title_vbox.add_child(title_accent)
+	var card_accent := Label.new()
+	card_accent.text = "DRIVING SIMULATOR"
+	card_accent.add_theme_font_size_override("font_size", 13)
+	card_accent.add_theme_color_override("font_color", Color("4ee1d4"))
+	card_title_vbox.add_child(card_accent)
 
-	var title_main := Label.new()
-	title_main.text = "SIMULATOR"
-	title_main.add_theme_font_size_override("font_size", 38)
-	title_main.add_theme_color_override("font_color", Color.WHITE)
-	title_vbox.add_child(title_main)
-
-	var subtitle := Label.new()
-	subtitle.text = "자율주행 차량 운전 교육 시뮬레이터"
-	subtitle.add_theme_font_size_override("font_size", 15)
-	subtitle.add_theme_color_override("font_color", Color("b0c4de"))
-	title_vbox.add_child(subtitle)
+	var card_title := Label.new()
+	card_title.text = "시뮬레이션 코스 및 설정"
+	card_title.add_theme_font_size_override("font_size", 22)
+	card_title.add_theme_color_override("font_color", Color.WHITE)
+	card_title_vbox.add_child(card_title)
 
 	# 코스 선택 드롭다운 영역
 	var course_section := VBoxContainer.new()
-	course_section.add_theme_constant_override("separation", 6)
+	course_section.add_theme_constant_override("separation", 8)
 	column.add_child(course_section)
 
 	var course_label := Label.new()
@@ -154,15 +267,16 @@ func _build_main_card() -> void:
 	course_label.add_theme_color_override("font_color", Color("7ec8e3"))
 	course_section.add_child(course_label)
 
-	courses.custom_minimum_size.y = 40
+	courses.custom_minimum_size.y = 44
 	courses.fit_to_longest_item = false
 	courses.clip_text = true
+	courses.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 	var dropdown_style := StyleBoxFlat.new()
-	dropdown_style.bg_color = Color(0.12, 0.20, 0.28, 0.85)
-	dropdown_style.corner_radius_top_left = 8
-	dropdown_style.corner_radius_top_right = 8
-	dropdown_style.corner_radius_bottom_left = 8
-	dropdown_style.corner_radius_bottom_right = 8
+	dropdown_style.bg_color = Color(0.12, 0.20, 0.30, 0.95)
+	dropdown_style.corner_radius_top_left = 10
+	dropdown_style.corner_radius_top_right = 10
+	dropdown_style.corner_radius_bottom_left = 10
+	dropdown_style.corner_radius_bottom_right = 10
 	dropdown_style.border_width_left = 1
 	dropdown_style.border_width_top = 1
 	dropdown_style.border_width_right = 1
@@ -175,7 +289,7 @@ func _build_main_card() -> void:
 
 	# 메인 액션 버튼 목록
 	var buttons_vbox := VBoxContainer.new()
-	buttons_vbox.add_theme_constant_override("separation", 12)
+	buttons_vbox.add_theme_constant_override("separation", 10)
 	column.add_child(buttons_vbox)
 
 	_create_action_button(buttons_vbox, "▶   시뮬레이션 시작", _open_course, true)
@@ -184,49 +298,14 @@ func _build_main_card() -> void:
 	_create_action_button(buttons_vbox, "⚙   환경 설정", _toggle_settings, false)
 	_create_action_button(buttons_vbox, "⏻   프로그램 종료", _request_quit, false)
 
-## 좌측 하단 여수 엑스포 교육용 시뮬레이션 위치 태그를 구성한다.
-func _build_footer_tag() -> void:
-	var bottom_margin := MarginContainer.new()
-	bottom_margin.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_LEFT)
-	bottom_margin.add_theme_constant_override("margin_left", 36)
-	bottom_margin.add_theme_constant_override("margin_bottom", 28)
-	add_child(bottom_margin)
-
-	var pill_panel := PanelContainer.new()
-	var pill_style := StyleBoxFlat.new()
-	pill_style.bg_color = Color(0.08, 0.14, 0.20, 0.75)
-	pill_style.corner_radius_top_left = 12
-	pill_style.corner_radius_top_right = 12
-	pill_style.corner_radius_bottom_left = 12
-	pill_style.corner_radius_bottom_right = 12
-	pill_style.border_width_left = 1
-	pill_style.border_width_top = 1
-	pill_style.border_width_right = 1
-	pill_style.border_width_bottom = 1
-	pill_style.border_color = Color(0.3, 0.5, 0.6, 0.4)
-	pill_panel.add_theme_stylebox_override("panel", pill_style)
-	bottom_margin.add_child(pill_panel)
-
-	var pill_margin := MarginContainer.new()
-	pill_margin.add_theme_constant_override("margin_left", 16)
-	pill_margin.add_theme_constant_override("margin_top", 8)
-	pill_margin.add_theme_constant_override("margin_right", 16)
-	pill_margin.add_theme_constant_override("margin_bottom", 8)
-	pill_panel.add_child(pill_margin)
-
-	var tag_label := Label.new()
-	tag_label.text = "📍 여수 엑스포역 공원   |   교육용 시뮬레이션"
-	tag_label.add_theme_font_size_override("font_size", 13)
-	tag_label.add_theme_color_override("font_color", Color("cfd8dc"))
-	pill_margin.add_child(tag_label)
-
-## 스타일이 적용된 액션 버튼을 생성하여 부모 노드에 추가한다.
+## 스타일 및 클릭 이벤트가 연결된 액션 버튼을 생성한다.
 func _create_action_button(parent: Control, text: String, action: Callable, is_primary: bool) -> Button:
 	var button := Button.new()
 	button.text = text
 	button.custom_minimum_size.y = 48
 	button.alignment = HORIZONTAL_ALIGNMENT_LEFT
 	button.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	button.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 
 	var style_normal := StyleBoxFlat.new()
 	style_normal.corner_radius_top_left = 12
@@ -235,39 +314,46 @@ func _create_action_button(parent: Control, text: String, action: Callable, is_p
 	style_normal.corner_radius_bottom_right = 12
 
 	if is_primary:
-		# 민트/시안 강조 스타일
+		# 메인 강조 민트/시안 버튼
 		style_normal.bg_color = Color("3ed8c9")
-		button.add_theme_color_override("font_color", Color("092027"))
-		button.add_theme_color_override("font_hover_color", Color("05161c"))
+		button.add_theme_color_override("font_color", Color("081d24"))
+		button.add_theme_color_override("font_hover_color", Color("000000"))
 		button.add_theme_color_override("font_pressed_color", Color("000000"))
 		button.add_theme_font_size_override("font_size", 16)
 	else:
-		# 다크 글래스모피즘 스타일
-		style_normal.bg_color = Color(0.14, 0.22, 0.30, 0.72)
+		# 다크 글래스모피즘 보조 버튼
+		style_normal.bg_color = Color(0.13, 0.22, 0.32, 0.75)
 		style_normal.border_width_left = 1
 		style_normal.border_width_top = 1
 		style_normal.border_width_right = 1
 		style_normal.border_width_bottom = 1
-		style_normal.border_color = Color(0.32, 0.48, 0.60, 0.4)
+		style_normal.border_color = Color(0.30, 0.46, 0.60, 0.45)
 		button.add_theme_color_override("font_color", Color.WHITE)
-		button.add_theme_color_override("font_hover_color", Color("7de8db"))
-		button.add_theme_font_size_override("font_size", 15)
+		button.add_theme_color_override("font_hover_color", Color("6ef5e5"))
+		button.add_theme_font_size_override("font_size", 14)
 
 	var style_hover := style_normal.duplicate() as StyleBoxFlat
 	if is_primary:
-		style_hover.bg_color = Color("5af2e4")
+		style_hover.bg_color = Color("58f7e7")
 	else:
-		style_hover.bg_color = Color(0.20, 0.32, 0.44, 0.88)
+		style_hover.bg_color = Color(0.20, 0.32, 0.45, 0.92)
 		style_hover.border_color = Color("4ee1d4")
+
+	var style_pressed := style_normal.duplicate() as StyleBoxFlat
+	if is_primary:
+		style_pressed.bg_color = Color("2eb8aa")
+	else:
+		style_pressed.bg_color = Color(0.10, 0.16, 0.24, 0.95)
 
 	button.add_theme_stylebox_override("normal", style_normal)
 	button.add_theme_stylebox_override("hover", style_hover)
-	button.add_theme_stylebox_override("pressed", style_hover)
+	button.add_theme_stylebox_override("pressed", style_pressed)
+	button.add_theme_stylebox_override("focus", style_hover)
 	button.pressed.connect(action)
 	parent.add_child(button)
 	return button
 
-## 조작법 안내 및 환경 설정 팝업 다이얼로그를 생성한다.
+## 조작법 안내 및 환경 설정 팝업 모달 다이얼로그를 생성한다.
 func _build_dialogs() -> void:
 	_controls_dialog = _create_modal_dialog("🎮 조작법 안내", [
 		"W  /  ↑ : 전진 가속",
@@ -298,9 +384,9 @@ func _create_modal_dialog(title_text: String, items: Array) -> Control:
 	center.mouse_filter = Control.MOUSE_FILTER_STOP
 
 	var panel := PanelContainer.new()
-	panel.custom_minimum_size = Vector2(460, 0)
+	panel.custom_minimum_size = Vector2(480, 0)
 	var style := StyleBoxFlat.new()
-	style.bg_color = Color(0.08, 0.14, 0.22, 0.94)
+	style.bg_color = Color(0.08, 0.14, 0.22, 0.96)
 	style.corner_radius_top_left = 16
 	style.corner_radius_top_right = 16
 	style.corner_radius_bottom_left = 16
@@ -315,7 +401,7 @@ func _create_modal_dialog(title_text: String, items: Array) -> Control:
 
 	var margin := MarginContainer.new()
 	for side in ["left", "top", "right", "bottom"]:
-		margin.add_theme_constant_override("margin_" + side, 24)
+		margin.add_theme_constant_override("margin_" + side, 26)
 	panel.add_child(margin)
 
 	var column := VBoxContainer.new()
@@ -336,8 +422,18 @@ func _create_modal_dialog(title_text: String, items: Array) -> Control:
 		column.add_child(lbl)
 
 	var close_btn := Button.new()
-	close_btn.text = "닫기"
-	close_btn.custom_minimum_size.y = 38
+	close_btn.text = "확인 및 닫기"
+	close_btn.custom_minimum_size.y = 42
+	close_btn.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	var btn_style := StyleBoxFlat.new()
+	btn_style.bg_color = Color("3ed8c9")
+	btn_style.corner_radius_top_left = 8
+	btn_style.corner_radius_top_right = 8
+	btn_style.corner_radius_bottom_left = 8
+	btn_style.corner_radius_bottom_right = 8
+	close_btn.add_theme_stylebox_override("normal", btn_style)
+	close_btn.add_theme_stylebox_override("hover", btn_style)
+	close_btn.add_theme_color_override("font_color", Color("081d24"))
 	close_btn.pressed.connect(func(): center.hide())
 	column.add_child(close_btn)
 
