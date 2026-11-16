@@ -185,6 +185,10 @@ pub struct SimVehicle {
     result_path: String,
     last_error: String,
     warnings: Vec<String>,
+    /// Lanelet2 코스 등 안내선 기반 주행 성과 및 CTE 평가기.
+    evaluator: Option<sim_core::world::lanelet2_course::LaneletDriveEvaluator>,
+    /// 목표 도달 시그널을 이미 발행했는지 여부.
+    goal_notified: bool,
     /// 키보드·게임패드 상태. `_ready`에서 만든다.
     devices: Option<Devices>,
     /// 직전 틱의 `read_input`. 바뀌면 수동 입력과 장치 이력을 비운다.
@@ -237,6 +241,20 @@ impl INode3D for SimVehicle {
             Ok(course) => {
                 self.session = Some(DriveSession::new(course, &config));
                 self.sync_transform();
+
+                let course_str = self.course.to_string();
+                if let Some(path) = course_str.trim().strip_prefix("map:") {
+                    let resolved = resolve_user_path(path.trim());
+                    if let Ok(lanelet_course) =
+                        sim_core::world::lanelet2_course::load_lanelet2_course_file(&resolved)
+                    {
+                        self.evaluator =
+                            sim_core::world::lanelet2_course::LaneletDriveEvaluator::from_course(
+                                &lanelet_course,
+                            )
+                            .ok();
+                    }
+                }
             }
             Err(error) => self.fail(error),
         }
@@ -290,6 +308,10 @@ impl INode3D for SimVehicle {
             Ok((report, updates, read)) => {
                 if report.course_reset {
                     self.view = ViewDirection::Front;
+                    if let Some(evaluator) = self.evaluator.as_mut() {
+                        evaluator.reset();
+                        self.goal_notified = false;
+                    }
                 }
                 if let Some(read) = read {
                     self.view = read.next_view(self.view);
@@ -297,6 +319,29 @@ impl INode3D for SimVehicle {
                 }
                 self.sync_transform();
                 self.emit_report(&report, &updates, view_before, debug_before);
+
+                // Lanelet2 코스 목표 도달 및 CTE 평가기 갱신
+                if let Some(session) = self.session.as_ref() {
+                    let motion = session.motion();
+                    let vehicle_pos = glam::Vec2::new(motion.x_m, motion.z_m);
+                    if let Some(evaluator) = self.evaluator.as_mut() {
+                        let collided = report.collided.is_some();
+                        let _cte = evaluator.update(vehicle_pos, collided);
+                        if evaluator.is_goal_reached() && !self.goal_notified {
+                            self.goal_notified = true;
+                            let metrics = evaluator.finalize(vehicle_pos, 1.0 / 64.0);
+                            self.base_mut().emit_signal(
+                                "goal_reached",
+                                &[
+                                    (metrics.elapsed_time_s as f64).to_variant(),
+                                    (metrics.avg_cte_m as f64).to_variant(),
+                                    (metrics.max_cte_m as f64).to_variant(),
+                                    (metrics.impact_count as i64).to_variant(),
+                                ],
+                            );
+                        }
+                    }
+                }
             }
             Err(payload) => {
                 self.fail(format!("내부 오류: {}", panic_message(payload.as_ref())));
@@ -372,6 +417,9 @@ impl SimVehicle {
     /// 시나리오가 끝남(`"success"`, `"time_limit"`, `"collisions"`, `"aborted"`). `scenario_phase_changed` 다음에 보낸다.
     #[signal]
     fn scenario_finished(outcome: GString);
+    /// Lanelet2 코스 등 목표 지점에 도달했을 때 주행 시간, 평균/최대 CTE, 충돌 횟수와 함께 한 번 보낸다.
+    #[signal]
+    fn goal_reached(elapsed_time_s: f64, avg_cte_m: f64, max_cte_m: f64, impacts: i64);
 
     /// 시나리오 조작(`"start"`, `"pause"`, `"resume"`, `"restart"`, `"end"`)을 바로 적용한다.
     /// 시나리오가 없거나 지금 단계에서 받을 수 없으면 `false`. 재시작은 차량을 시작 조건으로 되돌리고 시점을 전방으로 한다.
@@ -692,6 +740,35 @@ impl SimVehicle {
                 steering: steering as f32,
             });
         }
+    }
+
+    /// 현재 차량의 경로 이탈 오차(CTE, m)를 반환한다 (평가기가 없으면 0.0).
+    #[func]
+    fn current_cte(&self) -> f64 {
+        self.evaluator
+            .as_ref()
+            .map_or(0.0, |e| f64::from(e.current_cte()))
+    }
+
+    /// 목표 지점 도달 여부를 반환한다.
+    #[func]
+    fn is_goal_reached(&self) -> bool {
+        self.evaluator.as_ref().is_some_and(|e| e.is_goal_reached())
+    }
+
+    /// 현재까지의 주행 성과 평가 메트릭 한국어 요약 문자열을 반환한다.
+    #[func]
+    fn drive_evaluation_summary(&self) -> GString {
+        let Some(evaluator) = &self.evaluator else {
+            return GString::from("평가기가 활성화되지 않았습니다.");
+        };
+        let pos = self
+            .session
+            .as_ref()
+            .map(|s| glam::Vec2::new(s.motion().x_m, s.motion().z_m))
+            .unwrap_or(glam::Vec2::ZERO);
+        let metrics = evaluator.finalize(pos, 1.0 / 64.0);
+        GString::from(metrics.summary_korean().as_str())
     }
 }
 
