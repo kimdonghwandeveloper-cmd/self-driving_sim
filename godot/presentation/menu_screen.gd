@@ -4,11 +4,13 @@ extends Control
 const DriveScreen = preload("res://presentation/drive_screen.gd")
 signal drive_requested(course: String)
 signal map_requested
+signal lanelet_map_requested
 signal quit_requested
 var courses := OptionButton.new()
 var course_names := PackedStringArray()
 var start_button := Button.new()
 var map_button := Button.new()
+var lanelet_map_button := Button.new()
 var controls_button := Button.new()
 var settings_button := Button.new()
 var _controls_dialog := AcceptDialog.new()
@@ -70,6 +72,7 @@ func _ready() -> void:
 	actions.add_child(courses)
 	_button(actions, start_button, "선택한 코스 시작", _open_course, true)
 	_button(actions, map_button, "경로 선택 · 지도", _open_map)
+	_button(actions, lanelet_map_button, "Lanelet2 · 출발·도착 선택", _open_lanelet_map)
 	_button(actions, controls_button, "조작법 안내", _toggle_controls)
 	_button(actions, settings_button, "실행 환경 안내", _toggle_settings)
 	_button(actions, Button.new(), "프로그램 종료", _request_quit)
@@ -177,6 +180,11 @@ func _open_course() -> void:
 ## 기존 OSM 경로 선택 화면 전환을 요청한다.
 func _open_map() -> void:
 	map_requested.emit()
+
+
+## Lanelet2 전체 지도에서 차선 단위 출발·도착을 고르는 화면을 요청한다.
+func _open_lanelet_map() -> void:
+	lanelet_map_requested.emit()
 
 
 ## 상위 화면 관리자에게 종료를 요청한다.

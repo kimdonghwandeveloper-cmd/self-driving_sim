@@ -4,6 +4,7 @@ extends Node3D
 const Drive = preload("res://presentation/drive_screen.tscn")
 const Map = preload("res://presentation/map_screen.tscn")
 const Menu = preload("res://presentation/menu_screen.tscn")
+const LaneletMap = preload("res://presentation/lanelet_map_screen.gd")
 var screen: Node
 var back_button := Button.new()
 
@@ -34,6 +35,7 @@ func _show_menu() -> void:
 	add_child(screen)
 	screen.drive_requested.connect(_show_drive)
 	screen.map_requested.connect(_show_map)
+	screen.lanelet_map_requested.connect(_show_lanelet_map)
 	screen.quit_requested.connect(_quit)
 
 ## 코스 화면을 새 차량 세션으로 연다.
@@ -50,6 +52,14 @@ func _show_map() -> void:
 	back_button.show()
 	screen = Map.instantiate()
 	add_child(screen)
+
+## Lanelet2 경로 선택 화면에서 검증된 코스만 기존 주행 화면으로 넘긴다.
+func _show_lanelet_map() -> void:
+	_clear_screen()
+	back_button.show()
+	screen = LaneletMap.new()
+	add_child(screen)
+	screen.drive_requested.connect(_show_drive)
 
 ## Esc를 눌렀을 때 현재 화면을 버리고 메뉴로 돌아간다.
 func _unhandled_key_input(event: InputEvent) -> void:

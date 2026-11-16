@@ -11,6 +11,7 @@ pub mod korea_data;
 pub mod lanelet2;
 pub mod lanelet2_course;
 pub mod lanelet2_geometry;
+pub mod lanelet2_selection;
 pub mod map;
 pub mod map_fetch;
 pub mod map_patch;
