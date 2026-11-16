@@ -100,7 +100,7 @@ func _open(index: int) -> void:
 		status.text = "지도를 열지 못했습니다: " + str(result.error)
 		return
 	canvas.configure(result.lanes)
-	notices.text = "\n".join(result.notices)
+	notices.text = "원본 지도·코스 안내 (선택 경로와 다를 수 있음)\n" + "\n".join(result.notices)
 	status.text = "차선 내부를 클릭하세요. 차선 단위 선택이며 정확한 클릭 지점에서 출발하지 않습니다."
 
 ## 출발 차선을 다시 고를 때 도착 선택은 유지하되 경로를 즉시 재검증한다.

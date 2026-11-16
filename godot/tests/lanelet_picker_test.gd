@@ -34,6 +34,7 @@ func _run() -> void:
 	var intersection: int = screen.paths.find("assets/maps/lanelet2-real-demo/course.toml")
 	_check(intersection >= 0, "교차로 지도 없음")
 	if intersection >= 0:
+		screen.maps.select(intersection)
 		screen._open(intersection)
 		for pair in [[1001, 1006], [1002, 1007]]:
 			screen._reset()
