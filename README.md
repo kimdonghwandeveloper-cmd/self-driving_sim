@@ -293,6 +293,26 @@ cargo run --locked -p sim-tools -- --compare-overpass testdata/yeosu-expo/graph-
 cargo run --locked -p sim-tools -- --check-result logs/scenarios/<세션 ID>.json
 ```
 
+## 전국 OSM에서 짧은 구간 선택·주행
+
+메뉴의 **경로 선택 · 지도**에서 도시 바로가기를 고르거나 `위도,경도`를 입력해 **좌표 지역 열기**를 누릅니다.
+열린 1.5 km 지역의 도로 위를 출발 → 도착 순서로 클릭하고 **선택 경로로 주행**을 누르면,
+선택 경로가 새 파일로 저장되고 주행 화면으로 바로 연결됩니다. 저장 경로는 메인 메뉴에서 다시 열 수 있습니다.
+다른 지역을 열려면 **점 모두 삭제**를 먼저 누릅니다. 전국은 지역을 고를 수 있는 범위이며 한 번에 전국 장거리 코스를 만드는 기능은 아닙니다.
+OSM의 도로 누락·진입 제한·연결 상태나 생성할 수 없는 급회전 등에 따라 경로가 거부될 수 있습니다.
+도로 폭과 3D 노면은 OSM 정보를 바탕으로 생성되며 실제 차선·건물 전체를 정밀 재현하지 않습니다.
+
+전국 도로 자료 `data/korea/`는 Git에 포함되지 않습니다. 이 PC처럼 다른 워크트리에 이미 자료가 있다면
+새로 내려받지 않고 아래 명령으로 SHA-256을 검증해 복사할 수 있습니다. 기존 자료는 덮어쓰지 않습니다.
+자료가 없다면 위의 **전국 지도 자료 만들기** 절을 따릅니다. 배경 타일과 전국 이름 검색은 네트워크를 쓰지만,
+자료를 준비한 뒤 도시 바로가기·직접 좌표·도로 표시·경로 생성·주행은 오프라인에서도 사용할 수 있습니다.
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/prepare-korea-data.ps1 -SourceData ../self-driving_sim-develop/data/korea
+# 다른 대상 워크트리에 준비할 때:
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/prepare-korea-data.ps1 -SourceData ../self-driving_sim-develop/data/korea -DestinationRepo ../self-driving_sim-test
+```
+
 ## Lanelet2 지도에서 경로 선택
 
 메뉴의 **Lanelet2 · 출발·도착 선택**에서 등록된 Lanelet2 지도를 엽니다.
@@ -363,6 +383,9 @@ cargo.exe build --locked -p sim-godot
   & '<Godot 콘솔 실행 파일>' --headless --fixed-fps 64 --path godot --script res://tests/ui_interaction_test.gd
   & '<Godot 콘솔 실행 파일>' --headless --fixed-fps 64 --path godot --script res://tests/compact_hud_test.gd
 & '<Godot 콘솔 실행 파일>' --headless --fixed-fps 64 --path godot --script res://tests/lanelet_picker_test.gd
+& '<Godot 콘솔 실행 파일>' --headless --fixed-fps 64 --path godot --script res://tests/osm_route_drive_test.gd
+# 전국 자료 준비 후 8개 도시의 실제 자료에서 짧은 경로 생성·저장·차량 이동까지 확인:
+& '<Godot 콘솔 실행 파일>' --headless --fixed-fps 64 --path godot --script res://tests/osm_route_drive_test.gd -- --full-data
 & '<Godot 콘솔 실행 파일>' --headless --fixed-fps 64 --path godot --script res://tests/route_save_test.gd
 & '<Godot 콘솔 실행 파일>' --headless --fixed-fps 64 --path godot --script res://tests/place_pick_test.gd
 & '<Godot 콘솔 실행 파일>' --headless --fixed-fps 64 --path godot --script res://tests/region_open_test.gd

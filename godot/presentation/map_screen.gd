@@ -1,6 +1,23 @@
 extends Node2D
 ## 네트워크 없는 지도 화면 뼈대. Rust 데이터가 오면 표시 레이어만 갱신한다.
 
+signal drive_requested(course: String)
+const CITY_PRESETS := {
+	"여수 엑스포": Vector2(34.7526, 127.7471),
+	"서울 강남": Vector2(37.4979, 127.0276),
+	"부산 시청": Vector2(35.1796, 129.0756),
+	"대구 시청": Vector2(35.8714, 128.6014),
+	"인천 시청": Vector2(37.4563, 126.7052),
+	"광주 시청": Vector2(35.1595, 126.8526),
+	"대전 시청": Vector2(36.3504, 127.3845),
+	"제주 시청": Vector2(33.4996, 126.5312),
+}
+var drive_button := Button.new()
+var cities := OptionButton.new()
+var coordinates := LineEdit.new()
+var toolbar := VBoxContainer.new()
+var toolbar_panel := PanelContainer.new()
+
 var camera := Camera2D.new()
 var roads := PackedVector2Array()
 var usable := PackedByteArray()
@@ -89,10 +106,12 @@ func _ready() -> void:
 	get_viewport().size_changed.connect(queue_redraw)
 	var canvas := CanvasLayer.new()
 	add_child(canvas)
-	status.position = Vector2(24, 152)
+	status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	status.max_lines_visible = 5
 	status.text = "지도 미리보기 · Rust 지도 서비스 미연결\n우클릭 끌기: 이동 / 휠: 확대·축소\n지역 열기·점 편집·경로 계산·저장은 연결 대기 중입니다.\n회색 칸은 실제 지도 타일이 아닙니다."
-	canvas.add_child(status)
 	_services(canvas)
+	get_viewport().size_changed.connect(_layout_toolbar)
+	_layout_toolbar()
 	_fit_country()
 	var attribution := LinkButton.new()
 	attribution.text = "© OpenStreetMap contributors"
@@ -162,7 +181,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		if event.button_index == MOUSE_BUTTON_RIGHT:
 			dragging = event.pressed
 		elif event.pressed and event.button_index == MOUSE_BUTTON_LEFT and picker != null:
-			var at := get_global_mouse_position()
+			var at: Vector2 = get_canvas_transform().affine_inverse() * event.position
 			if event.shift_pressed:
 				picker.call("remove_near", at, 12.0 / camera.zoom.x)
 			elif _ensure_region(at):
@@ -255,9 +274,17 @@ func _services(canvas: CanvasLayer) -> void:
 		tiles.set("offline", offline)
 		if tiles.has_method("country_outline"):
 			_set_country(tiles.call("country_outline"), tiles.call("country_bounds"))
-	var controls := HBoxContainer.new()
-	controls.position = Vector2(24, 64)
-	canvas.add_child(controls)
+	toolbar_panel.position = Vector2(16, 60)
+	var panel_style := StyleBoxFlat.new()
+	panel_style.bg_color = Color(0.04, 0.08, 0.13, 0.94)
+	panel_style.set_content_margin_all(8)
+	panel_style.set_corner_radius_all(8)
+	toolbar_panel.add_theme_stylebox_override("panel", panel_style)
+	canvas.add_child(toolbar_panel)
+	toolbar.add_theme_constant_override("separation", 8)
+	toolbar_panel.add_child(toolbar)
+	var controls := HFlowContainer.new()
+	toolbar.add_child(controls)
 	var undo := Button.new()
 	undo.text = "마지막 점 삭제"
 	undo.pressed.connect(_remove_last)
@@ -274,9 +301,13 @@ func _services(canvas: CanvasLayer) -> void:
 	save_button.text = "경로 저장"
 	save_button.pressed.connect(_save_route)
 	controls.add_child(save_button)
-	var navigation := HBoxContainer.new()
-	navigation.position = Vector2(24, 108)
-	canvas.add_child(navigation)
+	drive_button.text = "선택 경로로 주행"
+	drive_button.focus_mode = Control.FOCUS_NONE
+	drive_button.disabled = true
+	drive_button.pressed.connect(_drive_route)
+	controls.add_child(drive_button)
+	var navigation := HFlowContainer.new()
+	toolbar.add_child(navigation)
 	for item in [["전체 지도", _fit_country], ["선택 지역", _fit_region], ["경로", _fit_route], ["스냅샷 파일 열기", _open_snapshot], ["스냅샷 폴더 열기", _open_snapshot_folder]]:
 		var button := Button.new()
 		button.text = item[0]
@@ -307,6 +338,68 @@ func _services(canvas: CanvasLayer) -> void:
 	add_child(snapshot_folder_dialog)
 	for button in [undo, clear]:
 		button.disabled = picker == null
+	_build_region_controls()
+	toolbar.add_child(status)
+
+## 창 크기에 맞춰 도구 줄을 줄바꿈하고 지도를 가리는 안내 높이를 제한한다.
+func _layout_toolbar() -> void:
+	toolbar_panel.size.x = maxf(300.0, get_viewport_rect().size.x - 32.0)
+
+## 온라인 검색 없이도 전국 지역으로 이동할 수 있도록 도시·직접 좌표 입력을 제공한다.
+func _build_region_controls() -> void:
+	var row := HFlowContainer.new()
+	toolbar.add_child(row)
+	cities.add_item("지역 바로가기")
+	for title in CITY_PRESETS:
+		cities.add_item(title)
+	cities.item_selected.connect(_choose_city)
+	row.add_child(cities)
+	coordinates.placeholder_text = "위도,경도 (예: 34.7526,127.7471)"
+	coordinates.custom_minimum_size.x = 290
+	coordinates.text_submitted.connect(_jump_coordinates)
+	row.add_child(coordinates)
+	var jump := Button.new()
+	jump.text = "좌표 지역 열기"
+	jump.pressed.connect(_jump_coordinate_button)
+	row.add_child(jump)
+	var label := Label.new()
+	label.text = "전국 OSM · 한 지역 1.5 km 안에서 선택"
+	row.add_child(label)
+
+## 이름으로 선택한 도시 좌표를 입력 칸에 넣고 해당 지역을 연다.
+func _choose_city(index: int) -> void:
+	if index <= 0:
+		return
+	var point: Vector2 = CITY_PRESETS[cities.get_item_text(index)]
+	coordinates.text = "%.6f,%.6f" % [point.x, point.y]
+	_jump_coordinates(coordinates.text)
+
+## 버튼과 Enter가 같은 좌표 검사·지역 열기 경로를 사용하게 한다.
+func _jump_coordinate_button() -> void:
+	_jump_coordinates(coordinates.text)
+
+## 좌표를 검사하고 선택 중인 점을 보존하며 전국 자료의 해당 지역으로 이동한다.
+func _jump_coordinates(text: String) -> void:
+	if picker == null or not data_ok:
+		feedback = "전국 OSM 자료를 먼저 준비하세요. " + data_error
+		return
+	var values := text.split(",")
+	if values.size() != 2 or not values[0].strip_edges().is_valid_float() or not values[1].strip_edges().is_valid_float():
+		feedback = "좌표는 위도,경도 순서의 숫자로 입력하세요."
+		return
+	var lat := values[0].to_float()
+	var lon := values[1].to_float()
+	if not is_finite(lat) or not is_finite(lon) or absf(lat) >= 85.0 or absf(lon) > 180.0:
+		feedback = "올바른 위도·경도 범위를 입력하세요."
+		return
+	if not points.is_empty():
+		feedback = "선택한 점을 보존했습니다. 다른 지역을 열려면 '점 모두 삭제'를 먼저 누르세요."
+		return
+	var view: Vector2 = picker.call("latlon_to_view", PackedFloat64Array([lat, lon]))
+	if _open_region_at(view):
+		_fit_region()
+		coordinates.release_focus()
+		feedback = "지역을 열었습니다. 도로 위 출발 → 도착 순서로 클릭한 뒤 '선택 경로로 주행'을 누르세요."
 
 ## 전국 지도 자료가 있는지 Rust에 묻고 결과를 기억한다. 없으면 만드는 방법을 안내에 남긴다.
 func _check_data() -> void:
@@ -471,6 +564,21 @@ func _save_route() -> void:
 	var result: Dictionary = picker.call("save", route_name.text, overwrite.button_pressed)
 	feedback = "저장: " + str(result.path) if result.get("ok", false) else str(result.error)
 
+## 현재 경로를 다시 확인하고 새 이름으로 저장한 뒤 같은 경로를 주행 화면에 넘긴다.
+func _drive_route() -> void:
+	if picker == null:
+		return
+	var route: Dictionary = picker.call("route")
+	if not route.get("ok", false):
+		feedback = "주행 가능한 출발·도착 경로를 먼저 선택하세요. " + str(route.get("error", ""))
+		return
+	var name := "osm-drive-%d-%d" % [OS.get_process_id(), Time.get_ticks_usec()]
+	var saved: Dictionary = picker.call("save", name, false)
+	if not saved.get("ok", false):
+		feedback = "주행 경로 저장 실패: " + str(saved.error)
+		return
+	drive_requested.emit("map:cache/routes/%s.toml" % name)
+
 ## Rust에서 열린 지역 범위·도로 선분·사용 가능 여부·건물 윤곽·점·경로선을 받아 그리기 자료를 바꾼다.
 ## 건물 윤곽이 바뀌었을 때만 면을 칠할 수 있는지 다시 판정한다(매 프레임 판정하지 않는다).
 func _refresh_route() -> void:
@@ -491,13 +599,23 @@ func _process(delta: float) -> void:
 		_auto_open(delta)
 		var result: Dictionary = picker.call("route")
 		save_button.disabled = not bool(result.ok)
+		drive_button.disabled = not bool(result.ok)
 		var hint := "" if data_ok else "\n" + data_error
-		var text := "우클릭: 이동 / 휠: 확대(멈추면 그 지역을 엽니다) / 클릭: 점 추가(건물을 누르면 그 건물) / Shift+클릭: 점 삭제\n" + "\n".join(picker.call("status_lines")) + "\n" + feedback + hint
+		var route_hint := "도로 위 출발 → 도착 순서로 클릭하세요."
+		if result.ok:
+			route_hint = "선택 경로 %.0f m · '선택 경로로 주행'으로 시작" % float(result.length_m)
+		elif points.size() >= 2:
+			route_hint = "경로 생성 실패: " + str(result.error)
+		elif points.size() == 1:
+			route_hint = "출발 선택됨 · 같은 지역 안의 도착 도로를 클릭하세요."
+		var text := (feedback + "\n" if not feedback.is_empty() else "") + (hint + "\n" if not data_ok else "전국 OSM 자료 준비됨 · 한 지역 1.5 km 내 짧은 주행\n") + route_hint + "\n우클릭: 이동 / 휠: 확대 / 도로 클릭: 점 추가 / Shift+클릭: 점 삭제\n" + "\n".join(picker.call("status_lines"))
 		# 글자가 바뀔 때만 넣는다(같은 글자를 매 프레임 넣으면 글자 배치를 다시 한다).
 		if status.text != text:
 			status.text = text
+			status.tooltip_text = text
 	else:
 		save_button.disabled = true
+		drive_button.disabled = true
 	if tiles != null:
 		_update_tiles()
 	if camera.zoom.x != overlay_zoom:
@@ -574,6 +692,10 @@ func _fit_rect(bounds: Rect2) -> void:
 	camera.zoom = Vector2.ONE * zoom_value
 	camera.position = bounds.get_center() - Vector2(0, 150.0 / zoom_value)
 	_clamp_camera()
+	# 도구 줄을 피하려고 옮긴 카메라 위치를 새 지역 요청으로 오해하지 않는다. 사용자가 움직이면 자동 열기가 다시 시작된다.
+	last_camera = camera.position
+	last_zoom = camera.zoom.x
+	still_time = AUTO_OPEN_DELAY_S
 
 ## 로컬 스냅샷(graph*.osm.json) 파일 선택 창을 연다.
 func _open_snapshot() -> void:
