@@ -49,6 +49,8 @@ func _ready() -> void:
 			var label := "지도: " + str(file.label)
 			if str(file.course) == "map:assets/maps/lanelet2-demo/course.toml":
 				label = "Lanelet2 예제 · 합성 직선 (실제 지도 아님)"
+			elif str(file.course) == "map:assets/maps/lanelet2-real-demo/course.toml":
+				label = "Lanelet2 실제 도로 · 여수엑스포 교차로 HD 맵"
 			_add_course(label, str(file.course))
 	if ClassDB.class_exists("SimScenario"):
 		for file in ClassDB.class_call_static("SimScenario", "scenario_files"):

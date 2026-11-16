@@ -118,8 +118,55 @@ fn main() -> ExitCode {
             }
         };
     }
+    if args
+        .iter()
+        .any(|argument| argument == "--validate-lanelet2" || argument == "validate-lanelet2")
+    {
+        let file = value_after("--validate-lanelet2").or_else(|| value_after("validate-lanelet2"));
+        return match file {
+            Some(file) => validate_lanelet2_command(file),
+            None => {
+                eprintln!("--validate-lanelet2 needs a Lanelet2 course TOML file");
+                ExitCode::FAILURE
+            }
+        };
+    }
     eprintln!("{USAGE}");
     ExitCode::FAILURE
+}
+
+/// Lanelet2 코스 설정 파일 및 연결된 .osm 파일의 유효성, 기하 생성, 안내선 연결 상태를 오프라인으로 검증하고 요약을 출력한다.
+fn validate_lanelet2_command(file: &str) -> ExitCode {
+    let path = Path::new(file);
+    let started = std::time::Instant::now();
+    match sim_core::world::lanelet2_course::load_lanelet2_course_file(path) {
+        Ok(lanelet_course) => {
+            let elapsed = started.elapsed().as_secs_f64();
+            println!("Lanelet2 코스 유효성 검증 성공: {}", path.display());
+            println!("  코스 이름: {}", lanelet_course.course.name);
+            println!(
+                "  경로 단계(lanelet 수): {}",
+                lanelet_course.traversal.len()
+            );
+            println!(
+                "  안내선 길이: {:.1}m (정점 {}개)",
+                sim_core::world::road_geom::polyline_length(&lanelet_course.guide),
+                lanelet_course.guide.len()
+            );
+            println!("  도로 면(Strip): {}개", lanelet_course.course.strips.len());
+            println!(
+                "  충돌체(Collider): {}개",
+                lanelet_course.course.colliders.len()
+            );
+            println!("  검증 소요 시간: {:.3}s", elapsed);
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            eprintln!("Lanelet2 코스 검증 실패: {}", path.display());
+            eprintln!("  사유: {error}");
+            ExitCode::FAILURE
+        }
+    }
 }
 
 /// 결과 파일을 다시 돌려 같은 결과·사건 기록이 나오는지 확인하고 출력한다(Phase 5-5).
@@ -180,6 +227,7 @@ const USAGE: &str = "usage: sim-tools --fetch-map <south,west,north,east> [--off
        sim-tools --build-korea-data <pbf> [--out <folder>] [--clip <south,west,north,east>]
        sim-tools --korea-region <lat,lon>
        sim-tools --osm-anchors <lat,lon[;lat,lon...]> [--radius <m>]
+       sim-tools --validate-lanelet2 <course toml>
        sim-tools --check-result <scenario result json>";
 
 /// `--osm-anchors` 기본 조사 반경(m). 보정 접속점 허용 오차 상한(20 m)보다 넓게 본다.
@@ -637,5 +685,22 @@ mod tests {
         assert_eq!(utc_date_time(0), "1970-01-01 00:00:00");
         assert_eq!(utc_date_time(951_782_400), "2000-02-29 00:00:00");
         assert_eq!(utc_date_time(1_798_761_599), "2026-12-31 23:59:59");
+    }
+
+    /// Lanelet2 코스 오프라인 검증 CLI 명령의 정상 동작 및 오류 반환을 검증한다.
+    #[test]
+    fn validate_lanelet2_command_checks_course() {
+        let root = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."));
+        let valid_course = root.join("assets/maps/lanelet2-real-demo/course.toml");
+        assert_eq!(
+            validate_lanelet2_command(valid_course.to_str().unwrap()),
+            ExitCode::SUCCESS
+        );
+
+        let invalid_course = root.join("assets/maps/non-existent.toml");
+        assert_eq!(
+            validate_lanelet2_command(invalid_course.to_str().unwrap()),
+            ExitCode::FAILURE
+        );
     }
 }
