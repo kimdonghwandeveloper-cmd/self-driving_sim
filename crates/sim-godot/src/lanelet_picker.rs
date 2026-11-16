@@ -29,8 +29,8 @@ impl SimLaneletPicker {
         match LaneletSelection::open(&resolve_user_path(&path.to_string())) {
             Ok(model) => {
                 let lanes: VarArray = model.geometry.lanelets.values().map(|lane| {
-                    vdict! { "id" => lane.id, "left" => points(&lane.surface.left),
-                        "right" => points(&lane.surface.right), "center" => points(&lane.centerline) }.to_variant()
+                    vdict! { "id" => lane.id, "left" => &points(&lane.surface.left),
+                        "right" => &points(&lane.surface.right), "center" => &points(&lane.centerline) }.to_variant()
                 }).collect();
                 let mut notices = model.file.notices.clone();
                 notices.extend(model.file.attribution.iter().cloned());
@@ -38,7 +38,7 @@ impl SimLaneletPicker {
                 notices.extend(model.geometry.warnings.iter().cloned());
                 let notices: PackedStringArray =
                     notices.iter().map(|s| GString::from(s.as_str())).collect();
-                let result = vdict! { "ok" => true, "lanes" => lanes, "notices" => notices };
+                let result = vdict! { "ok" => true, "lanes" => &lanes, "notices" => &notices };
                 self.model = Some(model);
                 result
             }
@@ -57,7 +57,7 @@ impl SimLaneletPicker {
                 let ids: PackedInt64Array = course.traversal.iter().map(|s| s.id).collect();
                 let start = course.course.start;
                 let goal = course.course.goal.expect("validated course has goal");
-                vdict! { "ok" => true, "ids" => ids, "guide" => points(&course.guide),
+                vdict! { "ok" => true, "ids" => &ids, "guide" => &points(&course.guide),
                 "start" => Vector2::new(start.x_m, start.z_m), "goal" => Vector2::new(goal.x_m, goal.z_m) }
             }
             Err(error) => failure(&error),
