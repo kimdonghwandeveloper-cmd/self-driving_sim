@@ -348,6 +348,7 @@ cargo.exe build --locked -p sim-godot
 & '<Godot 콘솔 실행 파일>' --headless --fixed-fps 64 --path godot --script res://tests/drive_replay_test.gd
 & '<Godot 콘솔 실행 파일>' --headless --fixed-fps 64 --path godot --script res://tests/map_course_test.gd
 & '<Godot 콘솔 실행 파일>' --headless --fixed-fps 64 --path godot --script res://tests/menu_flow_test.gd
+  & '<Godot 콘솔 실행 파일>' --headless --fixed-fps 64 --path godot --script res://tests/ui_interaction_test.gd
 & '<Godot 콘솔 실행 파일>' --headless --fixed-fps 64 --path godot --script res://tests/route_save_test.gd
 & '<Godot 콘솔 실행 파일>' --headless --fixed-fps 64 --path godot --script res://tests/place_pick_test.gd
 & '<Godot 콘솔 실행 파일>' --headless --fixed-fps 64 --path godot --script res://tests/region_open_test.gd

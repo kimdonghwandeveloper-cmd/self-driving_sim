@@ -491,6 +491,9 @@ func _fail(message: String) -> void:
 	if message.is_empty():
 		message = "차량을 준비하지 못했습니다(사유 없음)."
 	failure = message
+	# 초기화 실패 때 트리에 붙지 않은 카메라 받침도 해제한다.
+	if is_instance_valid(camera_mount) and camera_mount.get_parent() == null:
+		camera_mount.free()
 	if is_instance_valid(vehicle):
 		vehicle.set_physics_process(false)
 		vehicle.hide()
