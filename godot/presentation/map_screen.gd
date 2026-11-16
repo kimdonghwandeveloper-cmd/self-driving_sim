@@ -180,7 +180,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		if event.button_index == MOUSE_BUTTON_RIGHT:
 			dragging = event.pressed
 		elif event.pressed and event.button_index == MOUSE_BUTTON_LEFT and picker != null:
-			var at := get_global_mouse_position()
+			var at := get_canvas_transform().affine_inverse() * event.position
 			if event.shift_pressed:
 				picker.call("remove_near", at, 12.0 / camera.zoom.x)
 			elif _ensure_region(at):
