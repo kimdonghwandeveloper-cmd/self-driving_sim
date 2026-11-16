@@ -25,7 +25,7 @@ func _run() -> void:
 		root.size = window_size
 		for frame in 4:
 			await process_frame
-		for button in [menu.start_button, menu.map_button, menu.controls_button, menu.settings_button, menu.courses]:
+		for button in [menu.start_button, menu.map_button, menu.lanelet_map_button, menu.controls_button, menu.settings_button, menu.courses]:
 			_check(menu.get_global_rect().encloses(button.get_global_rect()), "메뉴 버튼이 화면 밖: " + button.text)
 	root.size = Vector2i(1280, 720)
 	await process_frame

@@ -40,6 +40,7 @@ func _run() -> void:
 			screen._pick(pair[0])
 			screen._pick(pair[1])
 			_check(not screen.start_button.disabled, "교차로 직진·우회전 선택 실패")
+		await _capture("intersection-picker")
 		screen._reset()
 		screen._pick(1001)
 		screen._pick(1007)
@@ -48,6 +49,12 @@ func _run() -> void:
 	screen._open(index)
 	for frame in 4:
 		await process_frame
+	for window_size in [Vector2i(800, 600), Vector2i(1280, 720)]:
+		root.size = window_size
+		for frame in 4:
+			await process_frame
+		_check(screen.get_global_rect().encloses(screen.canvas.get_global_rect()), "지도 영역이 창 밖")
+		_check(screen.get_global_rect().encloses(screen.start_button.get_global_rect()), "주행 버튼이 창 밖")
 	_check(screen.canvas.lanes.size() == 2, "전체 차선 2개 표시 실패")
 	_check(screen.start_button.disabled, "선택 전 주행 허용")
 	await _click_lane(screen, 301)
@@ -56,10 +63,7 @@ func _run() -> void:
 	_check(not screen.start_button.disabled and screen.canvas.preview.get("ok", false), "경로 미리보기 실패")
 	_check(screen.canvas.preview.get("ids") == PackedInt64Array([301, 302]), "다른 경로를 표시함")
 	_check(screen.notices.text.contains("합성") and screen.notices.text.contains("self-driving_sim"), "출처 누락")
-	if not capture_dir.is_empty():
-		await RenderingServer.frame_post_draw
-		DirAccess.make_dir_recursive_absolute(capture_dir)
-		root.get_texture().get_image().save_png(capture_dir.path_join("lanelet-picker.png"))
+	await _capture("lanelet-picker")
 	# 유효한 미리보기 이후 역방향 선택을 넣어 이전 경로로 시작할 수 없는지 본다.
 	screen._select_start_mode()
 	await _click_lane(screen, 302)
@@ -119,6 +123,14 @@ func _click(point: Vector2) -> void:
 		event.pressed = pressed
 		root.push_input(event)
 		await process_frame
+
+## 렌더링 시험에서 지도 전체와 출처 영역을 함께 캡처한다.
+func _capture(label: String) -> void:
+	if capture_dir.is_empty():
+		return
+	await RenderingServer.frame_post_draw
+	DirAccess.make_dir_recursive_absolute(capture_dir)
+	_check(root.get_texture().get_image().save_png(capture_dir.path_join(label + ".png")) == OK, "지도 캡처 실패")
 
 ## 실패를 수집해 한 번에 출력한다.
 func _check(condition: bool, message: String) -> void:
