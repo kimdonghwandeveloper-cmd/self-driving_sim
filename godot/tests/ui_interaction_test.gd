@@ -70,15 +70,17 @@ func _run() -> void:
 	drive.vehicle.set("read_input", false)
 	drive.vehicle.call("send_command", "engine_toggle")
 	drive.vehicle.call("send_command", "gear_drive")
-	drive.vehicle.call("set_manual_input", 0.4, 0.0, 0.0)
 	for tick in 96:
+		drive.vehicle.call("set_manual_input", 0.4, 0.0, 0.0)
 		await physics_frame
 	for frame in 2:
 		await process_frame
 	values = drive.vehicle.call("evaluation_metrics")
 	_check(float(values.distance_m) > 0.1, "실제 주행 거리 갱신 없음")
 	_check(drive.dashboard.speed.text != "0 km/h" and drive.dashboard.gears.text == "기어 D", "실제 속도·기어 갱신 없음")
-	_check(drive.dashboard.metrics.text.contains("주행 거리 %.1f m" % values.distance_m), "계기판 거리와 Rust 측정값 불일치")
+	var displayed_distance: float = drive.dashboard.metrics.text.split("주행 거리 ")[1].split(" m")[0].to_float()
+	# UI와 물리 틱의 한 프레임 차이 및 소수 첫째 자리 반올림을 허용한다.
+	_check(absf(displayed_distance - float(values.distance_m)) < 0.2, "계기판 거리와 Rust 측정값 불일치")
 	main.call("_show_drive", "scenario:assets/scenarios/ui-test-missing.toml")
 	await process_frame
 	drive = main.screen
