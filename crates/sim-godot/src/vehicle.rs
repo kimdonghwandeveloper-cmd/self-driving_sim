@@ -750,6 +750,24 @@ impl SimVehicle {
             .map_or(0.0, |e| f64::from(e.current_cte()))
     }
 
+    /// 계기판용 Lanelet2 평가값을 반환한다. 평가기가 없는 코스는 active=false로 구분한다.
+    #[func]
+    fn evaluation_metrics(&self) -> VarDictionary {
+        let (Some(evaluator), Some(session)) = (&self.evaluator, &self.session) else {
+            return vdict! { "active" => false };
+        };
+        let position = glam::Vec2::new(session.motion().x_m, session.motion().z_m);
+        let values = evaluator.finalize(position, 1.0 / 64.0);
+        vdict! {
+            "active" => true,
+            "distance_m" => f64::from(values.distance_m),
+            "impact_count" => values.impact_count as i64,
+            "cte_m" => f64::from(evaluator.current_cte()),
+            "remaining_m" => f64::from(values.remaining_to_goal_m),
+            "goal_reached" => values.goal_reached,
+        }
+    }
+
     /// 목표 지점 도달 여부를 반환한다.
     #[func]
     fn is_goal_reached(&self) -> bool {
