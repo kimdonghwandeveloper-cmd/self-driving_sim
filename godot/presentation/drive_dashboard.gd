@@ -102,6 +102,9 @@ func _ready() -> void:
 	add_child(attribution)
 	attribution.add_theme_font_size_override("font_size", 10)
 	attribution.add_theme_color_override("font_color", Color("c1ccd5"))
+	attribution.add_theme_color_override("font_shadow_color", Color.BLACK)
+	attribution.add_theme_constant_override("shadow_offset_x", 1)
+	attribution.add_theme_constant_override("shadow_offset_y", 1)
 	attribution.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	attribution.clip_text = true
 	resized.connect(_layout)
@@ -185,7 +188,7 @@ func update_state(kmh: float, gear: String, description: String, values: Diction
 		metrics.text += "경로 평가 미지원 코스\nCTE·누적 거리·충돌 합계: —"
 
 
-## 초기화 실패는 접힌 창에 숨기지 않고 고정 경고와 상세 정보로 보여 준다.
+## 명령 거부 시그널에서 차량 상태를 재조회하지 않고 경고만 즉시 표시한다.
 func show_alert(message: String) -> void:
 	alert.text = message
 	state.text = message
