@@ -124,8 +124,6 @@ function Invoke-GodotRunner {
     $pinfo.UseShellExecute = $false
     $pinfo.RedirectStandardOutput = $true
     $pinfo.RedirectStandardError = $true
-    $pinfo.StandardOutputEncoding = [System.Text.Encoding]::UTF8
-    $pinfo.StandardErrorEncoding = [System.Text.Encoding]::UTF8
     $pinfo.CreateNoWindow = $true
     $proc = [System.Diagnostics.Process]::Start($pinfo)
     $stdoutTask = $proc.StandardOutput.ReadToEndAsync()
