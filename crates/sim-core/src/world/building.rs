@@ -25,6 +25,10 @@ pub const MAX_BUILDING_CORRIDOR_DISTANCE_M: f32 = 150.0;
 /// 도로 면과의 최소 이격 거리 (m). 도로 면과 겹치는 건물을 제외할 때 여유를 둔다.
 pub const ROAD_CLEARANCE_MARGIN_M: f32 = 0.5;
 
+/// 실제 높이/층수 태그가 없어 기본값으로 추정된 건물이 포함되어 있을 때 코스 notices에 추가되는 안내 문구 (PLAN 4-12).
+pub const ESTIMATED_HEIGHT_NOTICE: &str =
+    "Some building heights are estimated defaults (not surveyed heights)";
+
 /// 피트(ft) 단위를 미터(m)로 변환하는 계수.
 const FEET_TO_METERS: f32 = 0.3048;
 
@@ -267,8 +271,56 @@ pub fn distance_to_centerlines(p: Vec2, centerlines: &[Vec<Vec2>]) -> f32 {
     min_dist
 }
 
+/// 점 c가 선분 a-b 위에 있는지 검사한다.
+fn point_on_segment(c: Vec2, a: Vec2, b: Vec2) -> bool {
+    let cross = (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+    if cross.abs() > 1e-4 {
+        return false;
+    }
+    let dot = (c.x - a.x) * (b.x - a.x) + (c.y - a.y) * (b.y - a.y);
+    if dot < 0.0 {
+        return false;
+    }
+    let len_sq = (b.x - a.x).powi(2) + (b.y - a.y).powi(2);
+    dot <= len_sq
+}
+
+/// 두 선분 p1-p2와 q1-q2가 교차하는지 검사한다.
+pub fn segments_intersect(p1: Vec2, p2: Vec2, q1: Vec2, q2: Vec2) -> bool {
+    fn ccw(a: Vec2, b: Vec2, c: Vec2) -> f32 {
+        (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x)
+    }
+    let d1 = ccw(p1, p2, q1);
+    let d2 = ccw(p1, p2, q2);
+    let d3 = ccw(q1, q2, p1);
+    let d4 = ccw(q1, q2, p2);
+
+    if ((d1 > 0.0 && d2 < 0.0) || (d1 < 0.0 && d2 > 0.0))
+        && ((d3 > 0.0 && d4 < 0.0) || (d3 < 0.0 && d4 > 0.0))
+    {
+        return true;
+    }
+    if d1.abs() < 1e-5 && point_on_segment(q1, p1, p2) {
+        return true;
+    }
+    if d2.abs() < 1e-5 && point_on_segment(q2, p1, p2) {
+        return true;
+    }
+    if d3.abs() < 1e-5 && point_on_segment(p1, q1, q2) {
+        return true;
+    }
+    if d4.abs() < 1e-5 && point_on_segment(p2, q1, q2) {
+        return true;
+    }
+    false
+}
+
 /// 건물 윤곽이 도로 영역(GroundRect)과 겹치는지 검사한다.
 pub fn polygon_overlaps_ground_rect(footprint: &[Vec2], rect: &GroundRect, clearance: f32) -> bool {
+    let n = footprint.len();
+    if n < 3 {
+        return false;
+    }
     // 1. AABB 1차 빠른 거부 검사
     let min_x = footprint.iter().map(|p| p.x).fold(f32::INFINITY, f32::min);
     let max_x = footprint
@@ -313,13 +365,41 @@ pub fn polygon_overlaps_ground_rect(footprint: &[Vec2], rect: &GroundRect, clear
         Vec2::new(-half_w, half_h),
     ];
     let (world_sin, world_cos) = rect.heading_rad.sin_cos();
-    for c in &corners_local {
-        let world_pt = Vec2::new(
-            rect.center.x + c.x * world_cos - c.y * world_sin,
-            rect.center.y + c.x * world_sin + c.y * world_cos,
-        );
-        if point_inside_polygon(world_pt, footprint) {
+    let rect_corners_world: [Vec2; 4] = [
+        Vec2::new(
+            rect.center.x + corners_local[0].x * world_cos - corners_local[0].y * world_sin,
+            rect.center.y + corners_local[0].x * world_sin + corners_local[0].y * world_cos,
+        ),
+        Vec2::new(
+            rect.center.x + corners_local[1].x * world_cos - corners_local[1].y * world_sin,
+            rect.center.y + corners_local[1].x * world_sin + corners_local[1].y * world_cos,
+        ),
+        Vec2::new(
+            rect.center.x + corners_local[2].x * world_cos - corners_local[2].y * world_sin,
+            rect.center.y + corners_local[2].x * world_sin + corners_local[2].y * world_cos,
+        ),
+        Vec2::new(
+            rect.center.x + corners_local[3].x * world_cos - corners_local[3].y * world_sin,
+            rect.center.y + corners_local[3].x * world_sin + corners_local[3].y * world_cos,
+        ),
+    ];
+
+    for &c in &rect_corners_world {
+        if point_inside_polygon(c, footprint) {
             return true;
+        }
+    }
+
+    // 4. 건물 다각형의 변과 도로 직사각형의 변 사이의 교차 검사 (십자형 겹침 검출)
+    for i in 0..n {
+        let p1 = footprint[i];
+        let p2 = footprint[(i + 1) % n];
+        for j in 0..4 {
+            let q1 = rect_corners_world[j];
+            let q2 = rect_corners_world[(j + 1) % 4];
+            if segments_intersect(p1, p2, q1, q2) {
+                return true;
+            }
         }
     }
 
@@ -344,6 +424,43 @@ fn point_inside_polygon(p: Vec2, polygon: &[Vec2]) -> bool {
     inside
 }
 
+/// 장소가 실제 3D 건물인지 여부를 판별한다 (공원, 운동장 등 비건물 제외).
+pub fn is_building_place(kind: &str, tags: &BTreeMap<String, String>) -> bool {
+    if let Some(b) = tags.get("building") {
+        if b == "no" {
+            return false;
+        }
+        if !b.is_empty() {
+            return true;
+        }
+    }
+    if tags.contains_key("leisure")
+        || tags.contains_key("landuse")
+        || tags.contains_key("natural")
+        || tags.contains_key("boundary")
+    {
+        return false;
+    }
+    let k = kind.to_lowercase();
+    if k == "building" || k.starts_with("building=") || k.starts_with("building:") {
+        return true;
+    }
+    if k.starts_with("leisure=")
+        || k.starts_with("landuse=")
+        || k.starts_with("natural=")
+        || k.starts_with("boundary=")
+        || k.contains("park")
+        || k.contains("pitch")
+        || k.contains("garden")
+    {
+        return false;
+    }
+    if tags.contains_key("building:levels") || tags.contains_key("height") {
+        return true;
+    }
+    false
+}
+
 /// 장소 목록에서 경로 양옆 복도(150m) 내의 건물을 추출하고 도로 겹침을 방지하여 건물 목록을 만든다.
 pub fn build_course_buildings(
     places: &[Place],
@@ -358,6 +475,11 @@ pub fn build_course_buildings(
     for place in places {
         // 윤곽이 없는 점 장소는 3D 건물로 생성하지 않음
         if place.outline.len() < 3 {
+            continue;
+        }
+
+        // 건물이 아닌 장소(공원 leisure=park, 운동장, 주차장 등)는 제외
+        if !is_building_place(&place.kind, &place.tags) {
             continue;
         }
 
@@ -418,9 +540,10 @@ pub fn load_companion_buildings(
     let candidate_names = [
         "places.osm.json",
         "places-synthetic.osm.json",
-        "places.pack",
         "../places.osm.json",
         "../places-synthetic.osm.json",
+        "../../places.osm.json",
+        "../../testdata/yeosu-expo/places-synthetic.osm.json",
     ];
 
     for name in &candidate_names {
@@ -434,13 +557,80 @@ pub fn load_companion_buildings(
         if places.is_empty() {
             continue;
         }
-        return build_course_buildings(
+        let (buildings, est) = build_course_buildings(
             &places,
             origin,
             road_centerlines,
             road_surfaces,
             MAX_BUILDING_CORRIDOR_DISTANCE_M,
         );
+        if !buildings.is_empty() {
+            return (buildings, est);
+        }
+    }
+
+    // 디렉터리 내의 *.places.osm.json 검색
+    if let Ok(entries) = std::fs::read_dir(base_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let is_match = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|s| s.ends_with(".places.osm.json"));
+            if !is_match {
+                continue;
+            }
+            if let Ok(places) = places::load_places(&path) {
+                let (buildings, est) = build_course_buildings(
+                    &places,
+                    origin,
+                    road_centerlines,
+                    road_surfaces,
+                    MAX_BUILDING_CORRIDOR_DISTANCE_M,
+                );
+                if !buildings.is_empty() {
+                    return (buildings, est);
+                }
+            }
+        }
+    }
+
+    // 전국 자료 폴더(data/korea 또는 testdata/korea-yeosu 등)에서 장소 추출 시도
+    let data_dirs = [
+        Path::new("data/korea"),
+        Path::new("testdata/korea-yeosu"),
+        Path::new("../data/korea"),
+        Path::new("../testdata/korea-yeosu"),
+    ];
+    for data_dir in &data_dirs {
+        if let Ok(korea) = super::korea_data::KoreaData::open(data_dir) {
+            let radius_m = 1000.0;
+            let radius_deg = radius_m / 111_000.0;
+            let bbox = super::map_fetch::Bbox {
+                south: origin.lat - radius_deg,
+                west: origin.lon - radius_deg / origin.lat.to_radians().cos().max(0.1),
+                north: origin.lat + radius_deg,
+                east: origin.lon + radius_deg / origin.lat.to_radians().cos().max(0.1),
+            };
+            if let Ok(region) = korea.region(&bbox).and_then(|r| {
+                if r.places.is_empty() {
+                    Err("empty".to_owned())
+                } else {
+                    Ok(r)
+                }
+            }) {
+                let (buildings, est) = build_course_buildings(
+                    &region.places,
+                    origin,
+                    road_centerlines,
+                    road_surfaces,
+                    MAX_BUILDING_CORRIDOR_DISTANCE_M,
+                );
+                if !buildings.is_empty() {
+                    return (buildings, est);
+                }
+            }
+        }
     }
 
     (Vec::new(), false)
@@ -566,5 +756,66 @@ mod tests {
 
         // 원점의 도로는 겹치므로 제외되어야 함
         assert!(buildings.is_empty());
+    }
+
+    #[test]
+    fn cross_shaped_overlap_detected() {
+        // 도로: 중심 (0, 0), 폭 10 (half 5), 길이 40 (half 20), heading 0
+        let road = GroundRect::axis_aligned(Vec2::ZERO, Vec2::new(10.0, 40.0));
+        // 건물: 가로로 길게 도로를 가로지르는 직사각형 (x: -20..20, z: -2..2)
+        // 꼭짓점들은 도로 직사각형 밖에 있지만 변끼리 십자형으로 교차함
+        let cross_building = vec![
+            Vec2::new(-20.0, -2.0),
+            Vec2::new(20.0, -2.0),
+            Vec2::new(20.0, 2.0),
+            Vec2::new(-20.0, 2.0),
+        ];
+        assert!(polygon_overlaps_ground_rect(&cross_building, &road, 0.5));
+    }
+
+    #[test]
+    fn non_building_places_are_filtered_out() {
+        let origin = LatLon {
+            lat: 34.75,
+            lon: 127.75,
+        };
+        let mut park_tags = BTreeMap::new();
+        park_tags.insert("leisure".to_owned(), "park".to_owned());
+        park_tags.insert("name".to_owned(), "중앙공원".to_owned());
+
+        let park_place = Place {
+            id: "way/201".to_owned(),
+            name: "중앙공원".to_owned(),
+            kind: "leisure=park".to_owned(),
+            tags: park_tags,
+            outline: vec![
+                LatLon {
+                    lat: 34.751,
+                    lon: 127.751,
+                },
+                LatLon {
+                    lat: 34.751,
+                    lon: 127.752,
+                },
+                LatLon {
+                    lat: 34.752,
+                    lon: 127.752,
+                },
+                LatLon {
+                    lat: 34.752,
+                    lon: 127.751,
+                },
+            ],
+            center: LatLon {
+                lat: 34.7515,
+                lon: 127.7515,
+            },
+            entrances: Vec::new(),
+        };
+
+        let road_centerlines = vec![vec![Vec2::new(0.0, -100.0), Vec2::new(0.0, 100.0)]];
+        let (buildings, _) =
+            build_course_buildings(&[park_place], origin, &road_centerlines, &[], 150.0);
+        assert!(buildings.is_empty(), "공원은 건물로 생성되지 않아야 합니다");
     }
 }

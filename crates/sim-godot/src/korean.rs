@@ -47,6 +47,9 @@ pub fn course_notice(notice: &str) -> String {
             return "일방통행·왕복 분리 도로는 한 줄 도로로 그립니다(실제 차로 구성 아님)"
                 .to_owned();
         }
+        "Some building heights are estimated defaults (not surveyed heights)" => {
+            return "일부 건물 높이는 기본값으로 추정되었습니다(실제 높이 아님)".to_owned();
+        }
         _ => {}
     }
     if let Some(count) = between(

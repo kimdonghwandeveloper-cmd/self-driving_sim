@@ -1025,7 +1025,7 @@ fn build_course_checked(
         corner_radius_m: file.corner_radius_m,
         stub_length_m: file.stub_length_m,
     };
-    route::build_route_course_detailed(
+    let mut route_course = route::build_route_course_detailed(
         "route",
         &snapped.ways,
         &allowed,
@@ -1034,7 +1034,21 @@ fn build_course_checked(
         &settings,
         notices,
         file.nav_rules,
-    )
+    )?;
+    let (buildings, has_estimated) = super::building::load_companion_buildings(
+        Path::new("."),
+        picked[0],
+        &[route_course.guide.clone()],
+        &route_course.course.surfaces,
+    );
+    if has_estimated {
+        route_course
+            .course
+            .notices
+            .push(super::building::ESTIMATED_HEIGHT_NOTICE.to_owned());
+    }
+    route_course.course.buildings = buildings;
+    Ok(route_course)
 }
 
 /// 경로 파일 내용과 그 파일이 있는 폴더로 코스를 만든다. 스냅샷은 `base_dir` 기준 상대 경로다.

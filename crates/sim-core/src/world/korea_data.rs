@@ -88,6 +88,21 @@ pub const ROAD_KEYS: [&str; 15] = [
 ];
 /// 회전 제한 관계에 남기는 태그. 순서가 형식의 일부다.
 pub const RESTRICTION_KEYS: [&str; 4] = ["type", "restriction", "restriction:motorcar", "except"];
+/// 건물·장소에 남기는 태그. 순서가 형식의 일부다(번호로 저장).
+pub const PLACE_KEYS: [&str; 12] = [
+    "building",
+    "height",
+    "building:levels",
+    "name",
+    "amenity",
+    "shop",
+    "tourism",
+    "leisure",
+    "office",
+    "historic",
+    "place",
+    "man_made",
+];
 
 /// 원본 PBF 기록.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -190,6 +205,8 @@ struct PlaceRecord {
     id: u64,
     name: String,
     kind: String,
+    /// (태그 번호([`PLACE_KEYS`]), 값). 번호 오름차순.
+    tags: Vec<(u8, String)>,
     /// 윤곽(닫는 점 중복 없음). 노드면 그 점 하나.
     outline: Vec<[i32; 2]>,
     /// 윤곽 위 출입구.
@@ -212,11 +229,17 @@ impl PlaceRecord {
             lat: outline.iter().map(|p| p.lat).sum::<f64>() / count,
             lon: outline.iter().map(|p| p.lon).sum::<f64>() / count,
         };
+        let mut tags = std::collections::BTreeMap::new();
+        for &(idx, ref val) in &self.tags {
+            if let Some(&k) = PLACE_KEYS.get(usize::from(idx)) {
+                tags.insert(k.to_owned(), val.clone());
+            }
+        }
         Place {
             id: format!("{}/{}", if self.way { "way" } else { "node" }, self.id),
             name: self.name.clone(),
             kind: self.kind.clone(),
-            tags: std::collections::BTreeMap::new(),
+            tags,
             outline: if self.way { outline } else { Vec::new() },
             center,
             entrances: self.entrances.iter().map(|&p| latlon(p)).collect(),
@@ -501,6 +524,7 @@ fn encode_places(tile: (i32, i32), places: &[&PlaceRecord]) -> Vec<u8> {
         out.varint(place.id);
         out.text(&place.name);
         out.text(&place.kind);
+        out.tags(&place.tags);
         out.varint(place.outline.len() as u64);
         for &point in &place.outline {
             out.coord(point);
@@ -513,8 +537,52 @@ fn encode_places(tile: (i32, i32), places: &[&PlaceRecord]) -> Vec<u8> {
     out.bytes
 }
 
-/// 건물·장소 조각 본문을 읽는다.
+/// 건물·장소 조각 본문을 읽는다 (v2 태그 지원 및 v1 레거시 형식 하위 호환).
 fn decode_places(tile: (i32, i32), bytes: &[u8]) -> Result<Vec<PlaceRecord>, String> {
+    if let Ok(places) = decode_places_v2(tile, bytes) {
+        return Ok(places);
+    }
+    decode_places_v1(tile, bytes)
+}
+
+fn decode_places_v2(tile: (i32, i32), bytes: &[u8]) -> Result<Vec<PlaceRecord>, String> {
+    let mut input = Decoder::new(bytes, tile);
+    let count = input.count()?;
+    let mut places = Vec::with_capacity(count);
+    for _ in 0..count {
+        let way = match input.byte()? {
+            0 => false,
+            1 => true,
+            other => return Err(format!("korea data place type {other} is unknown")),
+        };
+        let id = input.varint()?;
+        let name = input.text()?;
+        let kind = input.text()?;
+        let tags = input.tags(PLACE_KEYS.len())?;
+        let outline = (0..input.count()?)
+            .map(|_| input.coord())
+            .collect::<Result<Vec<_>, _>>()?;
+        let entrances = (0..input.count()?)
+            .map(|_| input.coord())
+            .collect::<Result<Vec<_>, _>>()?;
+        if outline.is_empty() {
+            return Err(format!("korea data place {id} has no coordinates"));
+        }
+        places.push(PlaceRecord {
+            way,
+            id,
+            name,
+            kind,
+            tags,
+            outline,
+            entrances,
+        });
+    }
+    input.finish()?;
+    Ok(places)
+}
+
+fn decode_places_v1(tile: (i32, i32), bytes: &[u8]) -> Result<Vec<PlaceRecord>, String> {
     let mut input = Decoder::new(bytes, tile);
     let count = input.count()?;
     let mut places = Vec::with_capacity(count);
@@ -541,6 +609,7 @@ fn decode_places(tile: (i32, i32), bytes: &[u8]) -> Result<Vec<PlaceRecord>, Str
             id,
             name,
             kind,
+            tags: Vec::new(),
             outline,
             entrances,
         });
@@ -803,6 +872,7 @@ impl KoreaData {
         let region = self.region(bbox)?;
         let dir = cache_root.join(self.version());
         let path = dir.join(format!("{}.osm.json", bbox.cache_name()));
+        let places_path = dir.join(format!("{}.places.osm.json", bbox.cache_name()));
         if !path.exists() {
             std::fs::create_dir_all(&dir)
                 .map_err(|error| format!("cannot create {}: {error}", dir.display()))?;
@@ -813,6 +883,21 @@ impl KoreaData {
                     let _ = std::fs::remove_file(&staging);
                     format!("cannot write {}: {error}", path.display())
                 })?;
+        }
+        if !places_path.exists() {
+            let _ = std::fs::create_dir_all(&dir);
+            let staging = dir.join(format!(
+                "{}.places.{}.tmp",
+                bbox.cache_name(),
+                std::process::id()
+            ));
+            let places_json = places::places_to_overpass_json(&region.places);
+            if std::fs::write(&staging, places_json.as_bytes())
+                .and_then(|()| std::fs::rename(&staging, &places_path))
+                .is_err()
+            {
+                let _ = std::fs::remove_file(&staging);
+            }
         }
         Ok((path, region.places))
     }
@@ -883,6 +968,7 @@ struct PlaceWay {
     id: u64,
     name: String,
     kind: String,
+    tags: Tags,
     refs: Vec<u64>,
     building: bool,
 }
@@ -947,6 +1033,7 @@ where
                         id,
                         name: name.to_owned(),
                         kind: places::place_kind(&tags),
+                        tags: keep_tags(way.tags(), &PLACE_KEYS),
                         refs,
                         building,
                     });
@@ -1016,11 +1103,16 @@ where
         }
         let name = map.get("name").cloned().unwrap_or_default();
         if !name.is_empty() && !map.contains_key("highway") {
+            let tags = keep_tags(
+                map.iter().map(|(k, v)| (k.as_str(), v.as_str())),
+                &PLACE_KEYS,
+            );
             node_places.push(PlaceRecord {
                 way: false,
                 id,
                 name,
                 kind: places::place_kind(&map),
+                tags,
                 outline: vec![at],
                 entrances: Vec::new(),
             });
@@ -1102,6 +1194,7 @@ where
             id: way.id,
             name: way.name,
             kind: way.kind,
+            tags: way.tags,
             outline,
             entrances: doors
                 .iter()
@@ -1502,6 +1595,7 @@ mod tests {
                 id: 1,
                 name: "a".to_owned(),
                 kind: String::new(),
+                tags: Vec::new(),
                 outline: vec![[1, 1]],
                 entrances: Vec::new(),
             }],

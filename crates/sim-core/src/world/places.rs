@@ -178,8 +178,15 @@ pub fn parse_places(json: &str) -> Result<Vec<Place>, String> {
                     continue;
                 }
                 let ids = &element.nodes;
-                let closed = ids.len() >= 4 && ids.first() == ids.last();
-                if !closed || ids.len() != element.geometry.len() {
+                let closed = if ids.is_empty() {
+                    element.geometry.len() >= 4
+                        && element.geometry.first() == element.geometry.last()
+                } else {
+                    ids.len() >= 4
+                        && ids.first() == ids.last()
+                        && (element.geometry.is_empty() || ids.len() == element.geometry.len())
+                };
+                if !closed {
                     continue;
                 }
                 let Some(mut outline) = element
@@ -222,6 +229,73 @@ pub fn load_places(path: &std::path::Path) -> Result<Vec<Place>, String> {
     let text = std::fs::read_to_string(path)
         .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
     parse_places(&text)
+}
+
+/// 장소 목록을 Overpass JSON 문자열로 직렬화한다.
+pub fn places_to_overpass_json(places: &[Place]) -> String {
+    let quote = |text: &str| serde_json::to_string(text).expect("string serializes");
+    let mut elements = Vec::new();
+    for p in places {
+        let is_way =
+            p.id.starts_with("way/") || (!p.id.starts_with("node/") && !p.outline.is_empty());
+        let raw_id =
+            p.id.strip_prefix("way/")
+                .or_else(|| p.id.strip_prefix("node/"))
+                .unwrap_or(&p.id);
+        let mut tag_pairs = Vec::new();
+        for (k, v) in &p.tags {
+            tag_pairs.push(format!("{}:{}", quote(k), quote(v)));
+        }
+        if !p.name.is_empty() && !p.tags.contains_key("name") {
+            tag_pairs.push(format!("{}:{}", quote("name"), quote(&p.name)));
+        }
+        if !p.kind.is_empty()
+            && !p.tags.contains_key("building")
+            && (p.kind == "building" || p.kind.starts_with("building="))
+        {
+            tag_pairs.push(format!("{}:{}", quote("building"), quote("yes")));
+        }
+        let tags_str = tag_pairs.join(",");
+        if is_way {
+            let node_ids: Vec<String> = (0..p.outline.len() + 1)
+                .map(|i| format!("{}{:03}", raw_id, i + 1))
+                .collect();
+            let mut geom_pts = p.outline.clone();
+            if let Some(&first) = p.outline.first() {
+                geom_pts.push(first);
+            }
+            let geom: Vec<String> = geom_pts
+                .iter()
+                .map(|pt| format!("{{\"lat\":{:.7},\"lon\":{:.7}}}", pt.lat, pt.lon))
+                .collect();
+            elements.push(format!(
+                "{{\"type\":\"way\",\"id\":{},\"tags\":{{{}}},\"nodes\":[{}],\"geometry\":[{}]}}",
+                raw_id.parse::<u64>().unwrap_or(0),
+                tags_str,
+                node_ids.join(","),
+                geom.join(",")
+            ));
+        } else {
+            elements.push(format!(
+                "{{\"type\":\"node\",\"id\":{},\"lat\":{:.7},\"lon\":{:.7},\"tags\":{{{}}}}}",
+                raw_id.parse::<u64>().unwrap_or(0),
+                p.center.lat,
+                p.center.lon,
+                tags_str
+            ));
+        }
+    }
+    format!(
+        "{{\"generator\":\"sim-core\",\"elements\":[{}]}}\n",
+        elements.join(",")
+    )
+}
+
+/// 장소 목록을 JSON 파일로 저장한다.
+pub fn save_places(path: &std::path::Path, places: &[Place]) -> Result<(), String> {
+    let json = places_to_overpass_json(places);
+    std::fs::write(path, json.as_bytes())
+        .map_err(|error| format!("cannot write {}: {error}", path.display()))
 }
 
 /// 이름에 `query`가 들어 있는(대소문자 무시) 장소 번호를 이름이 짧은 순으로 최대 [`MAX_SEARCH_RESULTS`]개 돌려준다.

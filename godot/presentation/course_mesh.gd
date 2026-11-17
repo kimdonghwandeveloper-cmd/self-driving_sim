@@ -73,7 +73,7 @@ func _buildings(buildings: Array) -> void:
 		if n < 3:
 			continue
 
-		# 1. 벽면 (수직 쿼드)
+		# 1. 벽면 (수직 쿼드 및 UV 좌표 매핑)
 		for i in range(n):
 			var a: Vector3 = footprint[i]
 			var b: Vector3 = footprint[(i + 1) % n]
@@ -81,19 +81,30 @@ func _buildings(buildings: Array) -> void:
 			var b_top := b + Vector3(0, height, 0)
 
 			var edge := b - a
+			var wall_len := edge.length()
 			var normal := Vector3(-edge.z, 0, edge.x).normalized()
 
 			# 두 개의 삼각형으로 벽면 사각형 구성
+			var uvs := [
+				Vector2(0, 0),
+				Vector2(wall_len / 4.0, 0),
+				Vector2(wall_len / 4.0, height / 3.0),
+				Vector2(0, 0),
+				Vector2(wall_len / 4.0, height / 3.0),
+				Vector2(0, height / 3.0)
+			]
 			var wall_verts := [a, b, b_top, a, b_top, a_top]
-			for v: Vector3 in wall_verts:
+			for idx in range(6):
 				wall_tool.set_normal(normal)
-				wall_tool.add_vertex(v)
+				wall_tool.set_uv(uvs[idx])
+				wall_tool.add_vertex(wall_verts[idx])
 				wall_count += 1
 
 		# 2. 지붕 (다각형 삼각분할)
 		var roof_tris := _triangulate_roof(footprint, height)
 		for v: Vector3 in roof_tris:
 			roof_tool.set_normal(Vector3.UP)
+			roof_tool.set_uv(Vector2(v.x / 10.0, v.z / 10.0))
 			roof_tool.add_vertex(v)
 			roof_count += 1
 
@@ -101,15 +112,25 @@ func _buildings(buildings: Array) -> void:
 		var wall_node := MeshInstance3D.new()
 		wall_node.name = "Buildings_Walls"
 		wall_node.mesh = wall_tool.commit()
-		wall_node.material_override = material(Color("b8bcba"))
+		wall_node.material_override = _building_wall_material()
 		add_child(wall_node)
 
 	if roof_count > 0:
 		var roof_node := MeshInstance3D.new()
 		roof_node.name = "Buildings_Roofs"
 		roof_node.mesh = roof_tool.commit()
-		roof_node.material_override = material(Color("70767a"))
+		roof_node.material_override = material(Color("5f6368"))
 		add_child(roof_node)
+
+## 3D 건물 외벽용 콘크리트 무광 재질을 생성한다.
+func _building_wall_material() -> StandardMaterial3D:
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = Color("b4b8b6")
+	mat.roughness = 0.85
+	mat.metallic = 0.05
+	mat.specular_mode = StandardMaterial3D.SPECULAR_SCHLICK_GGX
+	mat.shading_mode = StandardMaterial3D.SHADING_MODE_PER_PIXEL
+	return mat
 
 ## 지붕 다각형을 2D 귀 잘라내기(Ear-clipping)로 삼각분할하여 꼭짓점 목록을 반환한다.
 func _triangulate_roof(footprint: PackedVector3Array, height: float) -> PackedVector3Array:

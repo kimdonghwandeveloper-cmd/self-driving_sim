@@ -166,7 +166,24 @@ pub fn load_road_lines_course(text: &str, base_dir: &Path) -> Result<CourseDef, 
         "도로 폭은 맵 폭 x{:.1}(최소 {:.1} m)로 넓힌 훈련용 임시값입니다",
         file.width_scale, file.min_width_m
     ));
-    build_road_lines_course(&file.name, &lines, start, notices)
+    let mut course = build_road_lines_course(&file.name, &lines, start, notices)?;
+    let centerlines: Vec<Vec<Vec2>> = lines.iter().map(|l| l.points.clone()).collect();
+    let (buildings, has_estimated) = super::building::load_companion_buildings(
+        base_dir,
+        super::map::LatLon {
+            lat: 34.75,
+            lon: 127.75,
+        },
+        &centerlines,
+        &course.surfaces,
+    );
+    if has_estimated {
+        course
+            .notices
+            .push(super::building::ESTIMATED_HEIGHT_NOTICE.to_owned());
+    }
+    course.buildings = buildings;
+    Ok(course)
 }
 
 /// 중심선 자료 JSON을 읽어 검사하고(형식, 점 개수, 유한·거리 범위) 폭을 `scale`배, 최소 `min_width_m`로 넓힌다.

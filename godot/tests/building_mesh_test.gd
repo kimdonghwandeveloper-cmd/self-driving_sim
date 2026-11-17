@@ -12,6 +12,7 @@ var failures := PackedStringArray()
 func _init() -> void:
 	print("--- 3D 건물 생성 검증 시험 시작 ---")
 	_test_building_mesh_generation()
+	_test_real_course_buildings()
 	_finish()
 
 ## 가상 건물 데이터를 포함하는 코스 사전으로 CourseMesh를 생성하고 메시 노드 및 형상을 검사한다.
@@ -80,6 +81,37 @@ func _test_building_mesh_generation() -> void:
 		_check(aabb.size.y <= 18.1, "지붕 메시 높이 이상")
 
 	mesh_node.free()
+
+## 실제 코스(Lanelet2 및 여수 OSM 맵)를 SimCourse.build로 로드하여 건물이 자동 연결되어 생성되는지 검증한다.
+func _test_real_course_buildings() -> void:
+	# 1. Lanelet2 실측 코스 건물 로드 검증
+	var lanelet_course = SimCourse.build("map:assets/maps/lanelet2-real-demo/course.toml")
+	print("LANELET COURSE RESULT: ", lanelet_course.get("ok"), " buildings count: ", lanelet_course.get("buildings", []).size(), " notices: ", lanelet_course.get("notices"))
+	_check(lanelet_course.get("ok", false), "Lanelet2 실측 코스 로드 실패: " + str(lanelet_course.get("error", "")))
+	var lanelet_buildings: Array = lanelet_course.get("buildings", [])
+	_check(lanelet_buildings.size() > 0, "Lanelet2 실측 코스에 3D 건물이 생성되지 않음 (0개)")
+	if lanelet_buildings.size() > 0:
+		var mesh_node := CourseMesh.new()
+		root.add_child(mesh_node)
+		mesh_node.build(lanelet_course)
+		var walls = mesh_node.find_child("Buildings_Walls", true, false)
+		var roofs = mesh_node.find_child("Buildings_Roofs", true, false)
+		_check(walls != null and roofs != null, "Lanelet2 코스에서 3D 건물 메시 노드 생성 실패")
+		mesh_node.free()
+
+	# 2. 여수 엑스포 OSM 코스 건물 로드 검증
+	var yeosu_course = SimCourse.build("map:testdata/yeosu-expo/course.toml")
+	_check(yeosu_course.get("ok", false), "여수 엑스포 코스 로드 실패: " + str(yeosu_course.get("error", "")))
+	var yeosu_buildings: Array = yeosu_course.get("buildings", [])
+	_check(yeosu_buildings.size() > 0, "여수 엑스포 코스에 3D 건물이 생성되지 않음 (0개)")
+	if yeosu_buildings.size() > 0:
+		var mesh_node := CourseMesh.new()
+		root.add_child(mesh_node)
+		mesh_node.build(yeosu_course)
+		var walls = mesh_node.find_child("Buildings_Walls", true, false)
+		var roofs = mesh_node.find_child("Buildings_Roofs", true, false)
+		_check(walls != null and roofs != null, "여수 엑스포 코스에서 3D 건물 메시 노드 생성 실패")
+		mesh_node.free()
 
 ## 검사 실패 항목을 기록한다.
 func _check(condition: bool, message: String) -> void:
