@@ -216,6 +216,7 @@ impl PlaceRecord {
             id: format!("{}/{}", if self.way { "way" } else { "node" }, self.id),
             name: self.name.clone(),
             kind: self.kind.clone(),
+            tags: std::collections::BTreeMap::new(),
             outline: if self.way { outline } else { Vec::new() },
             center,
             entrances: self.entrances.iter().map(|&p| latlon(p)).collect(),

@@ -4,6 +4,7 @@
 //! 화면 메시 생성은 Godot 쪽(`sim-godot` 형상 사전 → GDScript)에서 이 데이터로 한다.
 
 pub mod anchor_probe;
+pub mod building;
 pub mod course;
 pub mod course_files;
 pub mod junction;

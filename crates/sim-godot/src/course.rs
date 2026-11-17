@@ -116,6 +116,22 @@ pub fn course_dict(course: &CourseDef) -> VarDictionary {
             .to_variant()
         })
         .collect();
+    let buildings: VarArray = course
+        .buildings
+        .iter()
+        .map(|building| {
+            let footprint = ground_points(&building.footprint);
+            vdict! {
+                "id" => building.id.as_str(),
+                "name" => building.name.as_str(),
+                "kind" => building.kind.as_str(),
+                "height_m" => building.height_m,
+                "is_estimated" => building.is_estimated,
+                "footprint" => &footprint,
+            }
+            .to_variant()
+        })
+        .collect();
     vdict! {
         "ok" => true,
         "error" => "",
@@ -134,6 +150,7 @@ pub fn course_dict(course: &CourseDef) -> VarDictionary {
         "areas" => &areas,
         "markings" => &markings,
         "colliders" => &colliders,
+        "buildings" => &buildings,
     }
 }
 

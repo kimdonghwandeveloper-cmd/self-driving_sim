@@ -421,6 +421,7 @@ pub fn finish_course(
         areas,
         markings: Vec::new(),
         colliders,
+        buildings: Vec::new(),
     })
 }
 

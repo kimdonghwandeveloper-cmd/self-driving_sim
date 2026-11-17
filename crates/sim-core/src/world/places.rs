@@ -71,6 +71,8 @@ pub struct Place {
     pub name: String,
     /// 종류(`amenity=cafe`, `building` 등).
     pub kind: String,
+    /// 원본 OSM 태그 목록.
+    pub tags: BTreeMap<String, String>,
     /// 윤곽(닫는 점 중복 없음). 점 장소는 비어 있다.
     pub outline: Vec<LatLon>,
     /// 윤곽 꼭짓점의 평균(점 장소는 그 점).
@@ -164,6 +166,7 @@ pub fn parse_places(json: &str) -> Result<Vec<Place>, String> {
                         id: format!("node/{}", element.id),
                         name,
                         kind: place_kind(&element.tags),
+                        tags: element.tags.clone(),
                         outline: Vec::new(),
                         center: at,
                         entrances: Vec::new(),
@@ -198,6 +201,7 @@ pub fn parse_places(json: &str) -> Result<Vec<Place>, String> {
                     id: format!("way/{}", element.id),
                     name,
                     kind: place_kind(&element.tags),
+                    tags: element.tags.clone(),
                     outline,
                     center,
                     entrances: doors

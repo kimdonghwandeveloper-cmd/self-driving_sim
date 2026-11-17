@@ -184,6 +184,7 @@ impl PickerModel {
             id: String::new(),
             name: name.to_owned(),
             kind: String::new(),
+            tags: std::collections::BTreeMap::new(),
             outline: Vec::new(),
             center: at,
             entrances: Vec::new(),

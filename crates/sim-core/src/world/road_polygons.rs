@@ -317,6 +317,7 @@ fn build_course_from_polygons(
             .collect(),
         markings: Vec::new(),
         colliders,
+        buildings: Vec::new(),
     })
 }
 

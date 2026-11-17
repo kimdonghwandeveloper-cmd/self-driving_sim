@@ -49,9 +49,89 @@ func build(data: Dictionary) -> void:
 	for marking in data.get("markings", []):
 		_box(marking.rect, 0.004, 0.016, COLORS.stop_line, paint.get(marking.kind, paint.stop_line))
 	_colliders(data.get("colliders", []), concrete)
+	_buildings(data.get("buildings", []))
 	var goal: Dictionary = data.get("goal", {})
 	if not goal.is_empty():
 		_goal_marker(goal)
+
+## 3D 절차적 건물을 벽면과 지붕 메시로 배칭하여 생성한다 (PLAN 4-12).
+func _buildings(buildings: Array) -> void:
+	if buildings.is_empty():
+		return
+	var wall_tool := SurfaceTool.new()
+	var roof_tool := SurfaceTool.new()
+	wall_tool.begin(Mesh.PRIMITIVE_TRIANGLES)
+	roof_tool.begin(Mesh.PRIMITIVE_TRIANGLES)
+
+	var wall_count := 0
+	var roof_count := 0
+
+	for building in buildings:
+		var height: float = building.get("height_m", 6.0)
+		var footprint: PackedVector3Array = building.get("footprint", [])
+		var n := footprint.size()
+		if n < 3:
+			continue
+
+		# 1. 벽면 (수직 쿼드)
+		for i in range(n):
+			var a: Vector3 = footprint[i]
+			var b: Vector3 = footprint[(i + 1) % n]
+			var a_top := a + Vector3(0, height, 0)
+			var b_top := b + Vector3(0, height, 0)
+
+			var edge := b - a
+			var normal := Vector3(-edge.z, 0, edge.x).normalized()
+
+			# 두 개의 삼각형으로 벽면 사각형 구성
+			var wall_verts := [a, b, b_top, a, b_top, a_top]
+			for v: Vector3 in wall_verts:
+				wall_tool.set_normal(normal)
+				wall_tool.add_vertex(v)
+				wall_count += 1
+
+		# 2. 지붕 (다각형 삼각분할)
+		var roof_tris := _triangulate_roof(footprint, height)
+		for v: Vector3 in roof_tris:
+			roof_tool.set_normal(Vector3.UP)
+			roof_tool.add_vertex(v)
+			roof_count += 1
+
+	if wall_count > 0:
+		var wall_node := MeshInstance3D.new()
+		wall_node.name = "Buildings_Walls"
+		wall_node.mesh = wall_tool.commit()
+		wall_node.material_override = material(Color("b8bcba"))
+		add_child(wall_node)
+
+	if roof_count > 0:
+		var roof_node := MeshInstance3D.new()
+		roof_node.name = "Buildings_Roofs"
+		roof_node.mesh = roof_tool.commit()
+		roof_node.material_override = material(Color("70767a"))
+		add_child(roof_node)
+
+## 지붕 다각형을 2D 귀 잘라내기(Ear-clipping)로 삼각분할하여 꼭짓점 목록을 반환한다.
+func _triangulate_roof(footprint: PackedVector3Array, height: float) -> PackedVector3Array:
+	var n := footprint.size()
+	if n < 3:
+		return PackedVector3Array()
+	var poly2d := PackedVector2Array()
+	for p in footprint:
+		poly2d.append(Vector2(p.x, p.z))
+	var indices := Geometry2D.triangulate_polygon(poly2d)
+	var result := PackedVector3Array()
+	if indices.is_empty():
+		for i in range(1, n - 1):
+			result.append(Vector3(footprint[0].x, height, footprint[0].z))
+			result.append(Vector3(footprint[i].x, height, footprint[i].z))
+			result.append(Vector3(footprint[i + 1].x, height, footprint[i + 1].z))
+		return result
+
+	for idx in indices:
+		var p: Vector3 = footprint[idx]
+		result.append(Vector3(p.x, height, p.z))
+	return result
 
 ## 충돌 경계를 종류마다 메시 하나로 합쳐 표시한다(4-6). 지도 경로 코스는 연석 상자가 수백 개라 상자마다
 ## 노드를 두면 그리기 호출이 그만큼 늘어난다. 연석은 `concrete` 재질, 나머지는 종류 색 무광 재질이다.
