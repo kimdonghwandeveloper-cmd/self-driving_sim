@@ -866,6 +866,38 @@ width_source = "estimated"
         );
     }
 
+    /// 배포 모드(Distribution)에서 임시(Provisional) 또는 합성(Synthetic) 상태의 보정 파일을 거부하는지 검증한다.
+    #[test]
+    fn rejects_unverified_patch_in_distribution_mode() {
+        let provisional = valid("provisional", "prov_1");
+        assert!(
+            parse_patch(
+                provisional.as_bytes(),
+                "prov_1",
+                PatchAudience::Distribution
+            )
+            .unwrap_err()
+            .contains("not allowed for Distribution")
+        );
+        let synthetic = valid("synthetic", "syn_1");
+        assert!(
+            parse_patch(synthetic.as_bytes(), "syn_1", PatchAudience::Distribution)
+                .unwrap_err()
+                .contains("not allowed for Distribution")
+        );
+    }
+
+    /// 보정 파일의 revision 판본 번호가 0 이하이거나 비정상일 때 거부하는지 검증한다.
+    #[test]
+    fn rejects_invalid_revision() {
+        let invalid_rev = valid("verified", "rev_test").replace("revision = 1", "revision = 0");
+        assert!(
+            parse_patch(invalid_rev.as_bytes(), "rev_test", PatchAudience::Test)
+                .unwrap_err()
+                .contains("revision")
+        );
+    }
+
     /// 시험마다 겹치지 않는 임시 폴더를 새로 만든다.
     fn temp_dir(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(

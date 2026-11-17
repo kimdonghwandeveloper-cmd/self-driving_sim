@@ -7,3 +7,4 @@
 /godot/.godot/
 # PLAN 4-11 전국 지도 자료(sim-tools --build-korea-data로 만들고 배포에 포함, 저장소 제외)
 /data/korea/
+/dist/
