@@ -37,8 +37,12 @@ Assert-Refused { & $script -SkipBuild -OutputDir 'dist/preserved' } 'ownership m
 if ((Get-Content (Join-Path $fixture 'dist/preserved/sentinel.txt')) -ne 'preserve me') { throw 'Existing output changed' }
 Write-FixtureFile 'dist/preserved/.simulator-release.json' '{"format":"wrong","repository":"wrong"}'
 Assert-Refused { & $script -SkipBuild -OutputDir 'dist/preserved' } 'ownership'
+Write-FixtureFile 'dist/preserved/.simulator-release.json' (@{ format = 'simulator-release-bundle-v1'; repository = [IO.Path]::GetFullPath($fixture) } | ConvertTo-Json)
+Assert-Refused { & $script -SkipBuild -OutputDir 'dist/preserved' -GodotPath (Join-Path $fixture 'missing.exe') } 'Godot runtime not found'
+if ((Get-Content (Join-Path $fixture 'dist/preserved/sentinel.txt')) -ne 'preserve me') { throw 'Missing input removed a previous bundle' }
 
 Assert-Refused { & $script -SkipBuild -OutputDir 'dist/new' -GodotPath (Join-Path $fixture 'missing.exe') } 'Godot runtime not found'
+Assert-Refused { & $script -SkipBuild -Validate:$false -OutputDir 'dist/new' -GodotPath (Join-Path $fixture 'missing.exe') } 'Godot runtime not found'
 Write-FixtureFile 'runtime/godot.exe'
 Assert-Refused { & $script -SkipBuild -OutputDir 'dist/new' -GodotPath (Join-Path $fixture 'runtime/godot.exe') } 'Godot runtime missing'
 Write-FixtureFile 'runtime/godot_console.exe'
