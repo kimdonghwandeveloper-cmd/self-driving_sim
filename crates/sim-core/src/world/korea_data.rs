@@ -32,10 +32,14 @@ use super::places::{self, Place};
 pub const KOREA_DATA_DIR: &str = "data/korea";
 /// 지역 스냅샷을 쓰는 캐시 폴더. 자료 판마다 하위 폴더를 둔다.
 pub const REGION_CACHE_DIR: &str = "cache/regions";
-/// 자료 형식 이름. 바뀌면 읽지 않는다.
-pub const FORMAT: &str = "korea-data-v1";
+/// 레거시 전국 자료 형식 (Phase 4-11 전국 지도 1차 배포).
+pub const FORMAT_V1: &str = "korea-data-v1";
+/// 신규 전국 자료 형식 (PLAN 4-12 건물 태그/층수/높이 보존).
+pub const FORMAT_V2: &str = "korea-data-v2";
+/// 현재 생성하는 자료 형식 이름.
+pub const FORMAT: &str = FORMAT_V2;
 /// 지역 스냅샷 본문의 `generator` 값(Geofabrik 추출 접두어와 다르다: 연결 정보 없는 Overpass 형식으로 읽힌다).
-pub const GENERATOR: &str = "self-driving-sim korea-data v1";
+pub const GENERATOR: &str = "self-driving-sim korea-data v2";
 /// 머리 정보 파일.
 pub const MANIFEST_FILE: &str = "manifest.toml";
 /// 도로 묶음 파일.
@@ -537,14 +541,6 @@ fn encode_places(tile: (i32, i32), places: &[&PlaceRecord]) -> Vec<u8> {
     out.bytes
 }
 
-/// 건물·장소 조각 본문을 읽는다 (v2 태그 지원 및 v1 레거시 형식 하위 호환).
-fn decode_places(tile: (i32, i32), bytes: &[u8]) -> Result<Vec<PlaceRecord>, String> {
-    if let Ok(places) = decode_places_v2(tile, bytes) {
-        return Ok(places);
-    }
-    decode_places_v1(tile, bytes)
-}
-
 fn decode_places_v2(tile: (i32, i32), bytes: &[u8]) -> Result<Vec<PlaceRecord>, String> {
     let mut input = Decoder::new(bytes, tile);
     let count = input.count()?;
@@ -769,9 +765,9 @@ impl KoreaData {
             .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
         let manifest: Manifest = toml::from_str(&text)
             .map_err(|error| format!("invalid {}: {error}", path.display()))?;
-        if manifest.format != FORMAT {
+        if manifest.format != FORMAT_V2 && manifest.format != FORMAT_V1 {
             return Err(format!(
-                "{} has format `{}`; this program reads `{FORMAT}` (rebuild the data)",
+                "{} has format `{}`; this program reads `{FORMAT_V2}` or `{FORMAT_V1}` (rebuild the data)",
                 path.display(),
                 manifest.format
             ));
@@ -832,7 +828,16 @@ impl KoreaData {
                 }
             }
             if let Some(body) = self.places.tile(tile)? {
-                for place in decode_places(tile, &body)? {
+                let place_records = match self.manifest.format.as_str() {
+                    FORMAT_V2 => decode_places_v2(tile, &body)
+                        .map_err(|error| format!("korea data v2 places decode failed: {error}"))?,
+                    FORMAT_V1 => decode_places_v1(tile, &body)
+                        .map_err(|error| format!("korea data v1 places decode failed: {error}"))?,
+                    other => {
+                        return Err(format!("unknown korea data format `{other}`"));
+                    }
+                };
+                for place in place_records {
                     if area.contains(degrees(place.anchor())) || touches(&area, &place.outline) {
                         found.insert((place.way, place.id), place);
                     }
@@ -1600,10 +1605,10 @@ mod tests {
                 entrances: Vec::new(),
             }],
         );
-        assert!(decode_places(tile, &body[..body.len() - 1]).is_err());
+        assert!(decode_places_v2(tile, &body[..body.len() - 1]).is_err());
         let mut longer = body.clone();
         longer.push(0);
-        assert!(decode_places(tile, &longer).is_err());
+        assert!(decode_places_v2(tile, &longer).is_err());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -465,6 +465,8 @@ pub fn build_map_course(file: &MapCourseFile, base_dir: &Path) -> Result<CourseD
         LatLon { lat, lon },
         &[centerline],
         &course.surfaces,
+        &course.strips,
+        &course.areas,
     );
     if has_estimated {
         course

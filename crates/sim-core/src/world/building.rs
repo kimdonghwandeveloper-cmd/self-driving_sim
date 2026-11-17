@@ -12,7 +12,7 @@ use glam::Vec2;
 
 use crate::vehicle::GroundRect;
 
-use super::course::BuildingDef;
+use super::course::{Area, BuildingDef, Strip};
 use super::map::{LatLon, project};
 use super::places::{self, Place};
 
@@ -315,49 +315,78 @@ pub fn segments_intersect(p1: Vec2, p2: Vec2, q1: Vec2, q2: Vec2) -> bool {
     false
 }
 
-/// 건물 윤곽이 도로 영역(GroundRect)과 겹치는지 검사한다.
-pub fn polygon_overlaps_ground_rect(footprint: &[Vec2], rect: &GroundRect, clearance: f32) -> bool {
-    let n = footprint.len();
-    if n < 3 {
+/// 두 다각형이 겹치는지(꼭짓점 포함, 변 교차 또는 이격 거리 이내) 검사한다.
+pub fn polygon_overlaps_polygon(poly1: &[Vec2], poly2: &[Vec2], clearance: f32) -> bool {
+    let n1 = poly1.len();
+    let n2 = poly2.len();
+    if n1 < 3 || n2 < 3 {
         return false;
     }
     // 1. AABB 1차 빠른 거부 검사
-    let min_x = footprint.iter().map(|p| p.x).fold(f32::INFINITY, f32::min);
-    let max_x = footprint
-        .iter()
-        .map(|p| p.x)
-        .fold(f32::NEG_INFINITY, f32::max);
-    let min_z = footprint.iter().map(|p| p.y).fold(f32::INFINITY, f32::min);
-    let max_z = footprint
-        .iter()
-        .map(|p| p.y)
-        .fold(f32::NEG_INFINITY, f32::max);
+    let min_x1 = poly1.iter().map(|p| p.x).fold(f32::INFINITY, f32::min) - clearance;
+    let max_x1 = poly1.iter().map(|p| p.x).fold(f32::NEG_INFINITY, f32::max) + clearance;
+    let min_z1 = poly1.iter().map(|p| p.y).fold(f32::INFINITY, f32::min) - clearance;
+    let max_z1 = poly1.iter().map(|p| p.y).fold(f32::NEG_INFINITY, f32::max) + clearance;
 
-    let rect_radius = rect.half_size.length() + clearance;
-    let dx = rect.center.x - (min_x + max_x) * 0.5;
-    let dz = rect.center.y - (min_z + max_z) * 0.5;
-    let dist_sq = dx * dx + dz * dz;
-    let max_extent = ((max_x - min_x).hypot(max_z - min_z) * 0.5) + rect_radius;
-    if dist_sq > max_extent * max_extent {
+    let min_x2 = poly2.iter().map(|p| p.x).fold(f32::INFINITY, f32::min);
+    let max_x2 = poly2.iter().map(|p| p.x).fold(f32::NEG_INFINITY, f32::max);
+    let min_z2 = poly2.iter().map(|p| p.y).fold(f32::INFINITY, f32::min);
+    let max_z2 = poly2.iter().map(|p| p.y).fold(f32::NEG_INFINITY, f32::max);
+
+    if max_x1 < min_x2 || min_x1 > max_x2 || max_z1 < min_z2 || min_z1 > max_z2 {
         return false;
     }
 
-    // 2. 직사각형 로컬 좌표계로 건물 꼭짓점 변환 후 포함 여부 검사
-    let (sin, cos) = (-rect.heading_rad).sin_cos();
-    for &p in footprint {
-        let rel = p - rect.center;
-        let local_x = rel.x * cos - rel.y * sin;
-        let local_z = rel.x * sin + rel.y * cos;
-        if local_x.abs() <= rect.half_size.x + clearance
-            && local_z.abs() <= rect.half_size.y + clearance
-        {
+    // 2. 꼭짓점 포함 검사 (한 다각형의 꼭짓점이 다른 다각형 내부에 있는지)
+    for &p in poly1 {
+        if point_inside_polygon(p, poly2) {
+            return true;
+        }
+    }
+    for &p in poly2 {
+        if point_inside_polygon(p, poly1) {
             return true;
         }
     }
 
-    // 3. 직사각형의 네 꼭짓점이 건물 다각형 내부에 있는지 검사
-    let half_w = rect.half_size.x + clearance;
-    let half_h = rect.half_size.y + clearance;
+    // 3. 변끼리의 교차 검사 (십자형 겹침 검출)
+    for i in 0..n1 {
+        let p1 = poly1[i];
+        let p2 = poly1[(i + 1) % n1];
+        for j in 0..n2 {
+            let q1 = poly2[j];
+            let q2 = poly2[(j + 1) % n2];
+            if segments_intersect(p1, p2, q1, q2) {
+                return true;
+            }
+        }
+    }
+
+    // 4. 이격 거리(clearance) 검사
+    if clearance > 0.0 {
+        for &p in poly1 {
+            for j in 0..n2 {
+                if distance_point_to_segment(p, poly2[j], poly2[(j + 1) % n2]) <= clearance {
+                    return true;
+                }
+            }
+        }
+        for &p in poly2 {
+            for i in 0..n1 {
+                if distance_point_to_segment(p, poly1[i], poly1[(i + 1) % n1]) <= clearance {
+                    return true;
+                }
+            }
+        }
+    }
+
+    false
+}
+
+/// 건물 윤곽이 도로 영역(GroundRect)과 겹치는지 검사한다.
+pub fn polygon_overlaps_ground_rect(footprint: &[Vec2], rect: &GroundRect, clearance: f32) -> bool {
+    let half_w = rect.half_size.x;
+    let half_h = rect.half_size.y;
     let corners_local = [
         Vec2::new(-half_w, -half_h),
         Vec2::new(half_w, -half_h),
@@ -365,7 +394,7 @@ pub fn polygon_overlaps_ground_rect(footprint: &[Vec2], rect: &GroundRect, clear
         Vec2::new(-half_w, half_h),
     ];
     let (world_sin, world_cos) = rect.heading_rad.sin_cos();
-    let rect_corners_world: [Vec2; 4] = [
+    let rect_corners_world = [
         Vec2::new(
             rect.center.x + corners_local[0].x * world_cos - corners_local[0].y * world_sin,
             rect.center.y + corners_local[0].x * world_sin + corners_local[0].y * world_cos,
@@ -383,27 +412,32 @@ pub fn polygon_overlaps_ground_rect(footprint: &[Vec2], rect: &GroundRect, clear
             rect.center.y + corners_local[3].x * world_sin + corners_local[3].y * world_cos,
         ),
     ];
+    polygon_overlaps_polygon(footprint, &rect_corners_world, clearance)
+}
 
-    for &c in &rect_corners_world {
-        if point_inside_polygon(c, footprint) {
+/// 건물 윤곽이 굽은 길 차로 띠(Strip)의 노면과 겹치는지 검사한다.
+pub fn polygon_overlaps_strip(footprint: &[Vec2], strip: &Strip, clearance: f32) -> bool {
+    let n = strip.left.len().min(strip.right.len());
+    if n < 2 {
+        return false;
+    }
+    for i in 0..(n - 1) {
+        let quad = [
+            strip.left[i],
+            strip.left[i + 1],
+            strip.right[i + 1],
+            strip.right[i],
+        ];
+        if polygon_overlaps_polygon(footprint, &quad, clearance) {
             return true;
         }
     }
-
-    // 4. 건물 다각형의 변과 도로 직사각형의 변 사이의 교차 검사 (십자형 겹침 검출)
-    for i in 0..n {
-        let p1 = footprint[i];
-        let p2 = footprint[(i + 1) % n];
-        for j in 0..4 {
-            let q1 = rect_corners_world[j];
-            let q2 = rect_corners_world[(j + 1) % 4];
-            if segments_intersect(p1, p2, q1, q2) {
-                return true;
-            }
-        }
-    }
-
     false
+}
+
+/// 건물 윤곽이 교차로 다각형(Area) 노면과 겹치는지 검사한다.
+pub fn polygon_overlaps_area(footprint: &[Vec2], area: &Area, clearance: f32) -> bool {
+    polygon_overlaps_polygon(footprint, &area.boundary, clearance)
 }
 
 /// 점 p가 단순 다각형 내부에 있는지 검사한다 (Ray-casting).
@@ -467,6 +501,8 @@ pub fn build_course_buildings(
     origin: LatLon,
     road_centerlines: &[Vec<Vec2>],
     road_surfaces: &[GroundRect],
+    road_strips: &[Strip],
+    road_areas: &[Area],
     max_corridor_dist_m: f32,
 ) -> (Vec<BuildingDef>, bool) {
     let mut buildings = Vec::new();
@@ -501,11 +537,25 @@ pub fn build_course_buildings(
             }
         }
 
-        // 도로 면과의 중첩 검사
-        let overlaps = road_surfaces
+        // 도로 면(GroundRect), 차로 띠(Strip), 교차로 다각형(Area)과의 중첩 검사
+        let overlaps_surface = road_surfaces
             .iter()
             .any(|rect| polygon_overlaps_ground_rect(&footprint, rect, ROAD_CLEARANCE_MARGIN_M));
-        if overlaps {
+        if overlaps_surface {
+            continue;
+        }
+
+        let overlaps_strip = road_strips
+            .iter()
+            .any(|strip| polygon_overlaps_strip(&footprint, strip, ROAD_CLEARANCE_MARGIN_M));
+        if overlaps_strip {
+            continue;
+        }
+
+        let overlaps_area = road_areas
+            .iter()
+            .any(|area| polygon_overlaps_area(&footprint, area, ROAD_CLEARANCE_MARGIN_M));
+        if overlaps_area {
             continue;
         }
 
@@ -530,21 +580,16 @@ pub fn build_course_buildings(
     (buildings, has_estimated)
 }
 
-/// 기준 디렉터리 주변에서 동반 장소/건물 파일(`places.osm.json`, `places-synthetic.osm.json` 등)을 찾아 건물을 생성한다.
+/// 기준 디렉터리 주변에서 동반 장소/건물 파일(`places.osm.json`, `places-synthetic.osm.json`, `*.places.osm.json`)을 찾아 건물을 생성한다.
 pub fn load_companion_buildings(
     base_dir: &Path,
     origin: LatLon,
     road_centerlines: &[Vec<Vec2>],
     road_surfaces: &[GroundRect],
+    road_strips: &[Strip],
+    road_areas: &[Area],
 ) -> (Vec<BuildingDef>, bool) {
-    let candidate_names = [
-        "places.osm.json",
-        "places-synthetic.osm.json",
-        "../places.osm.json",
-        "../places-synthetic.osm.json",
-        "../../places.osm.json",
-        "../../testdata/yeosu-expo/places-synthetic.osm.json",
-    ];
+    let candidate_names = ["places.osm.json", "places-synthetic.osm.json"];
 
     for name in &candidate_names {
         let path = base_dir.join(name);
@@ -562,6 +607,8 @@ pub fn load_companion_buildings(
             origin,
             road_centerlines,
             road_surfaces,
+            road_strips,
+            road_areas,
             MAX_BUILDING_CORRIDOR_DISTANCE_M,
         );
         if !buildings.is_empty() {
@@ -569,23 +616,27 @@ pub fn load_companion_buildings(
         }
     }
 
-    // 디렉터리 내의 *.places.osm.json 검색
+    // 디렉터리 내의 *.places.osm.json 정렬 탐색
     if let Ok(entries) = std::fs::read_dir(base_dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            let is_match = path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .is_some_and(|s| s.ends_with(".places.osm.json"));
-            if !is_match {
-                continue;
-            }
+        let mut paths: Vec<_> = entries
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| {
+                p.file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|s| s.ends_with(".places.osm.json"))
+            })
+            .collect();
+        paths.sort();
+        for path in paths {
             if let Ok(places) = places::load_places(&path) {
                 let (buildings, est) = build_course_buildings(
                     &places,
                     origin,
                     road_centerlines,
                     road_surfaces,
+                    road_strips,
+                    road_areas,
                     MAX_BUILDING_CORRIDOR_DISTANCE_M,
                 );
                 if !buildings.is_empty() {
@@ -595,35 +646,30 @@ pub fn load_companion_buildings(
         }
     }
 
-    // 전국 자료 폴더(data/korea 또는 testdata/korea-yeosu 등)에서 장소 추출 시도
-    let data_dirs = [
-        Path::new("data/korea"),
-        Path::new("testdata/korea-yeosu"),
-        Path::new("../data/korea"),
-        Path::new("../testdata/korea-yeosu"),
-    ];
+    // 전국 자료 폴더(data/korea 또는 testdata/korea-yeosu)에서 장소 추출 시도
+    let data_dirs = [Path::new("data/korea"), Path::new("testdata/korea-yeosu")];
     for data_dir in &data_dirs {
         if let Ok(korea) = super::korea_data::KoreaData::open(data_dir) {
-            let radius_m = 1000.0;
-            let radius_deg = radius_m / 111_000.0;
+            let radius_m = 800.0;
+            let lat_delta = radius_m / 111_000.0;
+            let cos_lat = origin.lat.to_radians().cos().abs().max(0.1);
+            let lon_delta = radius_m / (111_000.0 * cos_lat);
             let bbox = super::map_fetch::Bbox {
-                south: origin.lat - radius_deg,
-                west: origin.lon - radius_deg / origin.lat.to_radians().cos().max(0.1),
-                north: origin.lat + radius_deg,
-                east: origin.lon + radius_deg / origin.lat.to_radians().cos().max(0.1),
+                south: origin.lat - lat_delta,
+                west: origin.lon - lon_delta,
+                north: origin.lat + lat_delta,
+                east: origin.lon + lon_delta,
             };
-            if let Ok(region) = korea.region(&bbox).and_then(|r| {
-                if r.places.is_empty() {
-                    Err("empty".to_owned())
-                } else {
-                    Ok(r)
-                }
-            }) {
+            if let Ok(region) = korea.region(&bbox)
+                && !region.places.is_empty()
+            {
                 let (buildings, est) = build_course_buildings(
                     &region.places,
                     origin,
                     road_centerlines,
                     road_surfaces,
+                    road_strips,
+                    road_areas,
                     MAX_BUILDING_CORRIDOR_DISTANCE_M,
                 );
                 if !buildings.is_empty() {
@@ -638,6 +684,7 @@ pub fn load_companion_buildings(
 
 #[cfg(test)]
 mod tests {
+    use super::super::course::StripKind;
     use super::*;
 
     #[test]
@@ -751,6 +798,8 @@ mod tests {
             origin,
             &road_centerlines,
             &[road_surface],
+            &[],
+            &[],
             150.0,
         );
 
@@ -771,6 +820,63 @@ mod tests {
             Vec2::new(-20.0, 2.0),
         ];
         assert!(polygon_overlaps_ground_rect(&cross_building, &road, 0.5));
+    }
+
+    #[test]
+    fn building_inside_strip_and_area_excluded() {
+        // 1. 차로 띠 (Strip) 안에 있는 건물
+        let strip = Strip {
+            kind: StripKind::Road,
+            left: vec![Vec2::new(-3.0, 0.0), Vec2::new(-3.0, 50.0)],
+            right: vec![Vec2::new(3.0, 0.0), Vec2::new(3.0, 50.0)],
+        };
+        let building_in_strip = vec![
+            Vec2::new(-1.0, 10.0),
+            Vec2::new(1.0, 10.0),
+            Vec2::new(1.0, 20.0),
+            Vec2::new(-1.0, 20.0),
+        ];
+        assert!(polygon_overlaps_strip(&building_in_strip, &strip, 0.5));
+
+        // 2. 교차로 다각형 (Area) 안에 있는 건물
+        let area = Area {
+            center: Vec2::ZERO,
+            boundary: vec![
+                Vec2::new(-10.0, -10.0),
+                Vec2::new(10.0, -10.0),
+                Vec2::new(10.0, 10.0),
+                Vec2::new(-10.0, 10.0),
+            ],
+        };
+        let building_in_area = vec![
+            Vec2::new(-2.0, -2.0),
+            Vec2::new(2.0, -2.0),
+            Vec2::new(2.0, 2.0),
+            Vec2::new(-2.0, 2.0),
+        ];
+        assert!(polygon_overlaps_area(&building_in_area, &area, 0.5));
+    }
+
+    #[test]
+    fn korea_data_bbox_radius_within_2000m_limit() {
+        let origin = LatLon {
+            lat: 34.75,
+            lon: 127.75,
+        };
+        let radius_m = 800.0;
+        let lat_delta = radius_m / 111_000.0;
+        let cos_lat = origin.lat.to_radians().cos().abs().max(0.1);
+        let lon_delta = radius_m / (111_000.0 * cos_lat);
+        let bbox = super::super::map_fetch::Bbox {
+            south: origin.lat - lat_delta,
+            west: origin.lon - lon_delta,
+            north: origin.lat + lat_delta,
+            east: origin.lon + lon_delta,
+        };
+        assert!(
+            bbox.validate().is_ok(),
+            "800m 반경 bbox는 2000m 상한을 만족해야 함"
+        );
     }
 
     #[test]
@@ -814,8 +920,15 @@ mod tests {
         };
 
         let road_centerlines = vec![vec![Vec2::new(0.0, -100.0), Vec2::new(0.0, 100.0)]];
-        let (buildings, _) =
-            build_course_buildings(&[park_place], origin, &road_centerlines, &[], 150.0);
+        let (buildings, _) = build_course_buildings(
+            &[park_place],
+            origin,
+            &road_centerlines,
+            &[],
+            &[],
+            &[],
+            150.0,
+        );
         assert!(buildings.is_empty(), "공원은 건물로 생성되지 않아야 합니다");
     }
 }

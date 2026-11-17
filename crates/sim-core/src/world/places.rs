@@ -257,9 +257,12 @@ pub fn places_to_overpass_json(places: &[Place]) -> String {
         }
         let tags_str = tag_pairs.join(",");
         if is_way {
-            let node_ids: Vec<String> = (0..p.outline.len() + 1)
+            let mut node_ids: Vec<String> = (0..p.outline.len())
                 .map(|i| format!("{}{:03}", raw_id, i + 1))
                 .collect();
+            if let Some(first_id) = node_ids.first().cloned() {
+                node_ids.push(first_id);
+            }
             let mut geom_pts = p.outline.clone();
             if let Some(&first) = p.outline.first() {
                 geom_pts.push(first);
@@ -673,5 +676,70 @@ mod tests {
         ] {
             assert!(query.contains(part), "{query}");
         }
+    }
+
+    /// 장소 목록 직렬화(places_to_overpass_json) 및 재파싱(parse_places)의 동등성을 검증한다.
+    #[test]
+    fn save_and_reload_places_roundtrip() {
+        let mut tags = BTreeMap::new();
+        tags.insert("building".to_owned(), "commercial".to_owned());
+        tags.insert("height".to_owned(), "18.5m".to_owned());
+        tags.insert("name".to_owned(), "Roundtrip Tower".to_owned());
+
+        let original = vec![
+            Place {
+                id: "way/9001".to_owned(),
+                name: "Roundtrip Tower".to_owned(),
+                kind: "building".to_owned(),
+                tags: tags.clone(),
+                outline: vec![
+                    LatLon {
+                        lat: 34.7431,
+                        lon: 127.7437,
+                    },
+                    LatLon {
+                        lat: 34.7431,
+                        lon: 127.7439,
+                    },
+                    LatLon {
+                        lat: 34.7433,
+                        lon: 127.7439,
+                    },
+                    LatLon {
+                        lat: 34.7433,
+                        lon: 127.7437,
+                    },
+                ],
+                center: LatLon {
+                    lat: 34.7432,
+                    lon: 127.7438,
+                },
+                entrances: Vec::new(),
+            },
+            Place {
+                id: "node/9002".to_owned(),
+                name: "Info Node".to_owned(),
+                kind: "amenity=information".to_owned(),
+                tags: BTreeMap::from([("name".to_owned(), "Info Node".to_owned())]),
+                outline: Vec::new(),
+                center: LatLon {
+                    lat: 34.7440,
+                    lon: 127.7440,
+                },
+                entrances: Vec::new(),
+            },
+        ];
+
+        let json = places_to_overpass_json(&original);
+        let reloaded = parse_places(&json).expect("should parse successfully");
+        assert_eq!(reloaded.len(), 2, "must preserve both way and node places");
+        assert_eq!(reloaded[0].id, "node/9002");
+        assert_eq!(reloaded[1].id, "way/9001");
+        assert_eq!(reloaded[1].name, "Roundtrip Tower");
+        assert_eq!(reloaded[1].outline.len(), 4, "outline must have 4 vertices");
+        assert_eq!(
+            reloaded[1].tags.get("height").map(String::as_str),
+            Some("18.5m")
+        );
     }
 }
