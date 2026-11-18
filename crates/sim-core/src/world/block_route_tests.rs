@@ -194,6 +194,7 @@ fn turn_restriction_connections_are_respected() {
     let mut m = cross();
     let a = choose(&m, 10, 1);
     let b = choose(&m, 30, 2);
+    assert!(plan_block_route(&m, &[a.clone(), b.clone()], 1000.0).is_ok());
     m.restrictions.push(TurnRestriction {
         id: 1,
         from_way: 10,
