@@ -52,7 +52,7 @@ func _run() -> void:
 	_check(map.points.size() == 2, "실제 도로 클릭으로 출발·도착을 선택하지 못함")
 	_check(not map.drive_button.disabled, "선택 경로 주행 버튼 비활성")
 	map._jump_coordinates("37.4979,127.0276")
-	_check(map.feedback.contains("점 모두 삭제") and map.points.size() == 2, "지역 이동이 선택을 삭제함")
+	_check(map.feedback.contains("새 경로") and map.points.size() == 2, "지역 이동이 선택을 삭제함")
 	map._fit_route()
 	for frame in 4:
 		await process_frame

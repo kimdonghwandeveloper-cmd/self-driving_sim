@@ -29,6 +29,10 @@ var points := PackedVector2Array()
 var route_line := PackedVector2Array()
 var tile_layers: Array = []
 var dragging := false
+## 왼쪽 끌기는 지도 이동으로 처리하고 짧게 눌렀다 놓을 때만 지점을 선택한다.
+var left_down := false
+var left_moved := false
+var left_origin := Vector2.ZERO
 var status := Label.new()
 var picker: Object
 var tiles: Object
@@ -184,19 +188,15 @@ func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton:
 		if event.button_index == MOUSE_BUTTON_RIGHT:
 			dragging = event.pressed
-		elif event.pressed and event.button_index == MOUSE_BUTTON_LEFT and picker != null:
-			var at: Vector2 = get_canvas_transform().affine_inverse() * event.position
-			if event.shift_pressed:
-				picker.call("remove_near", at, 12.0 / camera.zoom.x)
-			elif _ensure_region(at):
-				# 건물·장소를 누르면 그 진입 지점(가까운 도로 위 점)을, 아니면 누른 자리를 점으로 더한다.
-				var place := int(picker.call("place_at", at))
-				if place >= 0:
-					_add_place(place)
-				else:
-					picker.call("add_point", at)
-					_assign_last_endpoint()
-			_refresh_route()
+		elif event.button_index == MOUSE_BUTTON_LEFT and picker != null:
+			if event.pressed:
+				left_down = true
+				left_moved = false
+				left_origin = event.position
+			else:
+				if left_down and not left_moved:
+					_select_map_position(event.position, event.shift_pressed)
+				left_down = false
 		elif event.pressed and event.button_index in [MOUSE_BUTTON_WHEEL_UP, MOUSE_BUTTON_WHEEL_DOWN]:
 			var before := get_global_mouse_position()
 			var factor := 1.25 if event.button_index == MOUSE_BUTTON_WHEEL_UP else 0.8
@@ -205,15 +205,34 @@ func _unhandled_input(event: InputEvent) -> void:
 			camera.position += before - get_global_mouse_position()
 			_clamp_camera()
 			queue_redraw()
-	elif event is InputEventMouseMotion and dragging:
+	elif event is InputEventMouseMotion and (dragging or left_down):
+		if left_down and event.position.distance_to(left_origin) >= 6.0:
+			left_moved = true
+		if not dragging and not left_moved:
+			return
 		camera.position -= event.relative / camera.zoom.x
 		_clamp_camera()
 		queue_redraw()
+
+## 짧은 지도 클릭을 출발·도착 선택으로 처리하고 시설은 확인 가능한 가까운 도로로 연결한다.
+func _select_map_position(screen_position: Vector2, remove: bool) -> void:
+	var at: Vector2 = get_canvas_transform().affine_inverse() * screen_position
+	if remove:
+		picker.call("remove_near", at, 12.0 / camera.zoom.x)
+	elif _ensure_region(at):
+		var place := int(picker.call("place_at", at))
+		if place >= 0:
+			_add_place(place)
+		else:
+			picker.call("add_point", at)
+			_assign_last_endpoint()
+	_refresh_route()
 
 ## 포커스 상실 시 지도 끌기를 끝낸다.
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_APPLICATION_FOCUS_OUT:
 		dragging = false
+		left_down = false
 
 ## 현재 뷰의 회색 칸, 타일, 바깥 바다색, 열린 지역 테두리, 자동 열기 기준 십자선을 그린다(가볍다, 매 프레임).
 ## 도로·건물·경로·점은 _draw_overlay가 따로 그린다.
@@ -648,7 +667,7 @@ func _process(delta: float) -> void:
 			route_hint = "경로 생성 실패: " + str(result.error)
 		elif points.size() == 1:
 			route_hint = "출발 선택됨 · 같은 지역 안의 도착 도로를 클릭하세요."
-		var text := (feedback + "\n" if not feedback.is_empty() else "") + (hint + "\n" if not data_ok else "전국 OSM 자료 준비됨 · 한 지역 1.5 km 내 짧은 주행\n") + route_hint + "\n우클릭: 이동 / 휠: 확대 / 도로/시설 클릭: 선택 지점 지정 / Shift+클릭: 점 삭제\n" + "\n".join(picker.call("status_lines"))
+		var text := (feedback + "\n" if not feedback.is_empty() else "") + (hint + "\n" if not data_ok else "전국 OSM 자료 준비됨 · 한 지역 1.5 km 내 짧은 주행\n") + route_hint + "\n드래그: 이동 / 휠: 확대 / 도로/시설 클릭: 선택 지점 지정 / Shift+클릭: 점 삭제\n" + "\n".join(picker.call("status_lines"))
 		# 글자가 바뀔 때만 넣는다(같은 글자를 매 프레임 넣으면 글자 배치를 다시 한다).
 		if status.text != text:
 			status.text = text
