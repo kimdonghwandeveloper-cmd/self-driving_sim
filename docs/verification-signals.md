@@ -12,11 +12,13 @@
 
 ## 준비
 
-기능 브랜치가 있는 워크트리에서 Windows PowerShell로 빌드한다. 독립 Rust 패키지이므로 이 도구를 빌드할 때 Bevy 엔진을 빌드하지 않는다.
+기능 브랜치가 있는 워크트리에서 Windows PowerShell로 빌드한다. 독립 Rust 패키지이므로 이 도구를 빌드할 때 시뮬레이터 엔진을 함께 빌드하지 않는다.
 
 ```powershell
 cargo.exe build --locked --manifest-path tools/verification-gate/Cargo.toml
 $gate = (Resolve-Path tools/verification-gate/target/debug/verification-gate.exe).Path
+# PATH에 godot가 없으면 사용 중인 Godot 콘솔 실행 파일을 명시한다.
+$env:GODOT_BIN = 'C:/사용자/Godot_console.exe'
 ```
 
 아래 명령은 각 에이전트가 자신의 터미널에서 실행한다. `$gate`는 위 실행 파일의 절대 경로다. 개발 브랜치에 도구가 아직 없어도 이 경로로 호출할 수 있다. WSL 안에서도 Windows용 실행 파일과 Windows 경로를 사용한다.
@@ -39,7 +41,7 @@ $code = $LASTEXITCODE
 
 1. 요청 ID와 request.toml의 커밋/단계, 변경 내역을 확인한다.
 2. test 워크트리가 다른 검증에 사용 중이지 않은지 확인한다. clean한 detached HEAD여야 한다. 도구는 변경 내용을 stash/reset하지 않는다.
-3. 다음 명령으로 요청 커밋을 체크아웃하고 fmt, clippy, 전체 테스트, 기본 smoke 검사를 실행한다. stdout/stderr는 요청 폴더의 명령별 로그로 남는다.
+3. 다음 명령으로 요청 커밋을 체크아웃하고 fmt, clippy, 전체 테스트, `sim-godot` 빌드·Godot import·기본 smoke 검사를 실행한다. stdout/stderr는 요청 폴더의 명령별 로그로 남는다.
 
 ```powershell
 & $gate verify $id C:/Users/kimdo/RustroverProjects/self-driving_sim-test
@@ -72,3 +74,5 @@ $code = $LASTEXITCODE
 이 도구는 상시 감시 서비스가 아니다. Claude와 Codex의 별도 loop가 요청/결과를 주기적으로 확인해야 한다. Codex는 요청 ID를 확인하고 실제 검토한 뒤만 approve한다. 구현 시점에는 Claude 세션과의 실시간 왕복 전달은 검증하지 않았다.
 
 Codex의 loop는 & $gate list로 요청 목록을 확인한다. pending 요청만 선택하고, awaiting-review는 로그·코드 검토를 마친 뒤 결정한다. started-or-interrupted는 현재 실행 중인지 먼저 확인하며 자동 재실행/승인하지 않는다.
+
+2026-11-18 통합: 삭제된 Bevy 실행 파일 대신 `sim-godot` 빌드와 Godot 헤드리스 import/smoke를 검사한다. 이 도구의 진행 신호는 사용자 병합 승인을 대신하지 않는다.

@@ -34,6 +34,17 @@ fn gate(at: &Path, args: &[&str], expected: i32) -> Output {
     let out = Command::new(env!("CARGO_BIN_EXE_verification-gate"))
         .current_dir(at)
         .args(args)
+        .env(
+            "GODOT_BIN",
+            at.parent()
+                .unwrap()
+                .join("test/target/debug")
+                .join(if cfg!(windows) {
+                    "sim-godot.exe"
+                } else {
+                    "sim-godot"
+                }),
+        )
         .output()
         .unwrap();
     assert_eq!(
@@ -60,12 +71,12 @@ fn protocol_lifecycle() {
     fs::create_dir_all(dev.join("src")).unwrap();
     fs::write(
         dev.join("Cargo.toml"),
-        "[package]\nname = \"self-driving_sim\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        "[package]\nname = \"sim-godot\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
     )
     .unwrap();
     fs::write(
         dev.join("src/main.rs"),
-        "/// Exit successfully for the protocol smoke fixture.\nfn main() {}\n",
+        "/// Emit arguments as a stand-in engine for the isolated protocol test.\nfn main() {\n    let args: Vec<_> = std::env::args().collect();\n    println!(\"GODOT FIXTURE {args:?}\");\n}\n",
     )
     .unwrap();
     fs::write(dev.join(".gitignore"), "/target/\n").unwrap();
@@ -90,6 +101,18 @@ fn protocol_lifecycle() {
     gate(&dev, &["wait", &id, "0"], 3);
     gate(&dev, &["approve", &id, "must fail before checks"], 1);
     gate(&dev, &["verify", &id, test.to_str().unwrap()], 0);
+    let logs = dev.join(".git/verification-signals").join(&id);
+    assert!(logs.join("extension-build.log").exists());
+    assert!(
+        fs::read_to_string(logs.join("godot-import.log"))
+            .unwrap()
+            .contains("--import")
+    );
+    assert!(
+        fs::read_to_string(logs.join("smoke.log"))
+            .unwrap()
+            .contains("smoke_test.gd")
+    );
     gate(&dev, &["status", &id], 3);
     gate(
         &dev,

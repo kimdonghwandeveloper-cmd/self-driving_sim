@@ -125,7 +125,7 @@ fn signal(dir: &Path, req: &Request, state: &str, notes: String) -> Result<()> {
     )
 }
 
-/// Execute required commands against an isolated test worktree and retain their full output.
+/// 분리된 검증 워크트리에서 Rust 검사와 Godot import/실행 검사를 수행하고 전체 출력을 보존한다.
 fn verify(root: &Path, req: &Request, test: &Path) -> Result<()> {
     clean(test)?;
     if state_dir(test)? != root {
@@ -158,15 +158,8 @@ fn verify(root: &Path, req: &Request, test: &Path) -> Result<()> {
     ];
     if req.smoke {
         commands.push((
-            "smoke",
-            vec![
-                "run",
-                "--locked",
-                "--bin",
-                "self-driving_sim",
-                "--",
-                "--smoke-test",
-            ],
+            "extension-build",
+            vec!["build", "--locked", "-p", "sim-godot"],
         ));
     }
     let cargo = if cfg!(windows) { "cargo.exe" } else { "cargo" };
@@ -183,6 +176,44 @@ fn verify(root: &Path, req: &Request, test: &Path) -> Result<()> {
                 "changes-required",
                 format!("{name} failed: {}; see {name}.log", output.status),
             );
+        }
+    }
+    if req.smoke {
+        let engine = env::var_os("GODOT_BIN").unwrap_or_else(|| "godot".into());
+        for (name, args) in [
+            (
+                "godot-import",
+                vec!["--headless", "--editor", "--path", "godot", "--import"],
+            ),
+            (
+                "smoke",
+                vec![
+                    "--headless",
+                    "--fixed-fps",
+                    "64",
+                    "--path",
+                    "godot",
+                    "--script",
+                    "res://tests/smoke_test.gd",
+                ],
+            ),
+        ] {
+            println!("running {name} for {}", req.commit);
+            let output = Command::new(&engine)
+                .current_dir(test)
+                .args(args)
+                .output()?;
+            let mut log = output.stdout;
+            log.extend_from_slice(&output.stderr);
+            fs::write(dir.join(format!("{name}.log")), log)?;
+            if !output.status.success() {
+                return signal(
+                    &dir,
+                    req,
+                    "changes-required",
+                    format!("{name} failed: {}; see {name}.log", output.status),
+                );
+            }
         }
     }
     clean(test)?;
