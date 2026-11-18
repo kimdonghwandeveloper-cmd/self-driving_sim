@@ -147,6 +147,8 @@ func _populate_courses() -> void:
 	if ClassDB.class_exists("SimVehicle"):
 		_add_course("여수 엑스포 · OSM 배경", DriveScreen.YEOSU_COURSE)
 		_add_course("여수 엑스포 · 내 맵 도로", DriveScreen.YEOSU_CUSTOM_ROADS_COURSE)
+		for key: String in DriveScreen.CONVENTION_COURSES:
+			_add_course("여수 컨벤션 · " + DriveScreen.CONVENTION_COURSES[key], DriveScreen.CONVENTION_PREFIX + key + ".toml")
 	if ClassDB.class_exists("SimCourse"):
 		for file in ClassDB.class_call_static("SimCourse", "course_files"):
 			var label := "지도: " + str(file.label)

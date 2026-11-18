@@ -1,0 +1,5 @@
+# Aerial-image training trace; ID is local and is not an OSM way ID.
+source = "traced-roads.json"
+origin = [34.75097, 127.7493575]
+ways = [910004]
+temporary_width_m = 5
