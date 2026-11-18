@@ -55,3 +55,41 @@ sim-tools.exe --build-korea-data cache/source/south-korea-261111.osm.pbf --out c
 3. 제한 도로 포함 옵션을 켜고 끌 때 선택 가능 표시와 경로·안내가 함께 바뀌는지 확인한다.
 4. 출발을 고른 뒤 다른 지역으로 이동해 도착을 지정한다. 경로 길이 표시와 주행, 저장 경로 재진입을 확인한다.
 5. 실제 조작감·다양한 교차로·장거리 렌더링 성능은 사용자가 별도로 검수한다. 자료가 없는 길은 지역 보정 대상이며 자동으로 만들지 않는다.
+
+## 이번 검증 결과
+
+코드 기준 `503664d`에서 fmt·clippy(경고 0)·Rust 전체 시험 413개와 Godot 헤드리스 시험 24종이 통과했다. 새 전국 팩의 8개 도시 표본도 통과했다. OpenGL Compatibility 렌더링 환경에서 지도 클릭·저장·주행 시험도 통과했다. 실제 화면 캡처는 테스트 워크트리의 `cache/review-10km/osm-route-selected.png`에 있다. 다양한 실제 10 km 곡선·교차로에 대한 수동 검수나 성능 보장은 이 결과에 포함하지 않는다.
+
+엑스포 표본 약 61.8 m는 실제 Godot 차량을 3 m/s 목표 속도로 목표 5 m 이내까지 주행했고 연석·벽 접촉이 없었다. 약 9.98 km 합성 코스는 Rust 운동 모델로 끝 부근까지 주행했으며 충돌이 없었다. 제한 옵션과 방향 규칙·저장·재생은 별도로 검사했다.
+
+테스트 워크트리의 DLL은 갱신되어 바로 확인할 수 있다. develop 폴더의 DLL 빌드는 실행 중인 Godot의 파일 잠금으로 실패했으며, 실행 중인 사용자 앱은 종료하지 않았다. develop에서 확인하려면 그 폴더를 사용하는 Godot를 닫은 뒤 `cargo.exe build --locked -p sim-godot`로 DLL을 갱신해야 한다. develop 브랜치 자체는 병합 전 상태로 유지한다.
+
+## 수정 파일·라인
+
+아래는 develop 기준 변경의 시작 라인이다. 같은 파일의 여러 변경은 줄 번호를 함께 적었다.
+
+| 파일 | 변경 라인 |
+|---|---|
+| `PLAN.md` | 20, 420, 661 |
+| `README.md` | 187, 191, 310, 313, 315, 481, 485 |
+| `config/road_graph.toml` | 19 |
+| `crates/sim-core/src/picker/model.rs` | 90, 132, 314 |
+| `crates/sim-core/src/picker/region.rs` | 35 |
+| `crates/sim-core/src/world/korea_data.rs` | 816, 887, 1544 |
+| `crates/sim-core/src/world/lanelet2_course.rs` | 15, 22, 437 |
+| `crates/sim-core/src/world/map_fetch.rs` | 87, 116, 118 |
+| `crates/sim-core/src/world/places.rs` | 436 |
+| `crates/sim-core/src/world/route.rs` | 37 |
+| `crates/sim-core/src/world/route_plan.rs` | 52, 81, 111, 115, 206, 320, 337, 358, 368, 491, 497, 791, 799, 840, 926, 1020, 1028, 1056, 1275, 1469, 1473, 1526, 1550, 1588 |
+| `crates/sim-core/src/world/test_drive.rs` | 57 |
+| `crates/sim-godot/src/korean.rs` | 40 |
+| `crates/sim-godot/src/route_picker.rs` | 89, 153, 238, 651 |
+| `docs/design/godot-interface.md` | 219, 361 |
+| `docs/map-data.md` | 177, 198, 207, 212, 413 |
+| `docs/osm-10km-and-expo-validation.md` | 1 |
+| `godot/presentation/map_screen.gd` | 20, 322, 415, 444, 446, 450, 481, 502, 589, 604, 688, 691 |
+| `godot/tests/expo_internal_roads_test.gd` | 1 |
+| `godot/tests/long_route_test.gd` | 1 |
+| `godot/tests/osm_route_drive_test.gd` | 61 |
+| `godot/tests/place_pick_test.gd` | 104 |
+| `godot/tests/region_open_test.gd` | 66 |
