@@ -481,3 +481,26 @@ fn expo_snapshot_block_route_drives() {
     .unwrap();
     assert_drives(&c);
 }
+
+/// 축에 평행하지 않은 교차로에서도 원호 이음의 부동소수점 오차로 안내선을 잘못 거부하지 않는다.
+#[test]
+fn rotated_junction_guides_remain_valid() {
+    for angle in 0..90 {
+        let mut m = cross();
+        let rotation = Vec2::from_angle((angle as f32).to_radians());
+        for block in &mut m.blocks {
+            for node in &mut block.nodes {
+                let point = rotation.rotate(crate::world::map::project(fixtures::ORIGIN, node.pos));
+                node.pos = fixtures::offset(f64::from(point.x), -f64::from(point.y));
+            }
+        }
+        for way in [20, 30, 40] {
+            let selected = [choose(&m, 10, 1), choose(&m, way, 2)];
+            let c =
+                course(&m, &selected).unwrap_or_else(|e| panic!("angle={angle} way={way}: {e:?}"));
+            if angle % 30 == 0 {
+                assert_drives(&c);
+            }
+        }
+    }
+}
