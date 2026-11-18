@@ -255,7 +255,7 @@ fn invalid_selections_are_rejected() {
 fn single_block_is_a_complete_route() {
     let m = cross();
     let a = choose(&m, 10, 1);
-    let p = plan_block_route(&m, &[a.clone()], 1000.0).unwrap();
+    let p = plan_block_route(&m, std::slice::from_ref(&a), 1000.0).unwrap();
     assert_eq!(p.traversals, [a]);
     assert!((p.length_m - 60.0).abs() < 0.1);
 }
