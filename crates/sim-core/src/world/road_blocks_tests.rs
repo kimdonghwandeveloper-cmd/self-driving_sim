@@ -330,7 +330,7 @@ fn preserves_turn_restriction_boundaries_and_connections() {
                 .iter()
                 .filter(|c| c.from.block_id == from.id)
                 .count(),
-            if only { 1 } else { 1 }
+            1
         );
     }
     let r = TurnRestriction {
