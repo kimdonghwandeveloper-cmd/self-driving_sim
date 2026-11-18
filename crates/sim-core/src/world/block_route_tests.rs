@@ -264,7 +264,7 @@ fn assert_drives(c: &BlockRouteCourse) {
     c.course.validate().unwrap();
     for speed in [3.0, 8.0] {
         let r = crate::world::test_drive::follow_path(&c.course, &c.guide, speed);
-        assert_eq!(r.impacts, 0, "{r:?}");
+        assert_eq!(r.impacts, 0, "speed={speed}: {r:?}");
         assert!(r.remaining_m < 12.5, "{r:?}");
     }
 }

@@ -209,7 +209,7 @@ pub fn build_block_route_course(
             vehicle_min_radius_m: map::vehicle_min_radius_m(),
             arc_step_deg: settings.arc_step_deg,
         };
-        let line = road_geom::build_geometry(&line, &spec)
+        let mut line = road_geom::build_geometry(&line, &spec)
             .map_err(|message| fail(FailureStage::Guide, None, message))?
             .centerline;
         if index > 0 {
@@ -225,6 +225,7 @@ pub fn build_block_route_course(
                 .find(|j| j.node_id == connection.via_node);
             // 순수 고리의 반복은 같은 방향으로 닫힌 중심선을 다시 따라간다.
             let center = joint.map(|j| j.area.center).unwrap_or(line[0]);
+            extend_turn_entry(&mut tagged, center, &mut line);
             let n = tagged.len();
             let from = tagged[n - 1].point;
             let before = tagged[n - 2].point;
@@ -384,6 +385,32 @@ fn append(points: &mut Vec<GuidePoint>, point: Vec2, id: &BlockId, node_id: Opti
         });
     }
 }
+/// 기존 도로 끝의 직선 구간 안에서만 원호 진입을 앞당겨 고속 추종 시의 조향 여유를 확보한다.
+/// 도로 면·연석·선택 블록은 수정하지 않으며 남은 직선 길이를 넘지 않는다.
+fn extend_turn_entry(points: &mut [GuidePoint], center: Vec2, next: &mut [Vec2]) {
+    let n = points.len();
+    let from = points[n - 1].point;
+    let before = points[n - 2].point;
+    let entry = (from - before).normalize();
+    let exit = (next[1] - next[0]).normalize();
+    let turn = entry.angle_to(exit).abs();
+    if !(1.0e-3..170.0f32.to_radians()).contains(&turn) {
+        return;
+    }
+    let factor = (turn / 2.0).tan();
+    let old = from.distance(center).min(next[0].distance(center));
+    // 최소 반경 미달은 원래 접속점 오류로 보존한다. 여유 확장은 정상 접속의 동적 추종 보정이다.
+    if old / factor + 0.01 < map::vehicle_min_radius_m() {
+        return;
+    }
+    let desired = (map::vehicle_min_radius_m() * 1.7 * factor).max(old);
+    let extra = (desired - old)
+        .min((from.distance(before) - 0.5).max(0.0))
+        .min((next[1].distance(next[0]) - 0.5).max(0.0));
+    points[n - 1].point -= entry * extra;
+    next[0] += exit * extra;
+}
+
 /// 고정된 교차로 절단 거리 안에서 차량 최소 반경을 만족하는 접선 원호를 만든다.
 fn join_guide(from: Vec2, before: Vec2, center: Vec2, next: &[Vec2]) -> Result<Vec<Vec2>, String> {
     let entry = (from - before).normalize();
