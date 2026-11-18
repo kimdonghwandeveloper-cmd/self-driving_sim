@@ -71,6 +71,8 @@ pub struct Place {
     pub name: String,
     /// 종류(`amenity=cafe`, `building` 등).
     pub kind: String,
+    /// 원본 OSM 태그 목록.
+    pub tags: BTreeMap<String, String>,
     /// 윤곽(닫는 점 중복 없음). 점 장소는 비어 있다.
     pub outline: Vec<LatLon>,
     /// 윤곽 꼭짓점의 평균(점 장소는 그 점).
@@ -164,6 +166,7 @@ pub fn parse_places(json: &str) -> Result<Vec<Place>, String> {
                         id: format!("node/{}", element.id),
                         name,
                         kind: place_kind(&element.tags),
+                        tags: element.tags.clone(),
                         outline: Vec::new(),
                         center: at,
                         entrances: Vec::new(),
@@ -175,8 +178,15 @@ pub fn parse_places(json: &str) -> Result<Vec<Place>, String> {
                     continue;
                 }
                 let ids = &element.nodes;
-                let closed = ids.len() >= 4 && ids.first() == ids.last();
-                if !closed || ids.len() != element.geometry.len() {
+                let closed = if ids.is_empty() {
+                    element.geometry.len() >= 4
+                        && element.geometry.first() == element.geometry.last()
+                } else {
+                    ids.len() >= 4
+                        && ids.first() == ids.last()
+                        && (element.geometry.is_empty() || ids.len() == element.geometry.len())
+                };
+                if !closed {
                     continue;
                 }
                 let Some(mut outline) = element
@@ -198,6 +208,7 @@ pub fn parse_places(json: &str) -> Result<Vec<Place>, String> {
                     id: format!("way/{}", element.id),
                     name,
                     kind: place_kind(&element.tags),
+                    tags: element.tags.clone(),
                     outline,
                     center,
                     entrances: doors
@@ -213,11 +224,91 @@ pub fn parse_places(json: &str) -> Result<Vec<Place>, String> {
     Ok(places)
 }
 
+/// 도로 스냅샷 이름과 일대일로 대응하는 건물·장소 파일 경로를 반환한다.
+pub fn snapshot_places_path(snapshot: &std::path::Path) -> std::path::PathBuf {
+    let name = snapshot.file_name().unwrap_or_default().to_string_lossy();
+    let stem = name
+        .strip_suffix(".osm.json")
+        .or_else(|| name.strip_suffix(".json"))
+        .unwrap_or(&name);
+    snapshot.with_file_name(format!("{stem}.places.osm.json"))
+}
+
 /// 장소 파일을 읽는다.
 pub fn load_places(path: &std::path::Path) -> Result<Vec<Place>, String> {
     let text = std::fs::read_to_string(path)
         .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
     parse_places(&text)
+}
+
+/// 장소 목록을 Overpass JSON 문자열로 직렬화한다.
+pub fn places_to_overpass_json(places: &[Place]) -> String {
+    let quote = |text: &str| serde_json::to_string(text).expect("string serializes");
+    let mut elements = Vec::new();
+    for p in places {
+        let is_way =
+            p.id.starts_with("way/") || (!p.id.starts_with("node/") && !p.outline.is_empty());
+        let raw_id =
+            p.id.strip_prefix("way/")
+                .or_else(|| p.id.strip_prefix("node/"))
+                .unwrap_or(&p.id);
+        let mut tag_pairs = Vec::new();
+        for (k, v) in &p.tags {
+            tag_pairs.push(format!("{}:{}", quote(k), quote(v)));
+        }
+        if !p.name.is_empty() && !p.tags.contains_key("name") {
+            tag_pairs.push(format!("{}:{}", quote("name"), quote(&p.name)));
+        }
+        if !p.kind.is_empty()
+            && !p.tags.contains_key("building")
+            && (p.kind == "building" || p.kind.starts_with("building="))
+        {
+            tag_pairs.push(format!("{}:{}", quote("building"), quote("yes")));
+        }
+        let tags_str = tag_pairs.join(",");
+        if is_way {
+            let mut node_ids: Vec<String> = (0..p.outline.len())
+                .map(|i| format!("{}{:03}", raw_id, i + 1))
+                .collect();
+            if let Some(first_id) = node_ids.first().cloned() {
+                node_ids.push(first_id);
+            }
+            let mut geom_pts = p.outline.clone();
+            if let Some(&first) = p.outline.first() {
+                geom_pts.push(first);
+            }
+            let geom: Vec<String> = geom_pts
+                .iter()
+                .map(|pt| format!("{{\"lat\":{:.7},\"lon\":{:.7}}}", pt.lat, pt.lon))
+                .collect();
+            elements.push(format!(
+                "{{\"type\":\"way\",\"id\":{},\"tags\":{{{}}},\"nodes\":[{}],\"geometry\":[{}]}}",
+                raw_id.parse::<u64>().unwrap_or(0),
+                tags_str,
+                node_ids.join(","),
+                geom.join(",")
+            ));
+        } else {
+            elements.push(format!(
+                "{{\"type\":\"node\",\"id\":{},\"lat\":{:.7},\"lon\":{:.7},\"tags\":{{{}}}}}",
+                raw_id.parse::<u64>().unwrap_or(0),
+                p.center.lat,
+                p.center.lon,
+                tags_str
+            ));
+        }
+    }
+    format!(
+        "{{\"generator\":\"sim-core\",\"elements\":[{}]}}\n",
+        elements.join(",")
+    )
+}
+
+/// 장소 목록을 JSON 파일로 저장한다.
+pub fn save_places(path: &std::path::Path, places: &[Place]) -> Result<(), String> {
+    let json = places_to_overpass_json(places);
+    std::fs::write(path, json.as_bytes())
+        .map_err(|error| format!("cannot write {}: {error}", path.display()))
 }
 
 /// 이름에 `query`가 들어 있는(대소문자 무시) 장소 번호를 이름이 짧은 순으로 최대 [`MAX_SEARCH_RESULTS`]개 돌려준다.
@@ -595,5 +686,70 @@ mod tests {
         ] {
             assert!(query.contains(part), "{query}");
         }
+    }
+
+    /// 장소 목록 직렬화(places_to_overpass_json) 및 재파싱(parse_places)의 동등성을 검증한다.
+    #[test]
+    fn save_and_reload_places_roundtrip() {
+        let mut tags = BTreeMap::new();
+        tags.insert("building".to_owned(), "commercial".to_owned());
+        tags.insert("height".to_owned(), "18.5m".to_owned());
+        tags.insert("name".to_owned(), "Roundtrip Tower".to_owned());
+
+        let original = vec![
+            Place {
+                id: "way/9001".to_owned(),
+                name: "Roundtrip Tower".to_owned(),
+                kind: "building".to_owned(),
+                tags: tags.clone(),
+                outline: vec![
+                    LatLon {
+                        lat: 34.7431,
+                        lon: 127.7437,
+                    },
+                    LatLon {
+                        lat: 34.7431,
+                        lon: 127.7439,
+                    },
+                    LatLon {
+                        lat: 34.7433,
+                        lon: 127.7439,
+                    },
+                    LatLon {
+                        lat: 34.7433,
+                        lon: 127.7437,
+                    },
+                ],
+                center: LatLon {
+                    lat: 34.7432,
+                    lon: 127.7438,
+                },
+                entrances: Vec::new(),
+            },
+            Place {
+                id: "node/9002".to_owned(),
+                name: "Info Node".to_owned(),
+                kind: "amenity=information".to_owned(),
+                tags: BTreeMap::from([("name".to_owned(), "Info Node".to_owned())]),
+                outline: Vec::new(),
+                center: LatLon {
+                    lat: 34.7440,
+                    lon: 127.7440,
+                },
+                entrances: Vec::new(),
+            },
+        ];
+
+        let json = places_to_overpass_json(&original);
+        let reloaded = parse_places(&json).expect("should parse successfully");
+        assert_eq!(reloaded.len(), 2, "must preserve both way and node places");
+        assert_eq!(reloaded[0].id, "node/9002");
+        assert_eq!(reloaded[1].id, "way/9001");
+        assert_eq!(reloaded[1].name, "Roundtrip Tower");
+        assert_eq!(reloaded[1].outline.len(), 4, "outline must have 4 vertices");
+        assert_eq!(
+            reloaded[1].tags.get("height").map(String::as_str),
+            Some("18.5m")
+        );
     }
 }

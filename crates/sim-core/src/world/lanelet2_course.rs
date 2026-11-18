@@ -128,13 +128,29 @@ pub fn build_lanelet2_course_from_file(
         }
     }
 
-    build_lanelet_course(
+    let mut lanelet_course = build_lanelet_course(
         &geometry,
         &file.name,
         file.start_lanelet,
         file.goal_lanelet,
         notices,
-    )
+    )?;
+    let (buildings, has_estimated) = super::building::load_companion_buildings(
+        base_dir,
+        origin,
+        &[lanelet_course.guide.clone()],
+        &lanelet_course.course.surfaces,
+        &lanelet_course.course.strips,
+        &lanelet_course.course.areas,
+    )?;
+    if has_estimated {
+        lanelet_course
+            .course
+            .notices
+            .push(super::building::ESTIMATED_HEIGHT_NOTICE.to_owned());
+    }
+    lanelet_course.course.buildings = buildings;
+    Ok(lanelet_course)
 }
 
 /// Lanelet2 코스 설정 파일 TOML 문자열과 기준 디렉터리를 받아 코스 정의(`CourseDef`)를 반환한다(기존 map 로더 연동용).

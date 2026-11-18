@@ -151,6 +151,23 @@ pub struct Area {
     pub boundary: Vec<Vec2>,
 }
 
+/// 3D 절차적 건물 정의 (PLAN 4-12).
+#[derive(Debug, Clone, PartialEq)]
+pub struct BuildingDef {
+    /// 건물 식별자 (예: "way/12345" 또는 고유 ID).
+    pub id: String,
+    /// 건물 이름 (없으면 빈 문자열).
+    pub name: String,
+    /// 건물 종류 (예: "apartments", "commercial", "residential", "building" 등).
+    pub kind: String,
+    /// 건물 높이 (m).
+    pub height_m: f32,
+    /// 실제 높이/층수 태그가 없어 기본값으로 추정되었는지 여부.
+    pub is_estimated: bool,
+    /// 바닥면 윤곽 2D 꼭짓점 목록 (지면 x, z 좌표계).
+    pub footprint: Vec<Vec2>,
+}
+
 /// 코스 하나의 전체 정의.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CourseDef {
@@ -172,6 +189,8 @@ pub struct CourseDef {
     pub markings: Vec<Marking>,
     /// 충돌 경계.
     pub colliders: Vec<Collider>,
+    /// 3D 절차적 건물 목록 (PLAN 4-12).
+    pub buildings: Vec<BuildingDef>,
 }
 
 impl CourseDef {
@@ -271,6 +290,7 @@ pub fn training_course() -> CourseDef {
                 kind: ColliderKind::Obstacle,
             },
         ],
+        buildings: Vec::new(),
     }
 }
 
@@ -300,6 +320,7 @@ pub fn calibration_course() -> CourseDef {
             // 후진 시험용 뒤쪽 벽
             obstacle(Vec2::new(0.0, 15.0), Vec2::new(8.0, 0.5)),
         ],
+        buildings: Vec::new(),
     }
 }
 
@@ -436,6 +457,26 @@ impl CourseDef {
                 if a.perp_dot(b) <= 0.0 {
                     return Err(ShapeError::FanNotVisible { index, edge });
                 }
+            }
+        }
+        for (index, building) in self.buildings.iter().enumerate() {
+            if !building.height_m.is_finite() || building.height_m <= 0.0 {
+                return Err(ShapeError::NonFinite {
+                    part: "buildings",
+                    index,
+                });
+            }
+            if building.footprint.len() < 3 {
+                return Err(ShapeError::TooFewBoundaryPoints {
+                    index,
+                    count: building.footprint.len(),
+                });
+            }
+            if !building.footprint.iter().all(|p| finite_point(*p)) {
+                return Err(ShapeError::NonFinite {
+                    part: "buildings",
+                    index,
+                });
             }
         }
         Ok(())

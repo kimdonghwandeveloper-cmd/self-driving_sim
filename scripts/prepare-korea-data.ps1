@@ -19,7 +19,7 @@ function Test-KoreaPack([string]$Directory, [string]$Manifest, [string]$Pack) {
 # 자료 형식과 두 묶음을 모두 확인하고 manifest 원문을 반환한다.
 function Read-VerifiedKoreaData([string]$Directory) {
     $manifest = Get-Content -LiteralPath (Join-Path $Directory 'manifest.toml') -Raw -Encoding UTF8
-    if ($manifest -notmatch '(?m)^format\s*=\s*"korea-data-v1"') { throw 'Unsupported Korea data format' }
+    if ($manifest -notmatch '(?m)^format\s*=\s*"korea-data-v[12]"\s*$') { throw 'Unsupported Korea data format' }
     foreach ($pack in @('roads', 'places')) { Test-KoreaPack $Directory $manifest $pack }
     return $manifest
 }

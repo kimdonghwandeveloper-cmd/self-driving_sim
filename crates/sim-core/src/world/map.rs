@@ -421,6 +421,7 @@ pub fn finish_course(
         areas,
         markings: Vec::new(),
         colliders,
+        buildings: Vec::new(),
     })
 }
 
@@ -458,7 +459,22 @@ pub fn build_map_course(file: &MapCourseFile, base_dir: &Path) -> Result<CourseD
             file.temporary_width_m
         ),
     ];
-    build_road_course("map", &centerline, file.temporary_width_m, notices)
+    let mut course = build_road_course("map", &centerline, file.temporary_width_m, notices)?;
+    let (buildings, has_estimated) = super::building::load_companion_buildings(
+        base_dir,
+        LatLon { lat, lon },
+        &[centerline],
+        &course.surfaces,
+        &course.strips,
+        &course.areas,
+    )?;
+    if has_estimated {
+        course
+            .notices
+            .push(super::building::ESTIMATED_HEIGHT_NOTICE.to_owned());
+    }
+    course.buildings = buildings;
+    Ok(course)
 }
 
 /// 선택 파일 경로에서 지도 코스를 읽는다. 파일 없음·TOML 오류·변환 오류는 모두 `Err`다.

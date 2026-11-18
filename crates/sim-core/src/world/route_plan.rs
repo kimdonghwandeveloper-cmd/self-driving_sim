@@ -812,7 +812,7 @@ fn plan_route_full_inner(
             map_patches,
             point_labels: Vec::new(),
         };
-        match build_course_checked(&file, ways, restrictions, connectivity) {
+        match build_course_checked(&file, ways, restrictions, connectivity, Path::new(".")) {
             Ok(course) => {
                 let path = file
                     .nodes
@@ -932,7 +932,19 @@ pub fn build_route_file_course_full(
     restrictions: &[TurnRestriction],
     connectivity: Option<&Connectivity>,
 ) -> Result<RouteCourse, String> {
-    build_course_checked(file, ways, restrictions, connectivity).map_err(|failure| failure.message)
+    build_route_file_course_with_base_dir(file, ways, restrictions, connectivity, Path::new("."))
+}
+
+/// 기준 디렉터리를 명시하여 경로 파일과 스냅샷 way로 코스를 만든다.
+pub fn build_route_file_course_with_base_dir(
+    file: &RouteFile,
+    ways: &[OsmGraphWay],
+    restrictions: &[TurnRestriction],
+    connectivity: Option<&Connectivity>,
+    base_dir: &Path,
+) -> Result<RouteCourse, String> {
+    build_course_checked(file, ways, restrictions, connectivity, base_dir)
+        .map_err(|failure| failure.message)
 }
 
 /// [`build_route_file_course_full`]의 본체. 교차로 때문에 실패하면 그 노드를 함께 돌려준다.
@@ -941,6 +953,7 @@ fn build_course_checked(
     ways: &[OsmGraphWay],
     restrictions: &[TurnRestriction],
     connectivity: Option<&Connectivity>,
+    base_dir: &Path,
 ) -> Result<RouteCourse, BuildFailure> {
     if file.format != ROUTE_FORMAT {
         return Err(format!(
@@ -1025,7 +1038,7 @@ fn build_course_checked(
         corner_radius_m: file.corner_radius_m,
         stub_length_m: file.stub_length_m,
     };
-    route::build_route_course_detailed(
+    let mut route_course = route::build_route_course_detailed(
         "route",
         &snapped.ways,
         &allowed,
@@ -1034,7 +1047,33 @@ fn build_course_checked(
         &settings,
         notices,
         file.nav_rules,
-    )
+    )?;
+    // 스냅샷 없는 메모리 전용 탐색은 파일 시스템에서 건물 자료를 추측하지 않는다.
+    if file.snapshot.is_empty() {
+        return Ok(route_course);
+    }
+    let (buildings, has_estimated) = super::building::load_buildings_file(
+        &super::places::snapshot_places_path(&base_dir.join(&file.snapshot)),
+        snapped
+            .ways
+            .iter()
+            .flat_map(|way| &way.nodes)
+            .find(|node| node.id == file.nodes[0])
+            .map(|node| node.pos)
+            .ok_or_else(|| "route start node missing".to_owned())?,
+        &[route_course.guide.clone()],
+        &route_course.course.surfaces,
+        &route_course.course.strips,
+        &route_course.course.areas,
+    )?;
+    if has_estimated {
+        route_course
+            .course
+            .notices
+            .push(super::building::ESTIMATED_HEIGHT_NOTICE.to_owned());
+    }
+    route_course.course.buildings = buildings;
+    Ok(route_course)
 }
 
 /// 경로 파일 내용과 그 파일이 있는 폴더로 코스를 만든다. 스냅샷은 `base_dir` 기준 상대 경로다.
@@ -1061,11 +1100,12 @@ pub fn load_route_course_with_patch_dir(
 ) -> Result<CourseDef, String> {
     let snapshot = road_snapshot::load_road_snapshot(&base_dir.join(&file.snapshot))?;
     if file.map_patches.is_empty() {
-        return build_route_file_course_full(
+        return build_route_file_course_with_base_dir(
             file,
             &snapshot.ways,
             &snapshot.restrictions,
             snapshot.connectivity.as_ref(),
+            base_dir,
         )
         .map(|built| built.course);
     }
@@ -1101,11 +1141,12 @@ pub fn load_route_course_with_patch_dir(
     }
     let graph = map_patch_graph::apply_map_patches(&snapshot.ways, &selected)
         .map_err(|error| format!("cannot rebuild route map patches: {error}"))?;
-    let mut course = build_route_file_course_full(
+    let mut course = build_route_file_course_with_base_dir(
         file,
         &graph.ways,
         &snapshot.restrictions,
         snapshot.connectivity.as_ref(),
+        base_dir,
     )
     .map(|built| built.course)?;
     course
@@ -1462,7 +1503,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(current.nodes, file.nodes);
-        let built = build_route_file_course(&file, &ways, None).unwrap();
+        let built = build_route_file_course_with_base_dir(&file, &ways, &[], None, &dir).unwrap();
         for junction in [5_143_358_021, 5_143_358_070, 5_239_572_002] {
             assert!(built.junctions.contains(&junction), "{:?}", built.junctions);
         }

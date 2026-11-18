@@ -184,6 +184,7 @@ impl PickerModel {
             id: String::new(),
             name: name.to_owned(),
             kind: String::new(),
+            tags: std::collections::BTreeMap::new(),
             outline: Vec::new(),
             center: at,
             entrances: Vec::new(),
@@ -300,7 +301,7 @@ impl PickerModel {
                             &self.ways,
                             &self.restrictions,
                             self.connectivity.as_ref(),
-                            "",
+                            &self.snapshot_path.to_string_lossy(),
                             &self.points,
                             &self.config,
                         )
@@ -310,7 +311,7 @@ impl PickerModel {
                             graph,
                             &self.restrictions,
                             self.connectivity.as_ref(),
-                            "",
+                            &self.snapshot_path.to_string_lossy(),
                             &self.points,
                             &self.config,
                         )

@@ -328,6 +328,20 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/prepare-korea-da
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/prepare-korea-data.ps1 -SourceData ../self-driving_sim-develop/data/korea -DestinationRepo ../self-driving_sim-test
 ```
 
+## 3D 건물 자료와 저장 경로 재생
+
+전국 자료는 태그 없는 `korea-data-v1`과 건물 높이·층수 태그를 보존하는 `korea-data-v2`를 읽습니다.
+자료 준비 스크립트도 두 형식의 파일 해시를 검사합니다. 기존 v1 자료에 없던 태그는 자동 복원되지 않으므로
+높이 태그가 필요하면 원본 PBF에서 v2 자료를 다시 만들어야 합니다.
+
+지역을 열면 도로 스냅샷 `이름.osm.json`과 같은 판본 폴더에 `이름.places.osm.json`을 저장합니다.
+저장 경로는 자신이 가리키는 도로 스냅샷의 동반 파일만 읽으며, 다른 지역·CWD·디렉터리 파일 목록에서 건물을 고르지 않습니다.
+미리보기에도 같은 스냅샷 경로를 전달합니다. 동반 파일이 없는 옛 스냅샷은 건물 없이 재생하고, 손상된 동반 파일은 오류로 처리합니다.
+고정 지도·Lanelet2 예제는 코스 폴더의 `places.osm.json`(없으면 기존 `places-synthetic.osm.json`)을 사용합니다.
+
+캐시 판본은 **자료 형식 + 도로 SHA-256 + 장소 SHA-256**을 함께 반영합니다. 건물 자료만 바뀌어도 새 폴더를 만들고
+옛 경로가 참조하는 스냅샷은 보존합니다. 같은 판본의 기존 동반 파일이 예상 내용과 다르면 덮어쓰지 않고 오류를 반환합니다.
+
 ## Lanelet2 지도에서 경로 선택
 
 메뉴의 **Lanelet2 · 출발·도착 선택**에서 등록된 Lanelet2 지도를 엽니다.
