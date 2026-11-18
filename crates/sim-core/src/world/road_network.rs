@@ -10,8 +10,12 @@ use super::{
 use glam::Vec2;
 use std::collections::{BTreeMap, BTreeSet};
 
+/// 도로망 형상 규칙 판본. 재생에 영향을 주는 생성 규칙을 바꾸면 올린다.
+pub const NETWORK_GEOMETRY_VERSION: &str = "road-network-v1";
+
 /// 동일 지도에서 경로 선택과 무관하게 고정하는 생성 설정.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct NetworkSettings {
     pub corner_radius_m: f32,
     pub curb_thickness_m: f32,
@@ -284,7 +288,7 @@ struct End {
 
 impl NetworkSettings {
     /// 양의 유한값과 각도·치수 상한으로 무한 분할과 잘못된 충돌 상자를 방지한다.
-    fn validate(self) -> Result<(), String> {
+    pub(crate) fn validate(self) -> Result<(), String> {
         for (name, value, cap) in [
             ("corner radius", self.corner_radius_m, 30.0),
             ("curb thickness", self.curb_thickness_m, 0.49),

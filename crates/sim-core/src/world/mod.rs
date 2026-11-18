@@ -38,3 +38,5 @@ pub use course::{CourseDef, CourseId, ShapeError};
 pub mod road_network;
 
 pub mod block_route;
+
+pub mod block_route_file;

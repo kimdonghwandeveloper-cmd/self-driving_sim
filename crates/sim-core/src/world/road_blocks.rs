@@ -18,11 +18,15 @@ use std::collections::{BTreeMap, BTreeSet};
 pub const BLOCK_MODEL_VERSION: &str = "osm-road-blocks-v1";
 
 /// 원본 식별자와 정규화한 구간 순서로 만든 블록 식별자.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
+#[serde(transparent)]
 pub struct BlockId(pub String);
 
 /// 정규화한 블록 노드 순서 기준 진행 방향.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
+#[serde(rename_all = "snake_case")]
 pub enum BlockDirection {
     Forward,
     Backward,
@@ -57,7 +61,8 @@ pub struct RoadBlock {
 }
 
 /// 블록을 지정 방향으로 통과하는 선택 단위.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct BlockTraversal {
     pub block_id: BlockId,
     pub direction: BlockDirection,

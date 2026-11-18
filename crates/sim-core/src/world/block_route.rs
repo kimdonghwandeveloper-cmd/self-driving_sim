@@ -17,6 +17,9 @@ use std::{
     collections::{BTreeMap, BTreeSet, BinaryHeap},
 };
 
+/// 차량 기본 치수·운동 모델·안내선 생성/검증 규칙의 재생 판본. 관련 동작 변경 시 올린다.
+pub const BLOCK_GUIDE_VERSION: &str = "block-guide-v1";
+
 /// 선택 순서를 보존해 확정한 전체 블록 통과 경로. 길이는 원본 중심선의 미터 합이다.
 #[derive(Debug, Clone, PartialEq)]
 pub struct BlockRoutePlan {
