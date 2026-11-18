@@ -12,6 +12,7 @@ var failures := PackedStringArray()
 func _init() -> void:
 	print("--- 3D 건물 생성 검증 시험 시작 ---")
 	_test_building_mesh_generation()
+	_test_wall_winding()
 	_test_real_course_buildings()
 	_finish()
 
@@ -81,6 +82,30 @@ func _test_building_mesh_generation() -> void:
 		_check(aabb.size.y <= 18.1, "지붕 메시 높이 이상")
 
 	mesh_node.free()
+
+## 시계·반시계 윤곽 모두에서 벽 앞면과 법선이 건물 밖을 향하는지 검사한다.
+func _test_wall_winding() -> void:
+	for reverse in [false, true]:
+		var footprint := PackedVector3Array([Vector3(-2, 0, -2), Vector3(2, 0, -2), Vector3(2, 0, 2), Vector3(-2, 0, 2)])
+		if reverse:
+			footprint.reverse()
+		var node := CourseMesh.new()
+		root.add_child(node)
+		node.build({"ok": true, "buildings": [{"footprint": footprint, "height_m": 6.0}]})
+		var walls: MeshInstance3D = node.get_node("Buildings_Walls")
+		var arrays := walls.mesh.surface_get_arrays(0)
+		var vertices: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+		var normals: PackedVector3Array = arrays[Mesh.ARRAY_NORMAL]
+		_check(vertices.size() == 24, "사각 건물의 네 벽이 모두 생성되어야 함")
+		for i in range(0, vertices.size(), 3):
+			var a := vertices[i]
+			var b := vertices[i + 1]
+			var c := vertices[i + 2]
+			var center := (a + b + c) / 3.0
+			var outward := Vector3(center.x, 0, center.z)
+			_check((b - a).cross(c - a).dot(outward) < 0.0, "외벽 삼각형 앞면이 안쪽을 향함")
+			_check(normals[i].dot(outward) > 0.0, "외벽 법선이 안쪽을 향함")
+		node.free()
 
 ## 실제 코스(Lanelet2 및 여수 OSM 맵)를 SimCourse.build로 로드하여 건물이 자동 연결되어 생성되는지 검증한다.
 func _test_real_course_buildings() -> void:

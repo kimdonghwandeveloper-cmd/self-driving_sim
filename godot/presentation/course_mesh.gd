@@ -69,6 +69,14 @@ func _buildings(buildings: Array) -> void:
 	for building in buildings:
 		var height: float = building.get("height_m", 6.0)
 		var footprint: PackedVector3Array = building.get("footprint", [])
+		# 윤곽 방향을 통일하여 외벽 앞면과 법선이 바깥을 향하게 한다.
+		var area := 0.0
+		for i in footprint.size():
+			var a := footprint[i]
+			var b := footprint[(i + 1) % footprint.size()]
+			area += a.x * b.z - b.x * a.z
+		if area < 0.0:
+			footprint.reverse()
 		var n := footprint.size()
 		if n < 3:
 			continue
@@ -82,7 +90,7 @@ func _buildings(buildings: Array) -> void:
 
 			var edge := b - a
 			var wall_len := edge.length()
-			var normal := Vector3(-edge.z, 0, edge.x).normalized()
+			var normal := Vector3(edge.z, 0, -edge.x).normalized()
 
 			# 두 개의 삼각형으로 벽면 사각형 구성
 			var uvs := [
