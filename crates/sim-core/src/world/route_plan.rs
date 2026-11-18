@@ -1048,6 +1048,10 @@ fn build_course_checked(
         notices,
         file.nav_rules,
     )?;
+    // 스냅샷 없는 메모리 전용 탐색은 파일 시스템에서 건물 자료를 추측하지 않는다.
+    if file.snapshot.is_empty() {
+        return Ok(route_course);
+    }
     let (buildings, has_estimated) = super::building::load_buildings_file(
         &super::places::snapshot_places_path(&base_dir.join(&file.snapshot)),
         snapped

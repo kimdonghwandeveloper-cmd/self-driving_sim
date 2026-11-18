@@ -22,7 +22,7 @@ foreach ($version in @(1, 2)) {
     if ((Get-Content (Join-Path $target 'data/korea/sentinel.txt')) -ne 'preserved') { throw 'Existing data changed' }
     $cases++
 }
-# 未지원 판본과 해시 불일치는 대상 폴더를 생성하기 전에 거부해야 한다.
+# 미지원 판본과 해시 불일치는 대상 폴더를 생성하기 전에 거부해야 한다.
 foreach ($mode in @('format', 'hash')) {
     $target = Join-Path $root "rejected-$mode"
     New-Item -ItemType Directory -Path $target | Out-Null
