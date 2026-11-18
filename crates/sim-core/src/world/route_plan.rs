@@ -310,7 +310,14 @@ pub fn way_travel(way: &OsmGraphWay, nav_rules: bool) -> Travel {
 
 /// 경로 탐색에 쓰는 way인지(허용 종류이고 탐색할 수 있는 방향이 있음) 판정한다.
 pub fn searchable(way: &OsmGraphWay, allowed: &BTreeSet<&str>, nav_rules: bool) -> bool {
+    let access = way
+        .tags
+        .get("motor_vehicle")
+        .or_else(|| way.tags.get("access"));
+    let restricted =
+        access.is_some_and(|value| !matches!(value.as_str(), "yes" | "permissive" | "designated"));
     way.highway().is_some_and(|kind| allowed.contains(kind))
+        && !restricted
         && way_travel(way, nav_rules) != Travel::Closed
 }
 
@@ -1212,6 +1219,26 @@ mod tests {
     use crate::world::osm_graph::fixtures::{self, FixtureWay};
     use crate::world::osm_graph::parse_overpass_graph;
     use crate::world::test_drive::follow_path;
+
+    /// 시설 도로를 허용하되 제한 접근은 거부하고 차량 전용 허용 태그를 우선한다.
+    #[test]
+    fn internal_roads_respect_vehicle_access() {
+        let mut way = parse(fixtures::three_way()).remove(0);
+        way.tags.insert("highway".into(), "service".into());
+        way.tags.insert("service".into(), "parking_aisle".into());
+        let allowed = BTreeSet::from(["service"]);
+        assert!(searchable(&way, &allowed, true));
+        for restriction in ["private", "no", "destination", "customers"] {
+            way.tags.insert("access".into(), restriction.into());
+            assert!(!searchable(&way, &allowed, true));
+            assert!(!searchable(&way, &allowed, false));
+        }
+        way.tags.insert("motor_vehicle".into(), "yes".into());
+        assert!(searchable(&way, &allowed, true));
+        way.tags.insert("motor_vehicle".into(), "no".into());
+        way.tags.insert("access".into(), "yes".into());
+        assert!(!searchable(&way, &allowed, true));
+    }
 
     /// 폭 시험 사례: (추가 태그, 기대 폭과 출처).
     type WidthCase<'a> = (&'a [(&'a str, &'a str)], (f32, WidthSource));

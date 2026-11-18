@@ -428,6 +428,14 @@ impl SimRoutePicker {
         }
     }
 
+    /// 새로 선택한 점을 출발 또는 도착으로 지정하고 반대쪽 지점은 유지한다.
+    #[func]
+    fn assign_last_endpoint(&mut self, destination: bool) {
+        if let Some(model) = self.model.as_mut() {
+            model.assign_last_endpoint(destination);
+        }
+    }
+
     /// 반경 안에서 가장 가까운 점 하나를 지운다. 지웠으면 `true`.
     #[func]
     fn remove_near(&mut self, view: Vector2, radius_m: f32) -> bool {

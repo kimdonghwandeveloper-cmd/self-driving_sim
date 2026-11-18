@@ -70,8 +70,6 @@ pub const ROAD_KINDS: [&str; 17] = [
     "road",
     "busway",
 ];
-/// 넣지 않는 `service` 값(주차장 통로·진입로, 사용자 동의 2026-11-12).
-pub const SKIPPED_SERVICE: [&str; 3] = ["parking_aisle", "driveway", "drive-through"];
 /// 도로에 남기는 태그. 순서가 형식의 일부다(번호로 저장).
 pub const ROAD_KEYS: [&str; 15] = [
     "highway",
@@ -1037,9 +1035,7 @@ where
                 };
                 let lookup = |key: &str| way.tags().find(|(k, _)| *k == key).map(|(_, v)| v);
                 let refs: Vec<u64> = way.refs().filter_map(positive).collect();
-                if lookup("highway").is_some_and(|kind| ROAD_KINDS.contains(&kind))
-                    && !lookup("service").is_some_and(|value| SKIPPED_SERVICE.contains(&value))
-                {
+                if lookup("highway").is_some_and(|kind| ROAD_KINDS.contains(&kind)) {
                     road_ways.push((id, keep_tags(way.tags(), &ROAD_KEYS), refs));
                     return Ok(());
                 }
@@ -1471,13 +1467,13 @@ mod tests {
         }
     }
 
-    /// 변환 → 열기 → 지역 꺼내기: 남긴 태그·좌표·회전 제한·건물 출입구·이름 있는 점이 원본과 같고, 주차장 통로·보도·
+    /// 변환 → 열기 → 지역 꺼내기: 남긴 태그·좌표·회전 제한·건물 출입구·이름 있는 점이 원본과 같고, 보도·
     /// 버스 정류장·모르는 태그는 빠진다. 스냅샷 본문은 지금 스냅샷 읽기 규칙으로 읽힌다.
     #[test]
     fn build_and_read_region() {
         let dir = temp_dir("roundtrip");
         let report = build_fixture(&fixture(), &dir, None);
-        assert_eq!(report.manifest.counts.roads, 4);
+        assert_eq!(report.manifest.counts.roads, 5);
         assert_eq!(report.manifest.counts.restrictions, 1);
         assert_eq!(report.manifest.counts.buildings, 1);
         assert_eq!(report.manifest.counts.places, 2);
@@ -1487,7 +1483,11 @@ mod tests {
         let body = parse_graph_full(&region.snapshot).unwrap();
         assert_eq!(body.generator.as_deref(), Some(GENERATOR));
         let ids: Vec<u64> = body.ways.iter().map(|w| w.id).collect();
-        assert_eq!(ids, vec![100, 101]);
+        assert_eq!(ids, vec![100, 101, 102]);
+        assert_eq!(
+            body.ways[2].tags.get("service").map(String::as_str),
+            Some("parking_aisle")
+        );
         let first = &body.ways[0];
         assert_eq!(first.tags.get("name").map(String::as_str), Some("시험로"));
         assert!(!first.tags.contains_key("surface"));
@@ -1702,7 +1702,7 @@ mod tests {
         let dir = temp_dir("clip");
         let clip = around(100.0, 0.0, 400.0);
         let report = build_fixture(&fixture(), &dir, Some(&clip));
-        assert_eq!(report.manifest.counts.roads, 2);
+        assert_eq!(report.manifest.counts.roads, 3);
         assert!(report.manifest.source.clip.is_some());
         let data = KoreaData::open(&dir).unwrap();
         assert!(data.region(&around(4575.0, 0.0, 200.0)).is_err());

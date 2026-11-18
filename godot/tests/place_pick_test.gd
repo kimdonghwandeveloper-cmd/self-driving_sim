@@ -66,6 +66,18 @@ func _run() -> void:
 		_check(status.contains(expected), "안내에 '%s'가 없음: %s" % [expected, status])
 	_check(map.points.size() == 2 and map.route_line.size() > 1, "지도 화면 점·경로선이 갱신되지 않음")
 
+	# 출발을 다시 지정해도 기존 도착 이름과 두 지점 제한을 유지한다.
+	map._select_endpoint(false)
+	map._add_place(gym)
+	labels = picker.call("point_labels")
+	_check(labels.size() == 2 and labels[0] == "시험 체육관 (합성)" and labels[1] == "시험 체육관 (합성)", "출발 교체 시 도착을 보존하지 않음")
+	_check(not map.advanced.visible, "고급 자료 메뉴가 기본으로 노출됨")
+	_check(map.drive_button.text == "주행 시작", "주행 시작 버튼 표시 누락")
+	map._clear_points()
+	_check(not map.selecting_destination, "새 경로가 출발 선택으로 초기화되지 않음")
+	map._add_place(gym)
+	map._refresh_route()
+
 	# 입력할 때마다 찾기(한글 조합이 끝날 때마다 text_changed가 온다)와 빈 칸.
 	map.place_search.text = ""
 	map.place_search.insert_text_at_caret("체육")

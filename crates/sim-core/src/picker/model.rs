@@ -245,6 +245,29 @@ impl PickerModel {
         self.recompute();
     }
 
+    /// 마지막에 선택한 장소 또는 점을 출발/도착으로 옮기고 기존 반대쪽 지점을 보존한다.
+    pub fn assign_last_endpoint(&mut self, destination: bool) {
+        let Some(point) = self.points.pop() else {
+            return;
+        };
+        let label = self.labels.pop().unwrap_or_default();
+        if destination && !self.points.is_empty() {
+            self.points.truncate(1);
+            self.labels.truncate(1);
+            self.points.push(point);
+            self.labels.push(label);
+        } else {
+            let other = self.points.get(1).copied().zip(self.labels.get(1).cloned());
+            self.points = vec![point];
+            self.labels = vec![label];
+            if let Some((point, label)) = other {
+                self.points.push(point);
+                self.labels.push(label);
+            }
+        }
+        self.recompute();
+    }
+
     /// 화면 좌표 `view`에서 `radius_m` 안의 가장 가까운 점을 지우고 경로를 다시 계산한다. 지웠으면 `true`.
     pub fn remove_near(&mut self, view: Vec2, radius_m: f32) -> bool {
         let nearest = self
@@ -509,6 +532,28 @@ mod tests {
     fn snapshot_path() -> PathBuf {
         Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."))
             .join("testdata/yeosu-expo/graph-2026-11-06.osm.json")
+    }
+
+    /// 출발·도착 교체 시 반대편 좌표와 이름을 보존하고 경유점을 늘리지 않는지 검사한다.
+    #[test]
+    fn endpoint_replacement_preserves_other_endpoint_and_labels() {
+        let mut model = yeosu();
+        model.points = vec![[34.0, 127.0], [34.001, 127.001], [34.002, 127.002]];
+        model.labels = vec!["start".into(), "goal".into(), "new".into()];
+        model.assign_last_endpoint(false);
+        assert_eq!(model.points, [[34.002, 127.002], [34.001, 127.001]]);
+        assert_eq!(model.labels, ["new", "goal"]);
+        model.points.push([34.003, 127.003]);
+        model.labels.push("replacement".into());
+        model.assign_last_endpoint(true);
+        assert_eq!(model.points, [[34.002, 127.002], [34.003, 127.003]]);
+        assert_eq!(model.labels, ["new", "replacement"]);
+        model.clear();
+        model.points.push([34.0, 127.0]);
+        model.labels.push("first".into());
+        model.assign_last_endpoint(true);
+        assert_eq!(model.points.len(), 1);
+        assert_eq!(model.labels, ["first"]);
     }
 
     /// 실제 스냅샷으로 상태를 만든다.

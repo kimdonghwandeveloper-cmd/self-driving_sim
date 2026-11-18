@@ -12,6 +12,11 @@ const CITY_PRESETS := {
 	"대전 시청": Vector2(36.3504, 127.3845),
 	"제주 시청": Vector2(33.4996, 126.5312),
 }
+## 현재 선택할 지점: 출발 또는 도착. 검색과 지도 클릭에 같은 규칙을 적용한다.
+var selecting_destination := false
+var endpoint_label := Label.new()
+var endpoint_buttons: Array[Button] = []
+var advanced := VBoxContainer.new()
 var drive_button := Button.new()
 var cities := OptionButton.new()
 var coordinates := LineEdit.new()
@@ -25,6 +30,10 @@ var points := PackedVector2Array()
 var route_line := PackedVector2Array()
 var tile_layers: Array = []
 var dragging := false
+## 왼쪽 끌기는 지도 이동으로 처리하고 짧게 눌렀다 놓을 때만 지점을 선택한다.
+var left_down := false
+var left_moved := false
+var left_origin := Vector2.ZERO
 var status := Label.new()
 var picker: Object
 var tiles: Object
@@ -107,7 +116,7 @@ func _ready() -> void:
 	var canvas := CanvasLayer.new()
 	add_child(canvas)
 	status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	status.max_lines_visible = 5
+	status.max_lines_visible = 3
 	status.text = "지도 미리보기 · Rust 지도 서비스 미연결\n우클릭 끌기: 이동 / 휠: 확대·축소\n지역 열기·점 편집·경로 계산·저장은 연결 대기 중입니다.\n회색 칸은 실제 지도 타일이 아닙니다."
 	_services(canvas)
 	get_viewport().size_changed.connect(_layout_toolbar)
@@ -175,23 +184,20 @@ func display_tiles(layers: Array) -> void:
 	tile_layers = layers.duplicate()
 	queue_redraw()
 
-## 마우스 기준 위치를 고정하며 확대하고 우클릭 끌기로 이동한다.
+## 마우스 위치 기준으로 확대하고 왼쪽·오른쪽 끌기로 이동하며 짧은 클릭은 지점을 선택한다.
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton:
 		if event.button_index == MOUSE_BUTTON_RIGHT:
 			dragging = event.pressed
-		elif event.pressed and event.button_index == MOUSE_BUTTON_LEFT and picker != null:
-			var at: Vector2 = get_canvas_transform().affine_inverse() * event.position
-			if event.shift_pressed:
-				picker.call("remove_near", at, 12.0 / camera.zoom.x)
-			elif _ensure_region(at):
-				# 건물·장소를 누르면 그 진입 지점(가까운 도로 위 점)을, 아니면 누른 자리를 점으로 더한다.
-				var place := int(picker.call("place_at", at))
-				if place >= 0:
-					_add_place(place)
-				else:
-					picker.call("add_point", at)
-			_refresh_route()
+		elif event.button_index == MOUSE_BUTTON_LEFT and picker != null:
+			if event.pressed:
+				left_down = true
+				left_moved = false
+				left_origin = event.position
+			else:
+				if left_down and not left_moved:
+					_select_map_position(event.position, event.shift_pressed)
+				left_down = false
 		elif event.pressed and event.button_index in [MOUSE_BUTTON_WHEEL_UP, MOUSE_BUTTON_WHEEL_DOWN]:
 			var before := get_global_mouse_position()
 			var factor := 1.25 if event.button_index == MOUSE_BUTTON_WHEEL_UP else 0.8
@@ -200,15 +206,34 @@ func _unhandled_input(event: InputEvent) -> void:
 			camera.position += before - get_global_mouse_position()
 			_clamp_camera()
 			queue_redraw()
-	elif event is InputEventMouseMotion and dragging:
+	elif event is InputEventMouseMotion and (dragging or left_down):
+		if left_down and event.position.distance_to(left_origin) >= 6.0:
+			left_moved = true
+		if not dragging and not left_moved:
+			return
 		camera.position -= event.relative / camera.zoom.x
 		_clamp_camera()
 		queue_redraw()
+
+## 짧은 지도 클릭을 출발·도착 선택으로 처리하고 시설은 확인 가능한 가까운 도로로 연결한다.
+func _select_map_position(screen_position: Vector2, remove: bool) -> void:
+	var at: Vector2 = get_canvas_transform().affine_inverse() * screen_position
+	if remove:
+		picker.call("remove_near", at, 12.0 / camera.zoom.x)
+	elif _ensure_region(at):
+		var place := int(picker.call("place_at", at))
+		if place >= 0:
+			_add_place(place)
+		else:
+			picker.call("add_point", at)
+			_assign_last_endpoint()
+	_refresh_route()
 
 ## 포커스 상실 시 지도 끌기를 끝낸다.
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_APPLICATION_FOCUS_OUT:
 		dragging = false
+		left_down = false
 
 ## 현재 뷰의 회색 칸, 타일, 바깥 바다색, 열린 지역 테두리, 자동 열기 기준 십자선을 그린다(가볍다, 매 프레임).
 ## 도로·건물·경로·점은 _draw_overlay가 따로 그린다.
@@ -285,23 +310,38 @@ func _services(canvas: CanvasLayer) -> void:
 	toolbar_panel.add_child(toolbar)
 	var controls := HFlowContainer.new()
 	toolbar.add_child(controls)
+	for item in [["출발 지정", false], ["도착 지정", true]]:
+		var button := Button.new()
+		button.text = item[0]
+		button.toggle_mode = true
+		button.pressed.connect(_select_endpoint.bind(item[1]))
+		endpoint_buttons.append(button)
+		controls.add_child(button)
+	controls.add_child(endpoint_label)
+	_select_endpoint(false)
+	var details := CheckButton.new()
+	details.text = "고급 · 저장/자료"
+	details.toggled.connect(func(value: bool): advanced.visible = value)
+	controls.add_child(details)
+	advanced.visible = false
+	toolbar.add_child(advanced)
 	var undo := Button.new()
-	undo.text = "마지막 점 삭제"
+	undo.text = "도착 취소"
 	undo.pressed.connect(_remove_last)
 	controls.add_child(undo)
 	var clear := Button.new()
-	clear.text = "점 모두 삭제"
+	clear.text = "새 경로"
 	clear.pressed.connect(_clear_points)
 	controls.add_child(clear)
 	route_name.placeholder_text = "저장 이름 (영문·숫자·_-)"
 	route_name.custom_minimum_size.x = 210
-	controls.add_child(route_name)
+	advanced.add_child(route_name)
 	overwrite.text = "덮어쓰기"
-	controls.add_child(overwrite)
+	advanced.add_child(overwrite)
 	save_button.text = "경로 저장"
 	save_button.pressed.connect(_save_route)
-	controls.add_child(save_button)
-	drive_button.text = "선택 경로로 주행"
+	advanced.add_child(save_button)
+	drive_button.text = "주행 시작"
 	drive_button.focus_mode = Control.FOCUS_NONE
 	drive_button.disabled = true
 	drive_button.pressed.connect(_drive_route)
@@ -312,7 +352,11 @@ func _services(canvas: CanvasLayer) -> void:
 		var button := Button.new()
 		button.text = item[0]
 		button.pressed.connect(item[1])
-		navigation.add_child(button)
+
+		if str(item[0]).begins_with("스냅샷"):
+			advanced.add_child(button)
+		else:
+			navigation.add_child(button)
 	place_search.placeholder_text = "장소 이름 검색"
 	place_search.custom_minimum_size.x = 180
 	# 한글 IME는 Enter 때 조합 중인 마지막 글자가 아직 text에 없을 수 있어, 입력할 때마다 찾고 Enter·버튼은 조합 글자까지 합쳐 찾는다.
@@ -357,11 +401,11 @@ func _build_region_controls() -> void:
 	coordinates.placeholder_text = "위도,경도 (예: 34.7526,127.7471)"
 	coordinates.custom_minimum_size.x = 290
 	coordinates.text_submitted.connect(_jump_coordinates)
-	row.add_child(coordinates)
+	advanced.add_child(coordinates)
 	var jump := Button.new()
 	jump.text = "좌표 지역 열기"
 	jump.pressed.connect(_jump_coordinate_button)
-	row.add_child(jump)
+	advanced.add_child(jump)
 	var label := Label.new()
 	label.text = "전국 OSM · 한 지역 1.5 km 안에서 선택"
 	row.add_child(label)
@@ -393,13 +437,13 @@ func _jump_coordinates(text: String) -> void:
 		feedback = "올바른 위도·경도 범위를 입력하세요."
 		return
 	if not points.is_empty():
-		feedback = "선택한 점을 보존했습니다. 다른 지역을 열려면 '점 모두 삭제'를 먼저 누르세요."
+		feedback = "선택한 점을 보존했습니다. 다른 지역을 열려면 '새 경로'를 먼저 누르세요."
 		return
 	var view: Vector2 = picker.call("latlon_to_view", PackedFloat64Array([lat, lon]))
 	if _open_region_at(view):
 		_fit_region()
 		coordinates.release_focus()
-		feedback = "지역을 열었습니다. 도로 위 출발 → 도착 순서로 클릭한 뒤 '선택 경로로 주행'을 누르세요."
+		feedback = "지역을 열었습니다. 도로 위 출발 → 도착 순서로 클릭한 뒤 '주행 시작'을 누르세요."
 
 ## 전국 지도 자료가 있는지 Rust에 묻고 결과를 기억한다. 없으면 만드는 방법을 안내에 남긴다.
 func _check_data() -> void:
@@ -426,7 +470,7 @@ func _ensure_region(at: Vector2) -> bool:
 		return true
 	if points.is_empty():
 		return _open_region_at(at)
-	feedback = "출발·도착은 열린 지역(1.5 km) 안에서 고르세요. 다른 곳에서 시작하려면 '점 모두 삭제' 후 누르세요."
+	feedback = "출발·도착은 열린 지역(1.5 km) 안에서 고르세요. 다른 곳에서 시작하려면 '새 경로' 후 누르세요."
 	return false
 
 ## 확대한 화면이 멈추면 그 가운데 지역을 자동으로 연다. 점을 찍은 뒤에는 지역을 바꾸지 않는다(찍은 점 보존).
@@ -532,18 +576,35 @@ func _pick_area_result(chosen: Dictionary) -> void:
 		_clamp_camera()
 		queue_redraw()
 		if not points.is_empty():
-			feedback = "검색한 곳으로 옮겼습니다. 출발·도착은 한 지역(1.5 km) 안에서 고르므로, 여기서 시작하려면 '점 모두 삭제' 후 결과를 다시 고르세요."
+			feedback = "검색한 곳으로 옮겼습니다. 출발·도착은 한 지역(1.5 km) 안에서 고르므로, 여기서 시작하려면 '새 경로' 후 결과를 다시 고르세요."
 			return
 		if not _open_region_at(view):
 			return
 	var result: Dictionary = picker.call("add_search_hit", int(chosen.index))
 	feedback = "" if result.get("ok", false) else str(result.error)
+	if result.get("ok", false):
+		_assign_last_endpoint()
 	_refresh_route()
 
 ## 장소 번호의 진입 지점을 점으로 더하고, 실패하면 이유를 안내에 남긴다.
 func _add_place(index: int) -> void:
 	var result: Dictionary = picker.call("add_place", index)
-	feedback = "" if result.get("ok", false) else str(result.error)
+	feedback = "" if result.get("ok", false) else "시설 진입 경로 없음: " + str(result.error)
+	if result.get("ok", false):
+		_assign_last_endpoint()
+
+## 다음 클릭이나 검색 결과를 출발 또는 도착으로 지정하도록 전환한다.
+func _select_endpoint(destination: bool) -> void:
+	selecting_destination = destination
+	for i in endpoint_buttons.size():
+		endpoint_buttons[i].set_pressed_no_signal((i == 1) == destination)
+	endpoint_label.text = "도착을 선택하세요" if destination else "출발을 선택하세요"
+
+## 방금 추가한 점을 선택 슬롯으로 옮기며 경유점을 누적하지 않는다.
+func _assign_last_endpoint() -> void:
+	picker.call("assign_last_endpoint", selecting_destination)
+	_select_endpoint(true)
+	feedback = "시설 내부 도로가 없으면 가까운 통행 가능 도로까지 연결됩니다. 진입 위치를 확인하세요."
 
 ## 마지막으로 찍은 점을 지우고 도로·경로 표시를 다시 받는다.
 func _remove_last() -> void:
@@ -555,6 +616,7 @@ func _remove_last() -> void:
 func _clear_points() -> void:
 	if picker != null:
 		picker.call("clear_points")
+		_select_endpoint(false)
 		_refresh_route()
 
 ## 입력한 이름과 덮어쓰기 선택으로 경로를 저장하고 결과(경로 또는 오류)를 안내에 남긴다.
@@ -603,16 +665,21 @@ func _process(delta: float) -> void:
 		var hint := "" if data_ok else "\n" + data_error
 		var route_hint := "도로 위 출발 → 도착 순서로 클릭하세요."
 		if result.ok:
-			route_hint = "선택 경로 %.0f m · '선택 경로로 주행'으로 시작" % float(result.length_m)
+			route_hint = "선택 경로 %.0f m · '주행 시작'으로 시작" % float(result.length_m)
 		elif points.size() >= 2:
 			route_hint = "경로 생성 실패: " + str(result.error)
 		elif points.size() == 1:
 			route_hint = "출발 선택됨 · 같은 지역 안의 도착 도로를 클릭하세요."
-		var text := (feedback + "\n" if not feedback.is_empty() else "") + (hint + "\n" if not data_ok else "전국 OSM 자료 준비됨 · 한 지역 1.5 km 내 짧은 주행\n") + route_hint + "\n우클릭: 이동 / 휠: 확대 / 도로 클릭: 점 추가 / Shift+클릭: 점 삭제\n" + "\n".join(picker.call("status_lines"))
+		var text := (feedback + "\n" if not feedback.is_empty() else "") + (hint + "\n" if not data_ok else "전국 OSM 자료 준비됨 · 한 지역 1.5 km 내 짧은 주행\n") + route_hint + "\n드래그: 이동 / 휠: 확대 / 도로/시설 클릭: 선택 지점 지정 / Shift+클릭: 점 삭제\n" + "\n".join(picker.call("status_lines"))
 		# 글자가 바뀔 때만 넣는다(같은 글자를 매 프레임 넣으면 글자 배치를 다시 한다).
-		if status.text != text:
-			status.text = text
-			status.tooltip_text = text
+		var summary := route_hint
+		if not feedback.is_empty():
+			summary += "\n" + feedback
+		if not data_ok:
+			summary += "\n" + data_error
+		if status.text != summary:
+			status.text = summary
+		status.tooltip_text = text
 	else:
 		save_button.disabled = true
 		drive_button.disabled = true
