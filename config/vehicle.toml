@@ -12,6 +12,7 @@ stop_threshold_mps = 0.05
 max_forward_speed_mps = 11.111111
 max_reverse_speed_mps = 1.5
 # 가속 입력 최대일 때 저속 가속도(m/s²). 속도가 오르면 출력 한계(출력 ÷ (질량 × 속도))로 줄어듭니다.
+# 기본 가속도 1.0 m/s²는 crates/sim-core/src/vehicle/dynamics.rs의 기본값과 맞춥니다.
 max_accel_mps2 = 1.0
 # 차량 질량(kg), 최대 구동 출력(kW). 모두 임시값.
 mass_kg = 3000.0
