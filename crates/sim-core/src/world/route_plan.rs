@@ -49,8 +49,8 @@ pub const VIRTUAL_NODE_BASE: u64 = 1 << 62;
 pub const NODE_SNAP_M: f64 = 1.0;
 /// 점 붙이기 거리의 절대 상한(m). 설정·경로 파일 값이 이보다 크면 거부한다.
 pub const SNAP_DISTANCE_CAP_M: f64 = 100.0;
-/// 경로 길이의 절대 상한(m). PLAN 4 공통 계약의 2 km.
-pub const ROUTE_LENGTH_CAP_M: f64 = 2000.0;
+/// 경로 길이의 절대 상한(m). 지역 연결 주행은 최대 10 km까지 검증한다.
+pub const ROUTE_LENGTH_CAP_M: f64 = 10000.0;
 /// 지구 평균 반지름(m). [`map::project`]와 같은 값.
 const EARTH_RADIUS_M: f64 = 6_371_008.8;
 /// 교차로를 만들 수 없을 때 피해 다시 찾는 최대 교차로 수(임시값).
@@ -78,6 +78,9 @@ pub struct RoadGraphConfig {
     /// 곧게 지나면 단순화한다. 없으면 `false`(예전 규칙: 일방통행 제외, 교차로 단순화 없음).
     #[serde(default)]
     pub nav_rules: bool,
+    /// 연습용으로 접근 제한 도로도 포함한다. 실제 출입 허가를 뜻하지 않는다.
+    #[serde(default)]
+    pub include_restricted: bool,
 }
 
 impl Default for RoadGraphConfig {
@@ -105,10 +108,11 @@ impl Default for RoadGraphConfig {
                 .map(|(kind, width)| ((*kind).to_owned(), *width))
                 .collect(),
             snap_distance_m: 30.0,
-            max_route_length_m: 2000.0,
+            max_route_length_m: ROUTE_LENGTH_CAP_M,
             corner_radius_m: route::CORNER_RADIUS_M,
             stub_length_m: route::STUB_LENGTH_M,
             nav_rules: true,
+            include_restricted: false,
         }
     }
 }
@@ -199,6 +203,9 @@ pub struct RouteFile {
     /// 예전 규칙으로 재생한다.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub nav_rules: bool,
+    /// 계획 시 사용한 접근 제한 도로 포함 정책. 생략한 기존 파일은 제한 도로를 제외한다.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub include_restricted: bool,
     /// 경로가 실제로 지난 지역 보정. 없는 기존 `route-v1`은 OSM만 사용한 경로로 읽는다.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub map_patches: Vec<RoutePatchRef>,
@@ -310,6 +317,16 @@ pub fn way_travel(way: &OsmGraphWay, nav_rules: bool) -> Travel {
 
 /// 경로 탐색에 쓰는 way인지(허용 종류이고 탐색할 수 있는 방향이 있음) 판정한다.
 pub fn searchable(way: &OsmGraphWay, allowed: &BTreeSet<&str>, nav_rules: bool) -> bool {
+    searchable_with_access(way, allowed, nav_rules, false)
+}
+
+/// 도로 종류·일방통행을 유지하면서 연습용 접근 제한 포함 정책을 적용한다.
+pub fn searchable_with_access(
+    way: &OsmGraphWay,
+    allowed: &BTreeSet<&str>,
+    nav_rules: bool,
+    include_restricted: bool,
+) -> bool {
     let access = way
         .tags
         .get("motor_vehicle")
@@ -317,7 +334,7 @@ pub fn searchable(way: &OsmGraphWay, allowed: &BTreeSet<&str>, nav_rules: bool) 
     let restricted =
         access.is_some_and(|value| !matches!(value.as_str(), "yes" | "permissive" | "designated"));
     way.highway().is_some_and(|kind| allowed.contains(kind))
-        && !restricted
+        && (!restricted || include_restricted)
         && way_travel(way, nav_rules) != Travel::Closed
 }
 
@@ -338,6 +355,7 @@ fn snap_points(
     nav_rules: bool,
     points: &[LatLon],
     max_distance_m: f64,
+    include_restricted: bool,
 ) -> Result<Snapped, String> {
     let origin = points[0];
     // (way 번호, 구간 번호) → (구간 위 비율, 가상 노드).
@@ -347,7 +365,7 @@ fn snap_points(
         let p = local(origin, point);
         let mut best: Option<(f64, usize, usize, f64)> = None;
         for (w, way) in ways.iter().enumerate() {
-            if !searchable(way, allowed, nav_rules) {
+            if !searchable_with_access(way, allowed, nav_rules, include_restricted) {
                 continue;
             }
             for s in 0..way.nodes.len() - 1 {
@@ -470,12 +488,13 @@ impl SearchGraph {
         nav_rules: bool,
         restrictions: &[TurnRestriction],
         origin: LatLon,
+        include_restricted: bool,
     ) -> Self {
         let mut pos = BTreeMap::new();
         let mut adjacent: BTreeMap<u64, Vec<Edge>> = BTreeMap::new();
         for way in ways
             .iter()
-            .filter(|way| searchable(way, allowed, nav_rules))
+            .filter(|way| searchable_with_access(way, allowed, nav_rules, include_restricted))
         {
             for node in &way.nodes {
                 pos.insert(node.id, local(origin, node.pos));
@@ -769,6 +788,7 @@ fn plan_route_full_inner(
         config.nav_rules,
         &picked,
         config.snap_distance_m,
+        config.include_restricted,
     )?;
     let graph = SearchGraph::new(
         &snapped.ways,
@@ -776,6 +796,7 @@ fn plan_route_full_inner(
         config.nav_rules,
         restrictions,
         picked[0],
+        config.include_restricted,
     );
     let mut avoid: BTreeSet<u64> = BTreeSet::new();
     let mut avoided: Vec<u64> = Vec::new();
@@ -816,6 +837,7 @@ fn plan_route_full_inner(
             snap_distance_m: config.snap_distance_m,
             max_route_length_m: config.max_route_length_m,
             nav_rules: config.nav_rules,
+            include_restricted: config.include_restricted,
             map_patches,
             point_labels: Vec::new(),
         };
@@ -901,7 +923,9 @@ fn route_width(
     for pair in nodes.windows(2) {
         let way = ways
             .iter()
-            .filter(|way| searchable(way, allowed, config.nav_rules))
+            .filter(|way| {
+                searchable_with_access(way, allowed, config.nav_rules, config.include_restricted)
+            })
             .find(|way| {
                 way.nodes
                     .windows(2)
@@ -993,6 +1017,7 @@ fn build_course_checked(
         file.nav_rules,
         &picked,
         file.snap_distance_m,
+        file.include_restricted,
     )?;
     let graph = SearchGraph::new(
         &snapped.ways,
@@ -1000,6 +1025,7 @@ fn build_course_checked(
         file.nav_rules,
         restrictions,
         picked[0],
+        file.include_restricted,
     );
     for &id in &file.nodes {
         let Some(&pos) = graph.pos.get(&id) else {
@@ -1027,6 +1053,12 @@ fn build_course_checked(
         "Virtual training course from an OSM route (not a surveyed road)".to_owned(),
         width_notice,
     ];
+    if file.include_restricted {
+        notices.push(
+            "Simulation includes access-restricted roads; this is not permission to enter"
+                .to_owned(),
+        );
+    }
     if file.nav_rules {
         notices.push(
             "One-way and divided roads are drawn as a single carriageway (not the real lane layout)"
@@ -1240,6 +1272,42 @@ mod tests {
         assert!(!searchable(&way, &allowed, true));
     }
 
+    /// 약 10 km 제한 도로를 옵션으로 계획·저장·재생·자동 주행하며 제한과 방향 규칙을 검사한다.
+    #[test]
+    fn ten_km_route_replays_drives_and_preserves_access_policy() {
+        let ways = parse(vec![(
+            190,
+            "service",
+            &[("access", "private"), ("oneway", "yes")],
+            (0..=20).map(|i| (i + 1, i as f64 * 500.0, 0.0)).collect(),
+        )]);
+        let mut config = RoadGraphConfig::default();
+        let points = [at(10.0, 0.0), at(9990.0, 0.0)];
+        assert!(plan_route_detailed(&ways, None, "", &points, &config).is_err());
+        config.include_restricted = true;
+        let planned = plan_route_detailed(&ways, None, "", &points, &config).unwrap();
+        assert!(planned.length_m > 9970.0 && planned.length_m <= 10000.0);
+        let encoded = route_file_toml(&planned.file).unwrap();
+        let file: RouteFile = toml::from_str(&encoded).unwrap();
+        assert!(file.include_restricted);
+        let replay = build_route_file_course(&file, &ways, None).unwrap();
+        assert_eq!(replay, planned.course);
+        let driven = follow_path(&replay.course, &replay.guide, 20.0);
+        assert_eq!(driven.impacts, 0, "{driven:?}");
+        assert!(driven.remaining_m < 12.5, "{driven:?}");
+        let denied = RouteFile {
+            include_restricted: false,
+            ..file.clone()
+        };
+        assert!(build_route_file_course(&denied, &ways, None).is_err());
+        let legacy: RouteFile =
+            toml::from_str(&encoded.replace("include_restricted = true\n", "")).unwrap();
+        assert!(!legacy.include_restricted);
+        assert!(plan_route_detailed(&ways, None, "", &[points[1], points[0]], &config).is_err());
+        config.max_route_length_m = 10001.0;
+        assert!(config.validate().is_err());
+    }
+
     /// 폭 시험 사례: (추가 태그, 기대 폭과 출처).
     type WidthCase<'a> = (&'a [(&'a str, &'a str)], (f32, WidthSource));
     /// 오류 시험 사례: (이름, 스냅샷 way, 찍은 점, 설정, 오류 문구 일부).
@@ -1398,11 +1466,11 @@ mod tests {
                 "long",
             ),
             (
-                "extent",
-                straight(1800.0),
-                vec![at(20.0, 0.0), at(1780.0, 0.0)],
+                "length cap",
+                straight(11000.0),
+                vec![at(20.0, 0.0), at(10980.0, 0.0)],
                 &config,
-                "spans",
+                "long",
             ),
             (
                 "korea",
@@ -1455,7 +1523,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             (file.snap_distance_m, file.max_route_length_m),
-            (30.0, 2000.0)
+            (30.0, 10000.0)
         );
         assert!(build_route_file_course(&file, &straight, None).is_ok());
         // 저장한 점을 약 111 m 북쪽으로 옮긴 파일(사용자 수정)은 거부한다.
@@ -1479,7 +1547,7 @@ mod tests {
             (f64::INFINITY, 2000.0),
             (0.0, 2000.0),
             (150.0, 2000.0),
-            (30.0, 5000.0),
+            (30.0, 10001.0),
             (30.0, f64::NAN),
         ] {
             let edited = RouteFile {
@@ -1517,6 +1585,7 @@ mod tests {
         let legacy = RoadGraphConfig {
             allowed_highways: file.allowed_highways.clone(),
             nav_rules: false,
+            max_route_length_m: file.max_route_length_m,
             ..RoadGraphConfig::default()
         };
         let replanned = plan_route(&ways, &file.snapshot, &file.points, &legacy).unwrap();

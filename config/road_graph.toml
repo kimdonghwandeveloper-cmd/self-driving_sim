@@ -16,7 +16,9 @@ lane_width_m = 3.0
 # 찍은 점을 도로에 붙일 수 있는 최대 거리(m).
 snap_distance_m = 30.0
 # 경로 길이 상한(m).
-max_route_length_m = 2000.0
+max_route_length_m = 10000.0
+# 접근 제한 도로 포함 여부. 실제 출입 허가가 아닌 연습용 옵션입니다.
+include_restricted = false
 # 교차로 모서리 원호 반경(m)과 경로에 포함되지 않은 교차로 팔(곁가지)의 길이(m).
 corner_radius_m = 3.0
 stub_length_m = 10.0

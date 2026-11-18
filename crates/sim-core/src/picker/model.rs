@@ -87,7 +87,12 @@ impl PickerModel {
         let segments = ways
             .iter()
             .flat_map(|way| {
-                let usable = route_plan::searchable(way, &allowed, config.nav_rules);
+                let usable = route_plan::searchable_with_access(
+                    way,
+                    &allowed,
+                    config.nav_rules,
+                    config.include_restricted,
+                );
                 way.nodes.windows(2).map(move |pair| RoadSegment {
                     from: tiles::to_view(pair[0].pos),
                     to: tiles::to_view(pair[1].pos),
@@ -124,7 +129,12 @@ impl PickerModel {
             .ways
             .iter()
             .flat_map(|way| {
-                let usable = route_plan::searchable(way, &allowed, self.config.nav_rules);
+                let usable = route_plan::searchable_with_access(
+                    way,
+                    &allowed,
+                    self.config.nav_rules,
+                    self.config.include_restricted,
+                );
                 way.nodes.windows(2).map(move |pair| RoadSegment {
                     from: tiles::to_view(pair[0].pos),
                     to: tiles::to_view(pair[1].pos),
@@ -298,6 +308,42 @@ impl PickerModel {
     pub fn set_points(&mut self, points: &[[f64; 2]]) {
         self.points = points.to_vec();
         self.labels = vec![String::new(); points.len()];
+        self.recompute();
+    }
+
+    /// 지역을 확장한 뒤 출발·도착 좌표와 표시 이름을 그대로 복원한다.
+    pub fn restore_selection(&mut self, points: &[[f64; 2]], labels: &[String]) {
+        self.points = points.to_vec();
+        self.labels = labels.to_vec();
+        self.labels.resize(points.len(), String::new());
+        self.recompute();
+    }
+
+    /// 연습용 접근 제한 포함 정책을 바꾸고 도로 표시와 경로를 함께 갱신한다.
+    pub fn set_include_restricted(&mut self, enabled: bool) {
+        self.config.include_restricted = enabled;
+        let allowed = self
+            .config
+            .allowed_highways
+            .iter()
+            .map(String::as_str)
+            .collect();
+        let flags: Vec<bool> = self
+            .ways
+            .iter()
+            .flat_map(|way| {
+                let usable = route_plan::searchable_with_access(
+                    way,
+                    &allowed,
+                    self.config.nav_rules,
+                    enabled,
+                );
+                std::iter::repeat_n(usable, way.nodes.len().saturating_sub(1))
+            })
+            .collect();
+        for (segment, usable) in self.segments.iter_mut().zip(flags) {
+            segment.usable = usable;
+        }
         self.recompute();
     }
 

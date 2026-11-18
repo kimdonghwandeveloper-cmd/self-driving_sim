@@ -51,6 +51,7 @@ func _run() -> void:
 		map.camera.force_update_scroll()
 		await _click(map.get_canvas_transform() * view)
 	_check(map.points.size() == 2, "실제 도로 클릭으로 출발·도착을 선택하지 못함")
+	_check(map.selecting_destination, "도로 선택 후 도착 교체 모드로 전환되지 않음")
 	_check(not map.drive_button.disabled, "선택 경로 주행 버튼 비활성")
 	var before_drag: PackedVector2Array = map.points.duplicate()
 	var camera_before: Vector2 = map.camera.position
@@ -58,7 +59,7 @@ func _run() -> void:
 	_check(map.points == before_drag, "지도 드래그가 선택 지점을 바꿈")
 	_check(map.camera.position != camera_before, "왼쪽 드래그로 지도가 이동하지 않음")
 	map._jump_coordinates("37.4979,127.0276")
-	_check(map.feedback.contains("새 경로") and map.points.size() == 2, "지역 이동이 선택을 삭제함")
+	_check(map.feedback.contains("보존") and map.points.size() == 2, "지역 이동이 선택을 삭제함")
 	map._fit_route()
 	for frame in 4:
 		await process_frame

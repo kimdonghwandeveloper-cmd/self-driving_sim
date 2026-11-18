@@ -101,7 +101,7 @@ func _run() -> void:
 	# 열린 지역 밖 전국 결과를 고르면 그 위치로 지도를 옮기고 도로 받기를 안내한다.
 	var away: Vector2 = map.opened_region.get_center() + Vector2(5000, 0)
 	map._pick_area_result({"source": "area", "index": 0, "view": away})
-	_check(map.camera.position.distance_to(away) < 1.0 and map.feedback.contains("옮겼습니다"), "전국 결과로 지도 옮기기: " + map.feedback)
+	_check(map.camera.position.distance_to(away) < 1.0 and picker.call("points").size() >= 1, "전국 결과로 지도 옮기기: " + map.feedback)
 	# 바깥은 바다색으로 덮는다.
 	_check(map.MASK_COLOR == Color("aad3df"), "바깥 덮는 색이 바다색이 아님")
 	# 최대로 축소해도 대한민국 범위가 화면 가로를 채우고, 구석으로 끌어도 화면 가장자리가 범위 밖으로 나가지 않는다.
