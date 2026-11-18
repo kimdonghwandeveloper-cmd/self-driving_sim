@@ -185,8 +185,8 @@ pub struct SimVehicle {
     result_path: String,
     last_error: String,
     warnings: Vec<String>,
-    /// Lanelet2 코스 등 안내선 기반 주행 성과 및 CTE 평가기.
-    evaluator: Option<sim_core::world::lanelet2_course::LaneletDriveEvaluator>,
+    /// 경로 코스의 안내선 기반 주행 성과 및 CTE 평가기.
+    evaluator: Option<sim_core::world::route_evaluation::RouteDriveEvaluator>,
     /// 목표 도달 시그널을 이미 발행했는지 여부.
     goal_notified: bool,
     /// 키보드·게임패드 상태. `_ready`에서 만든다.
@@ -245,15 +245,11 @@ impl INode3D for SimVehicle {
                 let course_str = self.course.to_string();
                 if let Some(path) = course_str.trim().strip_prefix("map:") {
                     let resolved = resolve_user_path(path.trim());
-                    if let Ok(lanelet_course) =
-                        sim_core::world::lanelet2_course::load_lanelet2_course_file(&resolved)
-                    {
-                        self.evaluator =
-                            sim_core::world::lanelet2_course::LaneletDriveEvaluator::from_course(
-                                &lanelet_course,
-                            )
-                            .ok();
-                    }
+                    self.evaluator =
+                        sim_core::world::route_evaluation::RouteDriveEvaluator::load_map_file(
+                            &resolved,
+                        )
+                        .ok();
                 }
             }
             Err(error) => self.fail(error),
@@ -320,7 +316,7 @@ impl INode3D for SimVehicle {
                 self.sync_transform();
                 self.emit_report(&report, &updates, view_before, debug_before);
 
-                // Lanelet2 코스 목표 도달 및 CTE 평가기 갱신
+                // 경로 코스 목표 도달 및 CTE 평가기 갱신
                 if let Some(session) = self.session.as_ref() {
                     let motion = session.motion();
                     let vehicle_pos = glam::Vec2::new(motion.x_m, motion.z_m);
@@ -417,7 +413,7 @@ impl SimVehicle {
     /// 시나리오가 끝남(`"success"`, `"time_limit"`, `"collisions"`, `"aborted"`). `scenario_phase_changed` 다음에 보낸다.
     #[signal]
     fn scenario_finished(outcome: GString);
-    /// Lanelet2 코스 등 목표 지점에 도달했을 때 주행 시간, 평균/최대 CTE, 충돌 횟수와 함께 한 번 보낸다.
+    /// 경로 코스의 목표 지점에 도달했을 때 주행 시간, 평균/최대 CTE, 충돌 횟수와 함께 한 번 보낸다.
     #[signal]
     fn goal_reached(elapsed_time_s: f64, avg_cte_m: f64, max_cte_m: f64, impacts: i64);
 
@@ -750,7 +746,7 @@ impl SimVehicle {
             .map_or(0.0, |e| f64::from(e.current_cte()))
     }
 
-    /// 계기판용 Lanelet2 평가값을 반환한다. 평가기가 없는 코스는 active=false로 구분한다.
+    /// 계기판용 공통 경로 평가값을 반환한다. 평가기가 없는 코스는 active=false로 구분한다.
     #[func]
     fn evaluation_metrics(&self) -> VarDictionary {
         let (Some(evaluator), Some(session)) = (&self.evaluator, &self.session) else {

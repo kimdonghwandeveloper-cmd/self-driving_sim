@@ -19,7 +19,7 @@ func _run() -> void:
 	root.size = Vector2i(1280, 720)
 	var drive := Drive.new()
 	root.add_child(drive)
-	drive.start("map:assets/maps/lanelet2-demo/course.toml")
+	drive.start("map:testdata/yeosu-expo/route-junctions.toml")
 	await process_frame
 	var dash: Control = drive.dashboard
 	_check(drive.failure.is_empty() and drive.fallback_notice.is_empty(), "코스 열기 실패")

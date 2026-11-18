@@ -480,7 +480,7 @@ pub fn build_map_course(file: &MapCourseFile, base_dir: &Path) -> Result<CourseD
 /// 선택 파일 경로에서 지도 코스를 읽는다. 파일 없음·TOML 오류·변환 오류는 모두 `Err`다.
 ///
 /// 최상위 `format`이 [`super::road_polygons::ROAD_LINES_FORMAT`]이면 맵 도로 코스(사용자 제작 맵 도로, 4-11b)로,
-/// [`super::lanelet2_course::LANELET2_COURSE_FORMAT`] 또는 [`super::lanelet2_course::LANELET2_COURSE_FORMAT_COMPAT`]이면 Lanelet2 코스로,
+/// 지원되는 OSM 코스·route-v1·block-route-v1 형식을 구분해 읽는다.
 /// 그 밖의 `format` 키가 있으면 경로 파일([`super::route_plan::RouteFile`], Phase 4-3)로,
 /// 없으면 단일 통로 선택 파일([`MapCourseFile`])로 읽는다.
 pub fn load_map_course(path: &Path) -> Result<CourseDef, String> {
@@ -515,10 +515,10 @@ pub fn load_map_course_with_patch_dir(
             .map(|result| result.course);
     }
     if let Some(format_str) = table.get("format").and_then(toml::Value::as_str) {
-        if format_str == super::lanelet2_course::LANELET2_COURSE_FORMAT
-            || format_str == super::lanelet2_course::LANELET2_COURSE_FORMAT_COMPAT
-        {
-            return super::lanelet2_course::load_lanelet2_course(&text, base_dir);
+        if matches!(format_str, "lanelet2-course-v1" | "lanelet2-v1") {
+            return Err(
+                "Lanelet2 support was removed; use an OSM block route or route-v1 course".into(),
+            );
         }
         let file: super::route_plan::RouteFile = toml::from_str(&text).map_err(invalid)?;
         return super::route_plan::load_route_course_with_patch_dir(

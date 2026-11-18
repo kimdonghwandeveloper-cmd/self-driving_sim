@@ -1,7 +1,7 @@
 //! 주행할 수 있는 지도 코스 파일 목록(GD-3·GD-4 메뉴).
 //!
 //! 저장소에 들어 있는 지도 코스(`assets/maps/<지역>/*.toml`)와 경로 선택 화면이 저장한 경로(`cache/routes/*.toml`)를
-//! 찾아 메뉴에 보일 이름과 코스 선택 문자열(`map:<저장소 루트 기준 경로>`)로 돌려준다. 파일 내용은 읽지 않는다.
+//! 찾아 메뉴에 보일 이름과 코스 선택 문자열(`map:<저장소 루트 기준 경로>`)로 돌려준다. 철회된 지도 형식은 목록에서 제외한다.
 //! 열 수 있는지는 코스를 만들 때([`super::map::load_map_course`]) 검사한다.
 
 use std::path::Path;
@@ -38,6 +38,9 @@ pub fn list_course_files(root: &Path) -> Vec<CourseFile> {
         let mut tomls = toml_files(&region);
         tomls.sort_by(|a, b| a.0.cmp(&b.0));
         for (path, _) in tomls {
+            if retired_format(&path) {
+                continue;
+            }
             files.push(CourseFile {
                 label: format!("{region_name} / {}", file_stem(&path)),
                 course: format!("map:{BUNDLED_MAP_DIR}/{region_name}/{}", file_name(&path)),
@@ -49,6 +52,9 @@ pub fn list_course_files(root: &Path) -> Vec<CourseFile> {
     // 최근에 저장한 것이 위로 온다. 시각이 같으면 이름 역순(타임스탬프 이름이면 최근 순)이다.
     saved.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| b.0.cmp(&a.0)));
     for (path, _) in saved {
+        if retired_format(&path) {
+            continue;
+        }
         files.push(CourseFile {
             label: format!("저장 경로 / {}", file_stem(&path)),
             course: format!("map:{SAVED_ROUTE_DIR}/{}", file_name(&path)),
@@ -56,6 +62,19 @@ pub fn list_course_files(root: &Path) -> Vec<CourseFile> {
         });
     }
     files
+}
+
+/// 사용자가 보관한 옛 파일을 지우지 않고, 지원이 철회된 지도 형식만 메뉴에서 숨긴다.
+fn retired_format(path: &Path) -> bool {
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|s| toml::from_str::<toml::Table>(&s).ok())
+        .and_then(|t| {
+            t.get("format")
+                .and_then(toml::Value::as_str)
+                .map(str::to_owned)
+        })
+        .is_some_and(|f| matches!(f.as_str(), "lanelet2-course-v1" | "lanelet2-v1"))
 }
 
 /// 폴더의 항목과 수정 시각을 읽는다. 읽지 못하면 빈 목록이다.
@@ -171,5 +190,37 @@ mod tests {
                 .iter()
                 .any(|notice| notice.contains("OpenStreetMap"))
         );
+    }
+    /// 철회된 저장 파일은 보존하되 목록에서 제외하고, 직접 열 때에는 지원 종료 이유를 반환한다.
+    #[test]
+    fn retired_courses_are_hidden_and_report_removal() {
+        let root = std::env::temp_dir().join(format!(
+            "sds-retired-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(root.join("cache/routes")).unwrap();
+        for (index, format) in ["lanelet2-course-v1", "lanelet2-v1"].iter().enumerate() {
+            let path = root.join(format!("cache/routes/old-{index}.toml"));
+            std::fs::write(&path, format!("format = \"{format}\"\n")).unwrap();
+            assert!(
+                super::super::map::load_map_course(&path)
+                    .unwrap_err()
+                    .contains("support was removed")
+            );
+        }
+        std::fs::write(
+            root.join("cache/routes/osm.toml"),
+            "format = \"route-v1\"\n",
+        )
+        .unwrap();
+        let files = list_course_files(&root);
+        assert_eq!(files.len(), 1);
+        assert!(files[0].course.ends_with("osm.toml"));
+        assert!(root.join("cache/routes/old-0.toml").exists());
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

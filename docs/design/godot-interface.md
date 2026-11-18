@@ -216,7 +216,7 @@ Rect = { "center": Vector3, "size": Vector2(폭 x, 길이 z), "heading_rad": flo
   (경로 선택 화면이 저장한 `route-v1`, 굽은 길·교차로·연석), 없으면 단일 통로 선택 파일이다. 그래서 경로·교차로 검사 결과가 Bevy 판과 같다.
 - 실패 사유는 `"지도 코스를 열 수 없습니다: <Rust 사유>"`(파일 없음·TOML 오류·형상 오류), 빈 경로는 `"지도 코스 파일 경로가 비어 있습니다..."`. 다른 실패 규칙은 6절과 같다.
 - 지도 코스의 `notices`에는 OSM 출처 표기와 "가상 교육 코스(실측 아님)", 임시 폭 안내가 들어 있다. Godot은 주행 화면에 항상 보인다.
-- OSM 경로는 최대 10 km이고 Lanelet2 코스는 기존 1.5 km 범위를 유지한다. 바닥·카메라 먼 거리는 Godot 쪽이 코스 범위에 맞춘다.
+- OSM 경로는 최대 10 km를 지원한다. 바닥·카메라 먼 거리는 Godot 쪽이 코스 범위에 맞춘다.
 
 `SimCourse.course_files() -> Array[{label: String, course: String, saved: bool}]`: 메뉴용 지도 코스 목록.
 저장소 코스(`assets/maps/<지역>/*.toml`, 폴더·이름 순) 다음에 경로 선택 화면이 저장한 경로(`cache/routes/*.toml`, 최근 저장 순).

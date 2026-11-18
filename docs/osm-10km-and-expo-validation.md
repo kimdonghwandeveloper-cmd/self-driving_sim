@@ -8,7 +8,7 @@
 - 초기 지역은 1.5 km다. 출발을 찍은 뒤 지도를 이동하거나 다른 지역을 검색해 도착을 지정하면, 반대편 지점을 포함하는 범위를 다시 읽는다. 좌표·장소 이름·접근 옵션은 유지하고 실패하면 이전 모델로 돌아간다.
 - `제한 도로 포함 · 연습용`은 `motor_vehicle`/`access` 제한 도로도 포함한다. 일방통행, 회전 제한, 허용 도로 종류, 차량 운동 모델은 유지한다. 실제 출입 허가나 차단기 개방을 뜻하지 않는다.
 - 옵션은 `route-v1`의 선택 필드 `include_restricted`에 기록한다. 없는 기존 파일은 false다. 기존 저장 경로의 `max_route_length_m = 2000`도 그대로 재생한다.
-- 이번 확대는 OSM 경로 대상이다. Lanelet2 코스 범위는 기존 1.5 km를 유지한다. 교차로 형상 생성에 실패하는 모든 실제 도로가 이번 변경으로 해결되는 것은 아니다.
+- 이 문서는 당시 OSM 확대의 검증 기록이다. 당시 별도 HD 지도 코스 범위는 1.5 km였으나 해당 기능은 2026-11-18 사용자 결정으로 제거되었다. 교차로 형상 생성에 실패하는 모든 실제 도로가 이번 변경으로 해결되는 것은 아니다.
 
 ## 자료 출처와 갱신
 
@@ -76,7 +76,7 @@ sim-tools.exe --build-korea-data cache/source/south-korea-261111.osm.pbf --out c
 | `crates/sim-core/src/picker/model.rs` | 90, 132, 314 |
 | `crates/sim-core/src/picker/region.rs` | 35 |
 | `crates/sim-core/src/world/korea_data.rs` | 816, 887, 1544 |
-| `crates/sim-core/src/world/lanelet2_course.rs` | 15, 22, 437 |
+| 당시 별도 HD 코스 모듈 (현재 삭제됨) | 당시 15, 22, 437 |
 | `crates/sim-core/src/world/map_fetch.rs` | 87, 116, 118 |
 | `crates/sim-core/src/world/places.rs` | 436 |
 | `crates/sim-core/src/world/route.rs` | 37 |

@@ -213,7 +213,7 @@ fn save_preserves_existing_file_and_rejects_invalid_data() {
     assert!(save_block_route_file(&p, &bad).is_err());
     assert!(!p.exists());
 }
-/// 새 형식은 기존 공통 코스 로더에서도 열리고 route-v1·Lanelet2 로더도 계속 작동한다.
+/// 새 형식은 기존 공통 코스 로더에서도 열리고 기존 route-v1 로더도 계속 작동한다.
 #[test]
 fn map_loader_dispatch_and_existing_formats_are_preserved() {
     let c = Case::new();
@@ -227,7 +227,7 @@ fn map_loader_dispatch_and_existing_formats_are_preserved() {
     let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     for path in [
         "testdata/yeosu-expo/route-junctions.toml",
-        "assets/maps/lanelet2-demo/course.toml",
+        "testdata/yeosu-expo/course.toml",
     ] {
         crate::world::map::load_map_course(&repo.join(path)).unwrap();
     }

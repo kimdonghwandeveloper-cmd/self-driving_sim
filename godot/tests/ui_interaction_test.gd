@@ -25,7 +25,7 @@ func _run() -> void:
 		root.size = window_size
 		for frame in 4:
 			await process_frame
-		for button in [menu.start_button, menu.map_button, menu.lanelet_map_button, menu.controls_button, menu.settings_button, menu.courses]:
+		for button in [menu.start_button, menu.map_button, menu.controls_button, menu.settings_button, menu.courses]:
 			_check(menu.get_global_rect().encloses(button.get_global_rect()), "메뉴 버튼이 화면 밖: " + button.text)
 	root.size = Vector2i(1280, 720)
 	await process_frame
@@ -61,11 +61,11 @@ func _run() -> void:
 	drive.rig.set_external(false)
 	_check(drive.rig.camera.cull_mask == 1 and drive.rig.camera.position == Vector3.ZERO, "실내 복귀 오류")
 	await _capture("drive")
-	main.call("_show_drive", "map:assets/maps/lanelet2-demo/course.toml")
+	main.call("_show_drive", "map:testdata/yeosu-expo/route-junctions.toml")
 	await process_frame
 	drive = main.screen
 	var values: Dictionary = drive.vehicle.call("evaluation_metrics")
-	_check(values.get("active", false), "Lanelet2 평가값 미연결")
+	_check(values.get("active", false), "OSM 경로 평가값 미연결")
 	_check(drive.dashboard.metrics.text.contains("CTE"), "CTE 표시 없음")
 	drive.vehicle.set("read_input", false)
 	drive.vehicle.call("send_command", "engine_toggle")

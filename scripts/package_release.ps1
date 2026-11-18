@@ -25,10 +25,9 @@ $requiredFiles = @(
     'config/vehicle.toml', 'config/input.toml', 'config/camera.toml', 'config/road_graph.toml',
     'godot/project.godot', 'godot/sim_godot.gdextension',
     'godot/.godot/extension_list.cfg', 'godot/.godot/global_script_class_cache.cfg',
-    'godot/tests/smoke_test.gd', 'godot/tests/lanelet2_course_test.gd',
+    'godot/tests/smoke_test.gd', 'godot/tests/map_course_test.gd',
+    'testdata/yeosu-expo/route-junctions.toml', 'testdata/yeosu-expo/graph-2026-11-06.osm.json',
     'godot/tests/osm_route_drive_test.gd', 'godot/tests/scenario_record_test.gd',
-    'assets/maps/lanelet2-demo/course.toml', 'assets/maps/lanelet2-demo/synthetic.osm',
-    'assets/maps/lanelet2-real-demo/course.toml', 'assets/maps/lanelet2-real-demo/yeosu_real.osm',
     'assets/scenarios/scenario-a-basic.toml', 'assets/scenarios/scenario-b-space.toml',
     'assets/scenarios/scenario-c-hazard.toml', 'testdata/korea-yeosu/manifest.toml'
 )
@@ -108,7 +107,7 @@ Write-Host "`n[4/5] Creating launcher scripts and distribution notes..." -Foregr
 $batText = "@echo off`r`nchcp 65001 > nul`r`ntitle Self-Driving Simulator`r`necho ==========================================================`r`necho   Self-Driving Shuttle Simulator (Standalone Bundle)`r`necho ==========================================================`r`necho.`r`nif exist `"%~dp0godot.exe`" (`r`n    `"%~dp0godot.exe`" --path `"%~dp0godot`"`r`n) else (`r`n    echo [Info] godot.exe not found in bundle root.`r`n    echo        Place Godot 4.x executable as 'godot.exe' in this folder to launch.`r`n    pause`r`n)"
 [System.IO.File]::WriteAllText((Join-Path $outFull "START_SIMULATOR.bat"), $batText, (New-Object System.Text.UTF8Encoding($false)))
 
-$readmeText = "# Self-Driving Shuttle Simulator - Standalone Release Bundle`r`n`r`n### System Requirements`r`n- OS: Windows 10/11 (64-bit)`r`n- Graphics: Vulkan 1.2+ (Forward+) or OpenGL 3.3+ (Compatibility)`r`n- Runtime: Godot 4.7.2+ executable (godot.exe included or placed in root)`r`n`r`n### How to Run`r`n1. Double-click START_SIMULATOR.bat (or run `godot.exe --path godot`).`r`n2. Select a course (e.g., Yeosu Expo Lanelet2 demo, Nationwide OSM, or Synthetic straight) from the main menu.`r`n3. Click '▶ Start Simulation' to begin driving.`r`n`r`n### Vehicle Controls`r`n- W / S (or Up / Down): Throttle / Brake`r`n- A / D (or Left / Right): Steering`r`n- I / K / J / L: Gear P / N / D / R`r`n- Enter: Engine ON / OFF`r`n- Space / Backspace: Emergency Stop / Release`r`n- R: Reset vehicle position`r`n- C: Switch between 1st-person interior and 3rd-person top-down overhead view`r`n- Esc: Return to Main Menu`r`n`r`n### Map Data & Attribution`r`n- Nationwide Road Map: OpenStreetMap (c) OpenStreetMap contributors (ODbL 1.0)`r`n- Lanelet2 HD Map Demo: Yeosu Expo area sample data"
+$readmeText = "# Self-Driving Shuttle Simulator - Standalone Release Bundle`r`n`r`n### System Requirements`r`n- OS: Windows 10/11 (64-bit)`r`n- Graphics: Vulkan 1.2+ (Forward+) or OpenGL 3.3+ (Compatibility)`r`n- Runtime: Godot 4.7.2+ executable (godot.exe included or placed in root)`r`n`r`n### How to Run`r`n1. Double-click START_SIMULATOR.bat (or run `godot.exe --path godot`).`r`n2. Select a course (e.g., Yeosu Expo OSM, Nationwide OSM, or Training) from the main menu.`r`n3. Click '▶ Start Simulation' to begin driving.`r`n`r`n### Vehicle Controls`r`n- W / S (or Up / Down): Throttle / Brake`r`n- A / D (or Left / Right): Steering`r`n- I / K / J / L: Gear P / N / D / R`r`n- Enter: Engine ON / OFF`r`n- Space / Backspace: Emergency Stop / Release`r`n- R: Reset vehicle position`r`n- C: Switch between 1st-person interior and 3rd-person top-down overhead view`r`n- Esc: Return to Main Menu`r`n`r`n### Map Data & Attribution`r`n- Nationwide Road Map: OpenStreetMap (c) OpenStreetMap contributors (ODbL 1.0)"
 [System.IO.File]::WriteAllText((Join-Path $outFull "README.txt"), $readmeText, (New-Object System.Text.UTF8Encoding($false)))
 
 # Godot 프로세스를 헤드리스로 실행하고 표준 출력과 에러를 포착하여 성공 여부를 반환하는 헬퍼 함수
@@ -142,11 +141,11 @@ function Invoke-GodotRunner {
 if ($Validate) {
     Push-Location $outFull
     try {
-        & ./bin/sim-tools.exe --validate-lanelet2 ./assets/maps/lanelet2-real-demo/course.toml
-        if ($LASTEXITCODE -ne 0) { throw "Standalone Lanelet2 CLI validation failed" }
+        & ./bin/sim-tools.exe --validate-map ./testdata/yeosu-expo/route-junctions.toml
+        if ($LASTEXITCODE -ne 0) { throw "Standalone OSM CLI validation failed" }
         $checks = @(
             @{ Script = 'smoke_test.gd'; Pattern = 'SMOKE OK:' },
-            @{ Script = 'lanelet2_course_test.gd'; Pattern = 'LANELET2 OK:' },
+            @{ Script = 'map_course_test.gd'; Pattern = 'MAP COURSE OK:' },
             @{ Script = 'osm_route_drive_test.gd'; Pattern = 'OSM ROUTE DRIVE OK:' },
             @{ Script = 'scenario_record_test.gd'; Pattern = 'SCENARIO RECORD OK:' }
         )

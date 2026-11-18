@@ -9,10 +9,6 @@ pub mod course;
 pub mod course_files;
 pub mod junction;
 pub mod korea_data;
-pub mod lanelet2;
-pub mod lanelet2_course;
-pub mod lanelet2_geometry;
-pub mod lanelet2_selection;
 pub mod map;
 pub mod map_fetch;
 pub mod map_patch;
@@ -40,3 +36,5 @@ pub mod road_network;
 pub mod block_route;
 
 pub mod block_route_file;
+
+pub mod route_evaluation;

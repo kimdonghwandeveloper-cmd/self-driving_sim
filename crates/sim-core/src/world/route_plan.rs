@@ -1137,6 +1137,17 @@ pub fn load_route_course_with_patch_dir(
     patch_dir: &Path,
     audience: PatchAudience,
 ) -> Result<CourseDef, String> {
+    load_route_course_full_with_patch_dir(file, base_dir, patch_dir, audience)
+        .map(|built| built.course)
+}
+
+/// 동일한 자료·보정 검증을 거쳐 코스와 안내선을 함께 반환한다. 평가 기능도 같은 경로를 사용한다.
+pub fn load_route_course_full_with_patch_dir(
+    file: &RouteFile,
+    base_dir: &Path,
+    patch_dir: &Path,
+    audience: PatchAudience,
+) -> Result<RouteCourse, String> {
     let snapshot = road_snapshot::load_road_snapshot(&base_dir.join(&file.snapshot))?;
     if file.map_patches.is_empty() {
         return build_route_file_course_with_base_dir(
@@ -1145,8 +1156,7 @@ pub fn load_route_course_with_patch_dir(
             &snapshot.restrictions,
             snapshot.connectivity.as_ref(),
             base_dir,
-        )
-        .map(|built| built.course);
+        );
     }
     validate_route_patch_refs(&file.map_patches)?;
     let available = map_patch::load_patch_dir(patch_dir, audience)
@@ -1186,24 +1196,28 @@ pub fn load_route_course_with_patch_dir(
         &snapshot.restrictions,
         snapshot.connectivity.as_ref(),
         base_dir,
-    )
-    .map(|built| built.course)?;
+    )?;
     course
+        .course
         .notices
         .push("Map source: OSM + local patches".to_owned());
     for patch in selected {
-        course.notices.push(format!(
+        course.course.notices.push(format!(
             "Map patch: {} (status: {}, geometry accuracy: {})",
             patch.name,
             patch.status.as_str(),
             patch.geometry_accuracy
         ));
         course
+            .course
             .notices
             .push(format!("Map patch notice: {}", patch.notice));
     }
     for warning in graph.warnings {
-        course.notices.push(format!("Map patch warning: {warning}"));
+        course
+            .course
+            .notices
+            .push(format!("Map patch warning: {warning}"));
     }
     Ok(course)
 }
