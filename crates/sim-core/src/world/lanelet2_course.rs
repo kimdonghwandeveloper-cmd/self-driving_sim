@@ -142,7 +142,7 @@ pub fn build_lanelet2_course_from_file(
         &lanelet_course.course.surfaces,
         &lanelet_course.course.strips,
         &lanelet_course.course.areas,
-    );
+    )?;
     if has_estimated {
         lanelet_course
             .course

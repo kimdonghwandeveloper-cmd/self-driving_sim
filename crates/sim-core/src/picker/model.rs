@@ -301,7 +301,7 @@ impl PickerModel {
                             &self.ways,
                             &self.restrictions,
                             self.connectivity.as_ref(),
-                            "",
+                            &self.snapshot_path.to_string_lossy(),
                             &self.points,
                             &self.config,
                         )
@@ -311,7 +311,7 @@ impl PickerModel {
                             graph,
                             &self.restrictions,
                             self.connectivity.as_ref(),
-                            "",
+                            &self.snapshot_path.to_string_lossy(),
                             &self.points,
                             &self.config,
                         )

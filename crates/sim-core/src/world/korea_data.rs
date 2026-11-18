@@ -801,9 +801,15 @@ impl KoreaData {
         Ok(())
     }
 
-    /// 자료 판 이름(도로 묶음 SHA-256 앞 12자). 지역 스냅샷 캐시 폴더 이름으로 쓴다.
-    pub fn version(&self) -> &str {
-        &self.manifest.roads.sha256[..12.min(self.manifest.roads.sha256.len())]
+    /// 형식·도로·장소 SHA-256을 모두 묶은 판본으로 건물만 바뀌어도 새 캐시를 만든다.
+    pub fn version(&self) -> String {
+        sha256(
+            format!(
+                "{}:{}:{}",
+                self.manifest.format, self.manifest.roads.sha256, self.manifest.places.sha256
+            )
+            .as_bytes(),
+        )
     }
 
     /// 범위와 겹치는 도로·회전 제한·건물·장소를 꺼낸다. 도로가 하나도 없으면 오류다.
@@ -877,7 +883,7 @@ impl KoreaData {
         let region = self.region(bbox)?;
         let dir = cache_root.join(self.version());
         let path = dir.join(format!("{}.osm.json", bbox.cache_name()));
-        let places_path = dir.join(format!("{}.places.osm.json", bbox.cache_name()));
+        let places_path = places::snapshot_places_path(&path);
         if !path.exists() {
             std::fs::create_dir_all(&dir)
                 .map_err(|error| format!("cannot create {}: {error}", dir.display()))?;
@@ -889,20 +895,31 @@ impl KoreaData {
                     format!("cannot write {}: {error}", path.display())
                 })?;
         }
-        if !places_path.exists() {
-            let _ = std::fs::create_dir_all(&dir);
+        let places_json = places::places_to_overpass_json(&region.places);
+        if places_path.exists() {
+            let existing = std::fs::read_to_string(&places_path).map_err(|e| e.to_string())?;
+            if existing != places_json {
+                return Err(format!(
+                    "building snapshot content mismatch: {}",
+                    places_path.display()
+                ));
+            }
+        } else {
+            std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
             let staging = dir.join(format!(
                 "{}.places.{}.tmp",
                 bbox.cache_name(),
                 std::process::id()
             ));
-            let places_json = places::places_to_overpass_json(&region.places);
-            if std::fs::write(&staging, places_json.as_bytes())
+            std::fs::write(&staging, places_json.as_bytes())
                 .and_then(|()| std::fs::rename(&staging, &places_path))
-                .is_err()
-            {
-                let _ = std::fs::remove_file(&staging);
-            }
+                .map_err(|e| {
+                    let _ = std::fs::remove_file(&staging);
+                    format!(
+                        "cannot write building snapshot {}: {e}",
+                        places_path.display()
+                    )
+                })?;
         }
         Ok((path, region.places))
     }
@@ -1571,6 +1588,74 @@ mod tests {
     }
 
     /// 형식 이름·묶음 크기·내용 해시가 맞지 않으면 열기·검사가 실패한다. 잘린 조각 본문도 오류다.
+    /// 도로는 그대로이고 건물 높이만 바뀌면 새 캐시를 만들고 옛 건물 스냅샷은 보존한다.
+    #[test]
+    fn building_only_update_creates_independent_snapshot_generation() {
+        let first_dir = temp_dir("building-generation-a");
+        let second_dir = temp_dir("building-generation-b");
+        let cache = temp_dir("building-generation-cache");
+        let mut first = fixture();
+        first
+            .ways
+            .iter_mut()
+            .find(|w| w.0 == 104)
+            .unwrap()
+            .1
+            .push(("height", "12"));
+        let mut second = fixture();
+        second
+            .ways
+            .iter_mut()
+            .find(|w| w.0 == 104)
+            .unwrap()
+            .1
+            .push(("height", "24"));
+        build_fixture(&first, &first_dir, None);
+        build_fixture(&second, &second_dir, None);
+        let a = KoreaData::open(&first_dir).unwrap();
+        let b = KoreaData::open(&second_dir).unwrap();
+        assert_eq!(a.manifest.roads.sha256, b.manifest.roads.sha256);
+        assert_ne!(a.manifest.places.sha256, b.manifest.places.sha256);
+        assert_ne!(a.version(), b.version());
+        let bbox = around(100.0, 0.0, 300.0);
+        let (old, _) = a.region_snapshot(&bbox, &cache).unwrap();
+        let old_places = places::snapshot_places_path(&old);
+        let old_bytes = std::fs::read(&old_places).unwrap();
+        let (new, _) = b.region_snapshot(&bbox, &cache).unwrap();
+        assert_ne!(old, new);
+        assert_eq!(std::fs::read(&old_places).unwrap(), old_bytes);
+        let old_buildings = places::load_places(&old_places).unwrap();
+        let new_buildings = places::load_places(&places::snapshot_places_path(&new)).unwrap();
+        assert_eq!(
+            old_buildings
+                .iter()
+                .find(|p| p.id == "way/104")
+                .unwrap()
+                .tags["height"],
+            "12"
+        );
+        assert_eq!(
+            new_buildings
+                .iter()
+                .find(|p| p.id == "way/104")
+                .unwrap()
+                .tags["height"],
+            "24"
+        );
+        std::fs::write(&old_places, "{}").unwrap();
+        assert!(
+            a.region_snapshot(&bbox, &cache)
+                .unwrap_err()
+                .contains("content mismatch")
+        );
+        std::fs::write(&old_places, old_bytes).unwrap();
+        assert_eq!(a.region_snapshot(&bbox, &cache).unwrap().0, old);
+        let mut different_format = KoreaData::open(&first_dir).unwrap();
+        different_format.manifest.format = FORMAT_V1.to_owned();
+        assert_ne!(a.version(), different_format.version());
+    }
+
+    /// 형식 이름·묶음 크기·내용 해시가 맞지 않으면 열기·검사가 실패한다. 잘린 조각 본문도 오류다。
     #[test]
     fn mismatched_data_is_rejected() {
         let dir = temp_dir("reject");

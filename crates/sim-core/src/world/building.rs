@@ -588,98 +588,42 @@ pub fn load_companion_buildings(
     road_surfaces: &[GroundRect],
     road_strips: &[Strip],
     road_areas: &[Area],
-) -> (Vec<BuildingDef>, bool) {
-    let candidate_names = ["places.osm.json", "places-synthetic.osm.json"];
+) -> Result<(Vec<BuildingDef>, bool), String> {
+    let primary = base_dir.join("places.osm.json");
+    let legacy = base_dir.join("places-synthetic.osm.json");
+    let path = if primary.exists() { primary } else { legacy };
+    load_buildings_file(
+        &path,
+        origin,
+        road_centerlines,
+        road_surfaces,
+        road_strips,
+        road_areas,
+    )
+}
 
-    for name in &candidate_names {
-        let path = base_dir.join(name);
-        if !path.exists() {
-            continue;
-        }
-        let Ok(places) = places::load_places(&path) else {
-            continue;
-        };
-        if places.is_empty() {
-            continue;
-        }
-        let (buildings, est) = build_course_buildings(
-            &places,
-            origin,
-            road_centerlines,
-            road_surfaces,
-            road_strips,
-            road_areas,
-            MAX_BUILDING_CORRIDOR_DISTANCE_M,
-        );
-        if !buildings.is_empty() {
-            return (buildings, est);
-        }
+/// 지정한 동반 파일만 읽는다. 옛 스냅샷에 동반 파일이 없으면 건물 없이 재생하고 손상 파일은 거부한다.
+pub fn load_buildings_file(
+    path: &Path,
+    origin: LatLon,
+    road_centerlines: &[Vec<Vec2>],
+    road_surfaces: &[GroundRect],
+    road_strips: &[Strip],
+    road_areas: &[Area],
+) -> Result<(Vec<BuildingDef>, bool), String> {
+    if !path.exists() {
+        return Ok((Vec::new(), false));
     }
-
-    // 디렉터리 내의 *.places.osm.json 정렬 탐색
-    if let Ok(entries) = std::fs::read_dir(base_dir) {
-        let mut paths: Vec<_> = entries
-            .flatten()
-            .map(|e| e.path())
-            .filter(|p| {
-                p.file_name()
-                    .and_then(|n| n.to_str())
-                    .is_some_and(|s| s.ends_with(".places.osm.json"))
-            })
-            .collect();
-        paths.sort();
-        for path in paths {
-            if let Ok(places) = places::load_places(&path) {
-                let (buildings, est) = build_course_buildings(
-                    &places,
-                    origin,
-                    road_centerlines,
-                    road_surfaces,
-                    road_strips,
-                    road_areas,
-                    MAX_BUILDING_CORRIDOR_DISTANCE_M,
-                );
-                if !buildings.is_empty() {
-                    return (buildings, est);
-                }
-            }
-        }
-    }
-
-    // 전국 자료 폴더(data/korea 또는 testdata/korea-yeosu)에서 장소 추출 시도
-    let data_dirs = [Path::new("data/korea"), Path::new("testdata/korea-yeosu")];
-    for data_dir in &data_dirs {
-        if let Ok(korea) = super::korea_data::KoreaData::open(data_dir) {
-            let radius_m = 800.0;
-            let lat_delta = radius_m / 111_000.0;
-            let cos_lat = origin.lat.to_radians().cos().abs().max(0.1);
-            let lon_delta = radius_m / (111_000.0 * cos_lat);
-            let bbox = super::map_fetch::Bbox {
-                south: origin.lat - lat_delta,
-                west: origin.lon - lon_delta,
-                north: origin.lat + lat_delta,
-                east: origin.lon + lon_delta,
-            };
-            if let Ok(region) = korea.region(&bbox)
-                && !region.places.is_empty()
-            {
-                let (buildings, est) = build_course_buildings(
-                    &region.places,
-                    origin,
-                    road_centerlines,
-                    road_surfaces,
-                    road_strips,
-                    road_areas,
-                    MAX_BUILDING_CORRIDOR_DISTANCE_M,
-                );
-                if !buildings.is_empty() {
-                    return (buildings, est);
-                }
-            }
-        }
-    }
-
-    (Vec::new(), false)
+    let places = places::load_places(path)?;
+    Ok(build_course_buildings(
+        &places,
+        origin,
+        road_centerlines,
+        road_surfaces,
+        road_strips,
+        road_areas,
+        MAX_BUILDING_CORRIDOR_DISTANCE_M,
+    ))
 }
 
 #[cfg(test)]

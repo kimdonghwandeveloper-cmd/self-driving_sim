@@ -1048,14 +1048,20 @@ fn build_course_checked(
         notices,
         file.nav_rules,
     )?;
-    let (buildings, has_estimated) = super::building::load_companion_buildings(
-        base_dir,
-        picked[0],
+    let (buildings, has_estimated) = super::building::load_buildings_file(
+        &super::places::snapshot_places_path(&base_dir.join(&file.snapshot)),
+        snapped
+            .ways
+            .iter()
+            .flat_map(|way| &way.nodes)
+            .find(|node| node.id == file.nodes[0])
+            .map(|node| node.pos)
+            .ok_or("route start node missing")?,
         &[route_course.guide.clone()],
         &route_course.course.surfaces,
         &route_course.course.strips,
         &route_course.course.areas,
-    );
+    )?;
     if has_estimated {
         route_course
             .course

@@ -225,6 +225,17 @@ pub fn parse_places(json: &str) -> Result<Vec<Place>, String> {
 }
 
 /// 장소 파일을 읽는다.
+/// 도로 스냅샷 이름과 일대일로 대응하는 건물·장소 파일 경로를 반환한다.
+pub fn snapshot_places_path(snapshot: &std::path::Path) -> std::path::PathBuf {
+    let name = snapshot.file_name().unwrap_or_default().to_string_lossy();
+    let stem = name
+        .strip_suffix(".osm.json")
+        .or_else(|| name.strip_suffix(".json"))
+        .unwrap_or(&name);
+    snapshot.with_file_name(format!("{stem}.places.osm.json"))
+}
+
+/// 장소 파일을 읽는다.
 pub fn load_places(path: &std::path::Path) -> Result<Vec<Place>, String> {
     let text = std::fs::read_to_string(path)
         .map_err(|error| format!("cannot read {}: {error}", path.display()))?;

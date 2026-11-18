@@ -178,7 +178,7 @@ pub fn load_road_lines_course(text: &str, base_dir: &Path) -> Result<CourseDef, 
         &course.surfaces,
         &course.strips,
         &course.areas,
-    );
+    )?;
     if has_estimated {
         course
             .notices
