@@ -64,7 +64,7 @@ func _run() -> void:
 			DirAccess.remove_absolute(str(saved.path))
 
 	# 점이 있을 때 지역 밖 클릭은 안내만 한다.
-	_check(not map._ensure_region(start + Vector2(5000, 0)) and map.feedback.contains("점 모두 삭제"), "지역 밖 클릭 안내: " + map.feedback)
+	_check(not map._ensure_region(start + Vector2(5000, 0)) and map.feedback.contains("새 경로"), "지역 밖 클릭 안내: " + map.feedback)
 
 	# 점을 지우고 확대한 화면을 다른 곳에 멈추면 그 가운데 지역이 자동으로 열린다.
 	map._clear_points()

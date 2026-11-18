@@ -183,7 +183,7 @@ func display_tiles(layers: Array) -> void:
 	tile_layers = layers.duplicate()
 	queue_redraw()
 
-## 마우스 기준 위치를 고정하며 확대하고 우클릭 끌기로 이동한다.
+## 마우스 위치 기준으로 확대하고 왼쪽·오른쪽 끌기로 이동하며 짧은 클릭은 지점을 선택한다.
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton:
 		if event.button_index == MOUSE_BUTTON_RIGHT:
