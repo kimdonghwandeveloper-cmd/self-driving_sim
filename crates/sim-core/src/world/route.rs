@@ -34,8 +34,8 @@ use super::road_geom::{self, RoadSpec};
 pub const CORNER_RADIUS_M: f32 = 3.0;
 /// 경로에 포함되지 않은 교차로 팔(곁가지)의 길이 기본값(m). 임시값.
 pub const STUB_LENGTH_M: f32 = 10.0;
-/// 경로 코스(연석·끝 벽 포함)의 x·z 축 정렬 범위 상한(m). PLAN 4 공통 계약의 개발상 임시값 1.5 × 1.5 km.
-pub const ROUTE_MAX_EXTENT_M: (f32, f32) = (1500.0, 1500.0);
+/// 경로 코스(연석·끝 벽 포함)의 x·z 축 정렬 범위 상한(m). PLAN 4 공통 계약의 10 km 경로와 연석·곁가지 여유 100 m.
+pub const ROUTE_MAX_EXTENT_M: (f32, f32) = (10100.0, 10100.0);
 
 /// 교차로 형상 설정값(모두 임시값, 실측 아님).
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -319,7 +319,7 @@ fn trim(points: &[Vec2], start_m: f32, end_m: f32) -> Result<Vec<Vec2>, String> 
 /// 들어오는 방향은 `before → from`, 나가는 방향은 `next` 첫 구간이다. 두 방향의 직선이 교차로 중심 `center`에서
 /// 만난다고 보고, 짧은 쪽 잘라 낸 거리를 접선 길이로 하는 원호(필렛)로 잇는다. 베지어처럼 가운데가 좁게 꺾이지 않아
 /// 회전 반경이 접선 길이 / tan(θ/2)로 정해진다(90°에서 잘라 낸 거리와 같다). 거의 직진이면 직선으로 잇는다.
-fn crossing_guide(from: Vec2, before: Vec2, center: Vec2, next: &[Vec2]) -> Vec<Vec2> {
+pub(crate) fn crossing_guide(from: Vec2, before: Vec2, center: Vec2, next: &[Vec2]) -> Vec<Vec2> {
     let to = next[0];
     let entry = (from - before).normalize();
     let exit = (next[1] - to).normalize();
@@ -596,6 +596,20 @@ pub fn build_route_course_detailed(
         ROUTE_MAX_EXTENT_M,
     )?;
     course.goal = Some(map::goal_pose(&last_piece)?);
+    // 저장 후 화면에서만 발견되던 형상 오류를 생성 시점에 같은 계약으로 검사한다.
+    if let Err(error) = course.validate() {
+        let message = format!("course shape check failed: {error}");
+        return Err(match error {
+            super::course::ShapeError::FanNotVisible { index, .. }
+            | super::course::ShapeError::TooFewBoundaryPoints { index, .. } => {
+                match junction_ids.get(index) {
+                    Some(&node) => BuildFailure::at(node, message),
+                    None => message.into(),
+                }
+            }
+            _ => message.into(),
+        });
+    }
     Ok(RouteCourse {
         course,
         guide,

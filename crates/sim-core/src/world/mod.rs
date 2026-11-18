@@ -4,14 +4,11 @@
 //! 화면 메시 생성은 Godot 쪽(`sim-godot` 형상 사전 → GDScript)에서 이 데이터로 한다.
 
 pub mod anchor_probe;
+pub mod building;
 pub mod course;
 pub mod course_files;
 pub mod junction;
 pub mod korea_data;
-pub mod lanelet2;
-pub mod lanelet2_course;
-pub mod lanelet2_geometry;
-pub mod lanelet2_selection;
 pub mod map;
 pub mod map_fetch;
 pub mod map_patch;
@@ -23,6 +20,7 @@ pub mod pbf_extract;
 #[cfg(test)]
 pub(crate) mod pbf_fixture;
 pub mod places;
+pub mod road_blocks;
 pub mod road_geom;
 pub mod road_polygons;
 pub mod road_snapshot;
@@ -32,3 +30,11 @@ pub mod route_plan;
 pub mod test_drive;
 
 pub use course::{CourseDef, CourseId, ShapeError};
+
+pub mod road_network;
+
+pub mod block_route;
+
+pub mod block_route_file;
+
+pub mod route_evaluation;

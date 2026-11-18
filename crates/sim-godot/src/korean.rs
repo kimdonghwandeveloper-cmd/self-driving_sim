@@ -37,6 +37,9 @@ pub fn course_notice(notice: &str) -> String {
         return translated;
     }
     match notice {
+        "Simulation includes access-restricted roads; this is not permission to enter" => {
+            return "접근 제한 도로를 포함한 연습 코스입니다(실제 출입 허가 아님)".to_owned();
+        }
         "Virtual training course from an OSM route (not a surveyed road)" => {
             return "OSM 경로로 만든 가상 교육 코스입니다(실측 도로 아님)".to_owned();
         }
@@ -46,6 +49,9 @@ pub fn course_notice(notice: &str) -> String {
         "One-way and divided roads are drawn as a single carriageway (not the real lane layout)" => {
             return "일방통행·왕복 분리 도로는 한 줄 도로로 그립니다(실제 차로 구성 아님)"
                 .to_owned();
+        }
+        "Some building heights are estimated defaults (not surveyed heights)" => {
+            return "일부 건물 높이는 기본값으로 추정되었습니다(실제 높이 아님)".to_owned();
         }
         _ => {}
     }

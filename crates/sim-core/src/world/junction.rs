@@ -65,6 +65,34 @@ pub fn junction_shape(
     if arms.len() < 3 {
         return Err(format!("junction at {center} has fewer than 3 arms"));
     }
+    road_join_shape(center, arms, corner_radius_m, arc_step_deg, min_gap_deg)
+}
+
+/// 선택 경로와 무관하게 두 팔 이상의 도로 접속부를 만든다. 두 팔은 폭 전환·꺾인 이음에도 쓴다.
+/// 레거시 교차로 함수의 세 팔 이상 계약은 유지한다.
+pub fn road_join_shape(
+    center: Vec2,
+    arms: &[ArmInput],
+    corner_radius_m: f32,
+    arc_step_deg: f32,
+    min_gap_deg: f32,
+) -> Result<JunctionShape, String> {
+    if arms.len() < 2 {
+        return Err(format!("road join at {center} has fewer than 2 arms"));
+    }
+    if !center.is_finite()
+        || !(arc_step_deg.is_finite() && arc_step_deg > 0.0 && arc_step_deg <= 45.0)
+        || !(min_gap_deg.is_finite() && min_gap_deg > 0.0 && min_gap_deg <= 90.0)
+        || arms.iter().any(|a| {
+            !a.direction.is_finite()
+                || (a.direction.length_squared() - 1.0).abs() > 1.0e-3
+                || !(a.half_width_m.is_finite() && a.half_width_m > 0.0)
+                || !(a.min_cut_m.is_finite() && a.min_cut_m >= 0.0)
+                || !(a.ccw_corner_radius_m.is_finite() && a.ccw_corner_radius_m >= 0.0)
+        })
+    {
+        return Err("invalid road join center, arm or angular settings".into());
+    }
     if !(corner_radius_m.is_finite() && corner_radius_m > 0.0) {
         return Err(format!(
             "corner radius must be positive, got {corner_radius_m}"
@@ -142,7 +170,9 @@ pub fn junction_shape(
             // 반폭이 같으면 두 가장자리 사이 각은 φ - 180°다. 180°보다 조금 작은 φ(위 원호 조건의 허용 범위)는
             // 각을 0..360°로 감으면 거의 한 바퀴가 되어 중심을 도는 고리가 생기므로, 0 이하로 보고 직선으로 잇는다.
             let sweep = gap - PI;
-            if (a.half_width_m - b.half_width_m).abs() < 1.0e-4 && sweep <= 1.0e-3 {
+            // 직선 이음의 폭 변화는 양쪽 입구 단면을 직접 이어 테이퍼로 만든다.
+            // 중심의 같은 방사선 위에 서로 다른 폭 점을 세우면 넓이 0인 부채꼴이 생긴다.
+            if sweep <= 1.0e-3 {
                 Vec::new()
             } else if (a.half_width_m - b.half_width_m).abs() < 1.0e-4 {
                 let from = edge_a;
@@ -176,14 +206,21 @@ pub fn junction_shape(
         boundary.extend(line.iter().copied());
         corners.push(line);
     }
-    // 별 모양 검사: 중심과 이웃한 두 경계점이 이루는 삼각형이 모두 반시계여야 한다.
+    // 같은 접점을 중복 저장하지 않아 CourseDef의 닫히지 않은 부채꼴 경계 계약을 지킨다.
+    boundary.dedup_by(|a, b| a.distance(*b) <= 1.0e-4);
+    while boundary.len() > 1 && boundary[0].distance(*boundary.last().unwrap()) <= 1.0e-4 {
+        boundary.pop();
+    }
+    // 화면 로더와 동일하게 넓이가 0인 삼각형도 거부한다.
     let m = boundary.len();
+    if m < 3 {
+        return Err(format!(
+            "junction at {center} has fewer than 3 boundary points"
+        ));
+    }
     for k in 0..m {
         let (p, q) = (boundary[k], boundary[(k + 1) % m]);
-        if p.distance(q) <= 1.0e-4 {
-            continue;
-        }
-        if cross(p - center, q - center) < -1.0e-4 {
+        if cross(p - center, q - center) <= 0.0 {
             return Err(format!(
                 "junction at ({:.1}, {:.1}) is not star-shaped near ({:.1}, {:.1})",
                 center.x, center.y, p.x, p.y
@@ -326,5 +363,25 @@ mod tests {
         assert!((shape.cut_m[0] - 8.0).abs() < 1e-3, "{:?}", shape.cut_m);
         assert!((shape.cut_m[1] - 8.0).abs() < 1e-3, "{:?}", shape.cut_m);
         assert!((shape.cut_m[2] - 5.0).abs() < 1e-4, "{:?}", shape.cut_m);
+    }
+    /// 회전·이동한 교차로도 성공을 반환했다면 실제 화면의 부채꼴 형상 검사를 통과해야 한다.
+    #[test]
+    fn successful_shapes_match_course_validation() {
+        let mut successes = 0;
+        for center in [Vec2::ZERO, Vec2::new(2000.0, 3000.0)] {
+            for angle in (30..=150).step_by(5) {
+                let arms = [arm(0.0), arm(angle as f32), arm(180.0), arm(270.0)];
+                if let Ok(shape) = junction_shape(center, &arms, 3.0, 3.0, 25.0) {
+                    let mut course = super::super::course::training_course();
+                    course.areas = vec![super::super::course::Area {
+                        center,
+                        boundary: shape.boundary,
+                    }];
+                    course.validate().unwrap();
+                    successes += 1;
+                }
+            }
+        }
+        assert!(successes > 30);
     }
 }

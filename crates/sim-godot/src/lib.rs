@@ -7,7 +7,6 @@
 pub mod course;
 pub mod devices;
 pub mod korean;
-pub mod lanelet_picker;
 pub mod paths;
 pub mod replay;
 pub mod route_picker;

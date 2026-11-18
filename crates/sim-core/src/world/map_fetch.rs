@@ -84,6 +84,16 @@ impl Bbox {
 
     /// 유한값, 남 < 북·서 < 동, 네 모서리가 대한민국 범위 안, 한 변이 [`MAX_BBOX_SIDE_M`] 이하인지 검사한다.
     pub fn validate(&self) -> Result<(), String> {
+        self.validate_side_limit(MAX_BBOX_SIDE_M)
+    }
+
+    /// 오프라인 전국 팩 조회만 12 km 범위를 허용하고 온라인 조회의 2 km 제한은 유지한다.
+    pub fn validate_local_route(&self) -> Result<(), String> {
+        self.validate_side_limit(12000.0)
+    }
+
+    /// 공통 위경도 검사를 수행하고 호출 용도별 한 변 상한을 적용한다.
+    fn validate_side_limit(&self, max_side_m: f64) -> Result<(), String> {
         let values = [self.south, self.west, self.north, self.east];
         if !values.iter().all(|value| value.is_finite()) {
             return Err(format!("bbox {values:?} has a non-finite value"));
@@ -103,9 +113,9 @@ impl Bbox {
             }
         }
         let (east_west, north_south) = self.size_m();
-        if east_west > MAX_BBOX_SIDE_M || north_south > MAX_BBOX_SIDE_M {
+        if east_west > max_side_m || north_south > max_side_m {
             return Err(format!(
-                "bbox is {east_west:.0} x {north_south:.0} m (east-west by north-south); limit is {MAX_BBOX_SIDE_M} m per side"
+                "bbox is {east_west:.0} x {north_south:.0} m (east-west by north-south); limit is {max_side_m} m per side"
             ));
         }
         Ok(())

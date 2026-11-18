@@ -29,6 +29,7 @@ func _run() -> void:
 	map._check_data()
 	map.coordinates.text = "34.75264,127.74712"
 	map._jump_coordinate_button()
+	_check(not map.selecting_destination, "지역 열기가 출발 선택 모드를 바꿈")
 	var requested_region: Rect2 = map.opened_region
 	for frame in 45:
 		await process_frame
@@ -50,9 +51,15 @@ func _run() -> void:
 		map.camera.force_update_scroll()
 		await _click(map.get_canvas_transform() * view)
 	_check(map.points.size() == 2, "실제 도로 클릭으로 출발·도착을 선택하지 못함")
+	_check(map.selecting_destination, "도로 선택 후 도착 교체 모드로 전환되지 않음")
 	_check(not map.drive_button.disabled, "선택 경로 주행 버튼 비활성")
+	var before_drag: PackedVector2Array = map.points.duplicate()
+	var camera_before: Vector2 = map.camera.position
+	await _drag(Vector2(1100, 600), Vector2(1140, 620))
+	_check(map.points == before_drag, "지도 드래그가 선택 지점을 바꿈")
+	_check(map.camera.position != camera_before, "왼쪽 드래그로 지도가 이동하지 않음")
 	map._jump_coordinates("37.4979,127.0276")
-	_check(map.feedback.contains("점 모두 삭제") and map.points.size() == 2, "지역 이동이 선택을 삭제함")
+	_check(map.feedback.contains("보존") and map.points.size() == 2, "지역 이동이 선택을 삭제함")
 	map._fit_route()
 	for frame in 4:
 		await process_frame
@@ -148,6 +155,27 @@ func _click(point: Vector2) -> void:
 		event.pressed = pressed
 		root.push_input(event)
 		await process_frame
+
+## 실제 왼쪽 누름·이동·놓기 입력으로 지도 이동과 클릭 선택 분리를 확인한다.
+func _drag(from: Vector2, to: Vector2) -> void:
+	var press := InputEventMouseButton.new()
+	press.button_index = MOUSE_BUTTON_LEFT
+	press.position = from
+	press.pressed = true
+	root.push_input(press)
+	await process_frame
+	var motion := InputEventMouseMotion.new()
+	motion.position = to
+	motion.relative = to - from
+	motion.button_mask = MOUSE_BUTTON_MASK_LEFT
+	root.push_input(motion)
+	await process_frame
+	var release := InputEventMouseButton.new()
+	release.button_index = MOUSE_BUTTON_LEFT
+	release.position = to
+	release.pressed = false
+	root.push_input(release)
+	await process_frame
 
 ## 요청한 렌더링 시험에서 지도·선택 경로·도구 줄을 함께 캡처한다.
 func _capture(label: String) -> void:

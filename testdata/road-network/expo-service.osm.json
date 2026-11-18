@@ -1,0 +1,40 @@
+{
+  "generator": "self-driving-sim road network regression subset",
+  "source": {
+    "attribution": "Map data (c) OpenStreetMap contributors",
+    "license": "ODbL-1.0",
+    "copyright": "https://www.openstreetmap.org/copyright",
+    "pbf": "south-korea-261111.osm.pbf",
+    "pbf_sha256": "ff3396a70e5b87a29de31d33bf366e7c6257f1c558cc282e6389f54a0c215243",
+    "note": "OSM geometry only; width falls back to simulator default; no survey or access authorization claim"
+  },
+  "elements": [
+    {
+      "type": "way",
+      "id": 532526365,
+      "nodes": [
+        13388325415,
+        13388308290,
+        8664556115
+      ],
+      "geometry": [
+        {
+          "lat": 34.752566,
+          "lon": 127.7478313
+        },
+        {
+          "lat": 34.7526524,
+          "lon": 127.7478582
+        },
+        {
+          "lat": 34.7534376,
+          "lon": 127.748004
+        }
+      ],
+      "tags": {
+        "highway": "service",
+        "service": "parking_aisle"
+      }
+    }
+  ]
+}

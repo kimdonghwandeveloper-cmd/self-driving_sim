@@ -54,7 +54,10 @@ pub fn follow_path(course: &CourseDef, path: &[Vec2], target_speed_mps: f32) -> 
     let mut contact = ContactState::default();
     let (mut impacts, mut segment, mut along, mut max_offset) = (0, 0usize, 0.0f32, 0.0f32);
     let mut first_impact = None;
-    for _ in 0..64 * 600 {
+    // 장거리 시험은 실제 속도 상한으로 계산한 예상 시간의 두 배를 주되 최대 한 시간으로 제한한다.
+    let speed = target_speed_mps.min(params.max_forward_speed_mps).max(1.0);
+    let seconds = (total / speed * 2.0 + 60.0).clamp(600.0, 3600.0) as usize;
+    for _ in 0..64 * seconds {
         let axle = Vec2::new(motion.x_m, motion.z_m);
         // 가까운 구간은 지금 구간부터 앞쪽 창 안에서만 찾아 되돌아가지 않게 하고, 구간 위 투영점으로 위치를 잰다.
         let window_end = (segment + 200).min(path.len() - 1);

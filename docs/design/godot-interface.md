@@ -216,7 +216,7 @@ Rect = { "center": Vector3, "size": Vector2(폭 x, 길이 z), "heading_rad": flo
   (경로 선택 화면이 저장한 `route-v1`, 굽은 길·교차로·연석), 없으면 단일 통로 선택 파일이다. 그래서 경로·교차로 검사 결과가 Bevy 판과 같다.
 - 실패 사유는 `"지도 코스를 열 수 없습니다: <Rust 사유>"`(파일 없음·TOML 오류·형상 오류), 빈 경로는 `"지도 코스 파일 경로가 비어 있습니다..."`. 다른 실패 규칙은 6절과 같다.
 - 지도 코스의 `notices`에는 OSM 출처 표기와 "가상 교육 코스(실측 아님)", 임시 폭 안내가 들어 있다. Godot은 주행 화면에 항상 보인다.
-- 코스 범위는 수백 m~1.5 km다. 바닥·카메라 먼 거리는 Godot 쪽이 코스 범위에 맞춘다.
+- OSM 경로는 최대 10 km를 지원한다. 바닥·카메라 먼 거리는 Godot 쪽이 코스 범위에 맞춘다.
 
 `SimCourse.course_files() -> Array[{label: String, course: String, saved: bool}]`: 메뉴용 지도 코스 목록.
 저장소 코스(`assets/maps/<지역>/*.toml`, 폴더·이름 순) 다음에 경로 선택 화면이 저장한 경로(`cache/routes/*.toml`, 최근 저장 순).
@@ -358,6 +358,9 @@ Bevy 판 `src/picker/`(4-5·4-5b)의 계산·캐시·받기 부분은 Bevy와 �
 | (v1.7) `open_region(center_latlon: PackedFloat64Array)` | `{ok, error}` | 가운데 1.5 × 1.5 km 지역의 도로·회전 제한·건물·장소를 **내장 전국 자료**(`data/korea`)에서 연다. 함수 안에서 끝난다(측정 0.1 s 미만). 도로는 지역 스냅샷 `cache/regions/<자료 판>/<범위>.osm.json`으로 써서 저장 경로가 가리킨다. `error`는 한국어(자료 없음·형식 다름·도로 없음) |
 | (v1.7) `data_status()` | `{ok, error, data_time}` | 전국 자료를 열 수 있는지. 없으면 `ok=false`와 만드는 방법 안내(한국어). `data_time`은 원본 복제 시각(유닉스 초 문자열, 없으면 빈 문자열) |
 | (v1.7) `use_data_dir(dir: String)` | 없음 | 전국 자료 폴더를 바꾼다(저장소 루트 기준, 빈 문자열이면 `data/korea`). 시험이 작은 자료(`testdata/korea-yeosu`)를 쓸 때 부른다 |
+| `expand_route_region(target: PackedFloat64Array, destination: bool)` | `{ok, error}` | 반대편 선택 지점을 포함하는 최대 12 km 오프라인 조회 범위를 열고 기존 좌표·이름·정책을 보존한다. 실패 시 이전 모델 유지 |
+| `set_restricted_roads(enabled: bool)` | 없음 | 접근 제한 도로 연습 옵션. 도로 표시·계획·저장·재생에 반영. 일방통행·회전 제한 유지 |
+| `source_snapshot()` | `String` | 현재 모델의 판본 고정 스냅샷 절대 경로. 출처 진단용 |
 | `poll()` | `Array[Dictionary]` | 매 프레임 호출. (v1.7) 이벤트는 전국 검색 결과 `{type: "search_results", ok: bool, message, request_id, results: Array[Dictionary]}`뿐이다(`results` 항목은 `{index, name, address, kind, view: Vector2}`, 실패면 빈 배열이고 `message`는 한국어) |
 | `road_segments()` | `PackedVector2Array` | 그릴 도로 선분(짝수 개: from, to 반복), 지도 좌표 |
 | `road_usable()` | `PackedByteArray` | 선분별 경로 탐색 가능 여부(1/0) |

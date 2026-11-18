@@ -14,6 +14,15 @@ const YEOSU_CUSTOM_ROADS_COURSE := "map:testdata/yeosu-expo/custom-roads.toml"
 const OFF_ROAD_NOTICE := "도로 이탈 · 맵 도로 밖입니다"
 const ROAD_CELL_M := 20.0
 const YEOSU_BACKGROUND = preload("res://assets/maps/yeosu-expo/background.glb")
+## 기존 사용자 맵 배경을 바꾸지 않고 컨벤션 통로 코스에서만 별도 정렬 배경을 연다.
+const CONVENTION_BACKGROUND_PATH := "res://assets/maps/yeosu-expo/convention-background.glb"
+const CONVENTION_PREFIX := "map:testdata/yeosu-expo/convention/"
+const CONVENTION_COURSES := {
+    "north-access": "북측 진입로", "central-gallery": "중앙 갤러리 통로",
+    "south-plaza": "남측 광장 진입로", "west-link": "서측 연결 통로",
+    "east-plaza": "동측 광장 연결로", "west-crossing": "국제관 서측 횡단 통로",
+}
+
 ## 코스 범위 밖으로 바닥을 더 까는 여백(m).
 const GROUND_MARGIN_M := 300.0
 ## HUD에 보일 입력 장치·시점 이름(계약 값 → 한국어).
@@ -109,8 +118,12 @@ func start(course_name: String, force_preview: bool = false) -> void:
 	scene_content.add_child(course_mesh)
 	course_mesh.build(data)
 	var bounds := CourseMesh.ground_bounds(data)
-	if course_name in [YEOSU_COURSE, YEOSU_CUSTOM_ROADS_COURSE] and not is_preview and fallback_notice.is_empty():
-		bounds = _add_yeosu_background(bounds)
+	if not is_preview and fallback_notice.is_empty():
+		if course_name in [YEOSU_COURSE, YEOSU_CUSTOM_ROADS_COURSE]:
+			bounds = _add_yeosu_background(bounds)
+		elif course_name.begins_with(CONVENTION_PREFIX):
+			var convention_background := load(CONVENTION_BACKGROUND_PATH) as PackedScene
+			bounds = _add_yeosu_background(bounds, convention_background)
 	if course_name == YEOSU_CUSTOM_ROADS_COURSE and fallback_notice.is_empty():
 		_index_road_areas(data)
 	_fit_ground(bounds)
@@ -184,8 +197,8 @@ func on_road(position_3d: Vector3) -> bool:
 	return false
 
 ## 시각 배경을 원점에 배치하고, 바닥이 배경 도로를 덮지 않도록 높이와 범위를 맞춘다.
-func _add_yeosu_background(bounds: Rect2) -> Rect2:
-	var background := YEOSU_BACKGROUND.instantiate() as Node3D
+func _add_yeosu_background(bounds: Rect2, background_scene: PackedScene = YEOSU_BACKGROUND) -> Rect2:
+	var background := background_scene.instantiate() as Node3D
 	background.name = "YeosuBackground"
 	scene_content.add_child(background)
 	ground.position.y = -0.10

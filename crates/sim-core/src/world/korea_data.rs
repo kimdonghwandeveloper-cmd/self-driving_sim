@@ -32,10 +32,14 @@ use super::places::{self, Place};
 pub const KOREA_DATA_DIR: &str = "data/korea";
 /// 지역 스냅샷을 쓰는 캐시 폴더. 자료 판마다 하위 폴더를 둔다.
 pub const REGION_CACHE_DIR: &str = "cache/regions";
-/// 자료 형식 이름. 바뀌면 읽지 않는다.
-pub const FORMAT: &str = "korea-data-v1";
+/// 레거시 전국 자료 형식 (Phase 4-11 전국 지도 1차 배포).
+pub const FORMAT_V1: &str = "korea-data-v1";
+/// 신규 전국 자료 형식 (PLAN 4-12 건물 태그/층수/높이 보존).
+pub const FORMAT_V2: &str = "korea-data-v2";
+/// 현재 생성하는 자료 형식 이름.
+pub const FORMAT: &str = FORMAT_V2;
 /// 지역 스냅샷 본문의 `generator` 값(Geofabrik 추출 접두어와 다르다: 연결 정보 없는 Overpass 형식으로 읽힌다).
-pub const GENERATOR: &str = "self-driving-sim korea-data v1";
+pub const GENERATOR: &str = "self-driving-sim korea-data v2";
 /// 머리 정보 파일.
 pub const MANIFEST_FILE: &str = "manifest.toml";
 /// 도로 묶음 파일.
@@ -66,8 +70,6 @@ pub const ROAD_KINDS: [&str; 17] = [
     "road",
     "busway",
 ];
-/// 넣지 않는 `service` 값(주차장 통로·진입로, 사용자 동의 2026-11-12).
-pub const SKIPPED_SERVICE: [&str; 3] = ["parking_aisle", "driveway", "drive-through"];
 /// 도로에 남기는 태그. 순서가 형식의 일부다(번호로 저장).
 pub const ROAD_KEYS: [&str; 15] = [
     "highway",
@@ -88,6 +90,21 @@ pub const ROAD_KEYS: [&str; 15] = [
 ];
 /// 회전 제한 관계에 남기는 태그. 순서가 형식의 일부다.
 pub const RESTRICTION_KEYS: [&str; 4] = ["type", "restriction", "restriction:motorcar", "except"];
+/// 건물·장소에 남기는 태그. 순서가 형식의 일부다(번호로 저장).
+pub const PLACE_KEYS: [&str; 12] = [
+    "building",
+    "height",
+    "building:levels",
+    "name",
+    "amenity",
+    "shop",
+    "tourism",
+    "leisure",
+    "office",
+    "historic",
+    "place",
+    "man_made",
+];
 
 /// 원본 PBF 기록.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -190,6 +207,8 @@ struct PlaceRecord {
     id: u64,
     name: String,
     kind: String,
+    /// (태그 번호([`PLACE_KEYS`]), 값). 번호 오름차순.
+    tags: Vec<(u8, String)>,
     /// 윤곽(닫는 점 중복 없음). 노드면 그 점 하나.
     outline: Vec<[i32; 2]>,
     /// 윤곽 위 출입구.
@@ -212,10 +231,17 @@ impl PlaceRecord {
             lat: outline.iter().map(|p| p.lat).sum::<f64>() / count,
             lon: outline.iter().map(|p| p.lon).sum::<f64>() / count,
         };
+        let mut tags = std::collections::BTreeMap::new();
+        for &(idx, ref val) in &self.tags {
+            if let Some(&k) = PLACE_KEYS.get(usize::from(idx)) {
+                tags.insert(k.to_owned(), val.clone());
+            }
+        }
         Place {
             id: format!("{}/{}", if self.way { "way" } else { "node" }, self.id),
             name: self.name.clone(),
             kind: self.kind.clone(),
+            tags,
             outline: if self.way { outline } else { Vec::new() },
             center,
             entrances: self.entrances.iter().map(|&p| latlon(p)).collect(),
@@ -500,6 +526,7 @@ fn encode_places(tile: (i32, i32), places: &[&PlaceRecord]) -> Vec<u8> {
         out.varint(place.id);
         out.text(&place.name);
         out.text(&place.kind);
+        out.tags(&place.tags);
         out.varint(place.outline.len() as u64);
         for &point in &place.outline {
             out.coord(point);
@@ -512,8 +539,44 @@ fn encode_places(tile: (i32, i32), places: &[&PlaceRecord]) -> Vec<u8> {
     out.bytes
 }
 
-/// 건물·장소 조각 본문을 읽는다.
-fn decode_places(tile: (i32, i32), bytes: &[u8]) -> Result<Vec<PlaceRecord>, String> {
+fn decode_places_v2(tile: (i32, i32), bytes: &[u8]) -> Result<Vec<PlaceRecord>, String> {
+    let mut input = Decoder::new(bytes, tile);
+    let count = input.count()?;
+    let mut places = Vec::with_capacity(count);
+    for _ in 0..count {
+        let way = match input.byte()? {
+            0 => false,
+            1 => true,
+            other => return Err(format!("korea data place type {other} is unknown")),
+        };
+        let id = input.varint()?;
+        let name = input.text()?;
+        let kind = input.text()?;
+        let tags = input.tags(PLACE_KEYS.len())?;
+        let outline = (0..input.count()?)
+            .map(|_| input.coord())
+            .collect::<Result<Vec<_>, _>>()?;
+        let entrances = (0..input.count()?)
+            .map(|_| input.coord())
+            .collect::<Result<Vec<_>, _>>()?;
+        if outline.is_empty() {
+            return Err(format!("korea data place {id} has no coordinates"));
+        }
+        places.push(PlaceRecord {
+            way,
+            id,
+            name,
+            kind,
+            tags,
+            outline,
+            entrances,
+        });
+    }
+    input.finish()?;
+    Ok(places)
+}
+
+fn decode_places_v1(tile: (i32, i32), bytes: &[u8]) -> Result<Vec<PlaceRecord>, String> {
     let mut input = Decoder::new(bytes, tile);
     let count = input.count()?;
     let mut places = Vec::with_capacity(count);
@@ -540,6 +603,7 @@ fn decode_places(tile: (i32, i32), bytes: &[u8]) -> Result<Vec<PlaceRecord>, Str
             id,
             name,
             kind,
+            tags: Vec::new(),
             outline,
             entrances,
         });
@@ -699,9 +763,9 @@ impl KoreaData {
             .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
         let manifest: Manifest = toml::from_str(&text)
             .map_err(|error| format!("invalid {}: {error}", path.display()))?;
-        if manifest.format != FORMAT {
+        if manifest.format != FORMAT_V2 && manifest.format != FORMAT_V1 {
             return Err(format!(
-                "{} has format `{}`; this program reads `{FORMAT}` (rebuild the data)",
+                "{} has format `{}`; this program reads `{FORMAT_V2}` or `{FORMAT_V1}` (rebuild the data)",
                 path.display(),
                 manifest.format
             ));
@@ -735,14 +799,26 @@ impl KoreaData {
         Ok(())
     }
 
-    /// 자료 판 이름(도로 묶음 SHA-256 앞 12자). 지역 스냅샷 캐시 폴더 이름으로 쓴다.
-    pub fn version(&self) -> &str {
-        &self.manifest.roads.sha256[..12.min(self.manifest.roads.sha256.len())]
+    /// 형식·도로·장소 SHA-256을 모두 묶은 판본으로 건물만 바뀌어도 새 캐시를 만든다.
+    pub fn version(&self) -> String {
+        sha256(
+            format!(
+                "{}:{}:{}",
+                self.manifest.format, self.manifest.roads.sha256, self.manifest.places.sha256
+            )
+            .as_bytes(),
+        )
     }
 
     /// 범위와 겹치는 도로·회전 제한·건물·장소를 꺼낸다. 도로가 하나도 없으면 오류다.
     pub fn region(&self, bbox: &Bbox) -> Result<Region, String> {
         bbox.validate()?;
+        self.region_local_route(bbox)
+    }
+
+    /// 10 km 경로를 구성할 때 인접 조각들을 합쳐 읽는다. 온라인 질의 제한과 분리한다.
+    pub fn region_local_route(&self, bbox: &Bbox) -> Result<Region, String> {
+        bbox.validate_local_route()?;
         let area = Area::around(bbox, 0.0);
         let tiles = tiles_covering(bbox);
         let mut roads: BTreeMap<u64, Road> = BTreeMap::new();
@@ -762,7 +838,16 @@ impl KoreaData {
                 }
             }
             if let Some(body) = self.places.tile(tile)? {
-                for place in decode_places(tile, &body)? {
+                let place_records = match self.manifest.format.as_str() {
+                    FORMAT_V2 => decode_places_v2(tile, &body)
+                        .map_err(|error| format!("korea data v2 places decode failed: {error}"))?,
+                    FORMAT_V1 => decode_places_v1(tile, &body)
+                        .map_err(|error| format!("korea data v1 places decode failed: {error}"))?,
+                    other => {
+                        return Err(format!("unknown korea data format `{other}`"));
+                    }
+                };
+                for place in place_records {
                     if area.contains(degrees(place.anchor())) || touches(&area, &place.outline) {
                         found.insert((place.way, place.id), place);
                     }
@@ -799,9 +884,20 @@ impl KoreaData {
         bbox: &Bbox,
         cache_root: &Path,
     ) -> Result<(PathBuf, Vec<Place>), String> {
-        let region = self.region(bbox)?;
+        bbox.validate()?;
+        self.region_snapshot_local_route(bbox, cache_root)
+    }
+
+    /// 여러 지역에 걸친 도로·장소를 판본 고정 스냅샷으로 저장해 장거리 재생을 보장한다.
+    pub fn region_snapshot_local_route(
+        &self,
+        bbox: &Bbox,
+        cache_root: &Path,
+    ) -> Result<(PathBuf, Vec<Place>), String> {
+        let region = self.region_local_route(bbox)?;
         let dir = cache_root.join(self.version());
         let path = dir.join(format!("{}.osm.json", bbox.cache_name()));
+        let places_path = places::snapshot_places_path(&path);
         if !path.exists() {
             std::fs::create_dir_all(&dir)
                 .map_err(|error| format!("cannot create {}: {error}", dir.display()))?;
@@ -811,6 +907,32 @@ impl KoreaData {
                 .map_err(|error| {
                     let _ = std::fs::remove_file(&staging);
                     format!("cannot write {}: {error}", path.display())
+                })?;
+        }
+        let places_json = places::places_to_overpass_json(&region.places);
+        if places_path.exists() {
+            let existing = std::fs::read_to_string(&places_path).map_err(|e| e.to_string())?;
+            if existing != places_json {
+                return Err(format!(
+                    "building snapshot content mismatch: {}",
+                    places_path.display()
+                ));
+            }
+        } else {
+            std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+            let staging = dir.join(format!(
+                "{}.places.{}.tmp",
+                bbox.cache_name(),
+                std::process::id()
+            ));
+            std::fs::write(&staging, places_json.as_bytes())
+                .and_then(|()| std::fs::rename(&staging, &places_path))
+                .map_err(|e| {
+                    let _ = std::fs::remove_file(&staging);
+                    format!(
+                        "cannot write building snapshot {}: {e}",
+                        places_path.display()
+                    )
                 })?;
         }
         Ok((path, region.places))
@@ -882,6 +1004,7 @@ struct PlaceWay {
     id: u64,
     name: String,
     kind: String,
+    tags: Tags,
     refs: Vec<u64>,
     building: bool,
 }
@@ -928,9 +1051,7 @@ where
                 };
                 let lookup = |key: &str| way.tags().find(|(k, _)| *k == key).map(|(_, v)| v);
                 let refs: Vec<u64> = way.refs().filter_map(positive).collect();
-                if lookup("highway").is_some_and(|kind| ROAD_KINDS.contains(&kind))
-                    && !lookup("service").is_some_and(|value| SKIPPED_SERVICE.contains(&value))
-                {
+                if lookup("highway").is_some_and(|kind| ROAD_KINDS.contains(&kind)) {
                     road_ways.push((id, keep_tags(way.tags(), &ROAD_KEYS), refs));
                     return Ok(());
                 }
@@ -946,6 +1067,7 @@ where
                         id,
                         name: name.to_owned(),
                         kind: places::place_kind(&tags),
+                        tags: keep_tags(way.tags(), &PLACE_KEYS),
                         refs,
                         building,
                     });
@@ -1015,11 +1137,16 @@ where
         }
         let name = map.get("name").cloned().unwrap_or_default();
         if !name.is_empty() && !map.contains_key("highway") {
+            let tags = keep_tags(
+                map.iter().map(|(k, v)| (k.as_str(), v.as_str())),
+                &PLACE_KEYS,
+            );
             node_places.push(PlaceRecord {
                 way: false,
                 id,
                 name,
                 kind: places::place_kind(&map),
+                tags,
                 outline: vec![at],
                 entrances: Vec::new(),
             });
@@ -1101,6 +1228,7 @@ where
             id: way.id,
             name: way.name,
             kind: way.kind,
+            tags: way.tags,
             outline,
             entrances: doors
                 .iter()
@@ -1355,13 +1483,13 @@ mod tests {
         }
     }
 
-    /// 변환 → 열기 → 지역 꺼내기: 남긴 태그·좌표·회전 제한·건물 출입구·이름 있는 점이 원본과 같고, 주차장 통로·보도·
+    /// 변환 → 열기 → 지역 꺼내기: 남긴 태그·좌표·회전 제한·건물 출입구·이름 있는 점이 원본과 같고, 보도·
     /// 버스 정류장·모르는 태그는 빠진다. 스냅샷 본문은 지금 스냅샷 읽기 규칙으로 읽힌다.
     #[test]
     fn build_and_read_region() {
         let dir = temp_dir("roundtrip");
         let report = build_fixture(&fixture(), &dir, None);
-        assert_eq!(report.manifest.counts.roads, 4);
+        assert_eq!(report.manifest.counts.roads, 5);
         assert_eq!(report.manifest.counts.restrictions, 1);
         assert_eq!(report.manifest.counts.buildings, 1);
         assert_eq!(report.manifest.counts.places, 2);
@@ -1371,7 +1499,11 @@ mod tests {
         let body = parse_graph_full(&region.snapshot).unwrap();
         assert_eq!(body.generator.as_deref(), Some(GENERATOR));
         let ids: Vec<u64> = body.ways.iter().map(|w| w.id).collect();
-        assert_eq!(ids, vec![100, 101]);
+        assert_eq!(ids, vec![100, 101, 102]);
+        assert_eq!(
+            body.ways[2].tags.get("service").map(String::as_str),
+            Some("parking_aisle")
+        );
         let first = &body.ways[0];
         assert_eq!(first.tags.get("name").map(String::as_str), Some("시험로"));
         assert!(!first.tags.contains_key("surface"));
@@ -1407,6 +1539,35 @@ mod tests {
         assert_eq!(region.places[1].outline.len(), 5);
         assert_eq!(region.places[0].kind, "amenity=cafe");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 여러 조각을 잇는 10 km 조회가 중복 없이 재생 가능한 스냅샷을 만들고 온라인 상한은 유지한다.
+    #[test]
+    fn local_route_snapshot_spans_tiles_and_preserves_restrictions() {
+        let dir = temp_dir("long-region");
+        build_fixture(&fixture(), &dir, None);
+        let data = KoreaData::open(&dir).unwrap();
+        let bbox = around(4500.0, 4500.0, 5400.0);
+        assert!(bbox.validate().is_err());
+        assert!(bbox.validate_local_route().is_ok());
+        let cache = dir.join("cache");
+        let (path, _) = data.region_snapshot_local_route(&bbox, &cache).unwrap();
+        let bytes = std::fs::read(&path).unwrap();
+        let graph = parse_graph_full(std::str::from_utf8(&bytes).unwrap()).unwrap();
+        let ids: Vec<u64> = graph.ways.iter().map(|w| w.id).collect();
+        assert_eq!(ids, [100, 101, 102, 105, 106]);
+        assert_eq!(graph.restrictions.len(), 1);
+        assert!(places::snapshot_places_path(&path).exists());
+        assert_eq!(
+            data.region_snapshot_local_route(&bbox, &cache).unwrap().0,
+            path
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        assert!(
+            data.region_local_route(&around(4500.0, 4500.0, 7000.0))
+                .is_err()
+        );
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     /// 같은 입력이면 같은 바이트이고, 조각 경계를 지나는 도로는 양쪽 조각에 있어도 한 번만 나온다.
@@ -1471,6 +1632,73 @@ mod tests {
         }
     }
 
+    /// 도로는 그대로이고 건물 높이만 바뀌면 새 캐시를 만들고 옛 건물 스냅샷은 보존한다.
+    #[test]
+    fn building_only_update_creates_independent_snapshot_generation() {
+        let first_dir = temp_dir("building-generation-a");
+        let second_dir = temp_dir("building-generation-b");
+        let cache = temp_dir("building-generation-cache");
+        let mut first = fixture();
+        first
+            .ways
+            .iter_mut()
+            .find(|w| w.0 == 104)
+            .unwrap()
+            .1
+            .push(("height", "12"));
+        let mut second = fixture();
+        second
+            .ways
+            .iter_mut()
+            .find(|w| w.0 == 104)
+            .unwrap()
+            .1
+            .push(("height", "24"));
+        build_fixture(&first, &first_dir, None);
+        build_fixture(&second, &second_dir, None);
+        let a = KoreaData::open(&first_dir).unwrap();
+        let b = KoreaData::open(&second_dir).unwrap();
+        assert_eq!(a.manifest.roads.sha256, b.manifest.roads.sha256);
+        assert_ne!(a.manifest.places.sha256, b.manifest.places.sha256);
+        assert_ne!(a.version(), b.version());
+        let bbox = around(100.0, 0.0, 300.0);
+        let (old, _) = a.region_snapshot(&bbox, &cache).unwrap();
+        let old_places = places::snapshot_places_path(&old);
+        let old_bytes = std::fs::read(&old_places).unwrap();
+        let (new, _) = b.region_snapshot(&bbox, &cache).unwrap();
+        assert_ne!(old, new);
+        assert_eq!(std::fs::read(&old_places).unwrap(), old_bytes);
+        let old_buildings = places::load_places(&old_places).unwrap();
+        let new_buildings = places::load_places(&places::snapshot_places_path(&new)).unwrap();
+        assert_eq!(
+            old_buildings
+                .iter()
+                .find(|p| p.id == "way/104")
+                .unwrap()
+                .tags["height"],
+            "12"
+        );
+        assert_eq!(
+            new_buildings
+                .iter()
+                .find(|p| p.id == "way/104")
+                .unwrap()
+                .tags["height"],
+            "24"
+        );
+        std::fs::write(&old_places, "{}").unwrap();
+        assert!(
+            a.region_snapshot(&bbox, &cache)
+                .unwrap_err()
+                .contains("content mismatch")
+        );
+        std::fs::write(&old_places, old_bytes).unwrap();
+        assert_eq!(a.region_snapshot(&bbox, &cache).unwrap().0, old);
+        let mut different_format = KoreaData::open(&first_dir).unwrap();
+        different_format.manifest.format = FORMAT_V1.to_owned();
+        assert_ne!(a.version(), different_format.version());
+    }
+
     /// 형식 이름·묶음 크기·내용 해시가 맞지 않으면 열기·검사가 실패한다. 잘린 조각 본문도 오류다.
     #[test]
     fn mismatched_data_is_rejected() {
@@ -1501,14 +1729,15 @@ mod tests {
                 id: 1,
                 name: "a".to_owned(),
                 kind: String::new(),
+                tags: Vec::new(),
                 outline: vec![[1, 1]],
                 entrances: Vec::new(),
             }],
         );
-        assert!(decode_places(tile, &body[..body.len() - 1]).is_err());
+        assert!(decode_places_v2(tile, &body[..body.len() - 1]).is_err());
         let mut longer = body.clone();
         longer.push(0);
-        assert!(decode_places(tile, &longer).is_err());
+        assert!(decode_places_v2(tile, &longer).is_err());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -1518,7 +1747,7 @@ mod tests {
         let dir = temp_dir("clip");
         let clip = around(100.0, 0.0, 400.0);
         let report = build_fixture(&fixture(), &dir, Some(&clip));
-        assert_eq!(report.manifest.counts.roads, 2);
+        assert_eq!(report.manifest.counts.roads, 3);
         assert!(report.manifest.source.clip.is_some());
         let data = KoreaData::open(&dir).unwrap();
         assert!(data.region(&around(4575.0, 0.0, 200.0)).is_err());
