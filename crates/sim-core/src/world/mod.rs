@@ -34,3 +34,5 @@ pub mod route_plan;
 pub mod test_drive;
 
 pub use course::{CourseDef, CourseId, ShapeError};
+
+pub mod road_network;
