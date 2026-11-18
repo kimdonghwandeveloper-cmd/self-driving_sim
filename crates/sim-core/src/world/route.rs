@@ -319,7 +319,7 @@ fn trim(points: &[Vec2], start_m: f32, end_m: f32) -> Result<Vec<Vec2>, String> 
 /// 들어오는 방향은 `before → from`, 나가는 방향은 `next` 첫 구간이다. 두 방향의 직선이 교차로 중심 `center`에서
 /// 만난다고 보고, 짧은 쪽 잘라 낸 거리를 접선 길이로 하는 원호(필렛)로 잇는다. 베지어처럼 가운데가 좁게 꺾이지 않아
 /// 회전 반경이 접선 길이 / tan(θ/2)로 정해진다(90°에서 잘라 낸 거리와 같다). 거의 직진이면 직선으로 잇는다.
-fn crossing_guide(from: Vec2, before: Vec2, center: Vec2, next: &[Vec2]) -> Vec<Vec2> {
+pub(crate) fn crossing_guide(from: Vec2, before: Vec2, center: Vec2, next: &[Vec2]) -> Vec<Vec2> {
     let to = next[0];
     let entry = (from - before).normalize();
     let exit = (next[1] - to).normalize();
