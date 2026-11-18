@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use super::course::{Collider, ColliderKind, CourseDef, Strip};
 use super::lanelet2::LaneletDirection;
 use super::lanelet2_geometry::{LaneletGeometry, LaneletGeometryMap};
-use super::{map, road_geom, route};
+use super::{map, road_geom};
 use crate::vehicle::GroundRect;
 
 /// Lanelet2 코스 설정 파일의 형식 이름.
