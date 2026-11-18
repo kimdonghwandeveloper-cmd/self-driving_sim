@@ -33,6 +33,9 @@ func _run() -> void:
 					internal.append(element)
 		_check(not internal.is_empty(), "주차장 통로·진입로가 여전히 팩에서 누락됨")
 		print("EXPO INTERNAL SOURCE: ", source, " · facility services: ", internal.size())
+		for argument in OS.get_cmdline_user_args():
+			if argument.begins_with("--previous-data="):
+				_check_previous(internal, argument.trim_prefix("--previous-data="))
 		picker.call("set_restricted_roads", true)
 		var selected := false
 		for way: Dictionary in internal:
@@ -62,10 +65,17 @@ func _run() -> void:
 							var start := vehicle.position
 							vehicle.call("send_command", "engine_toggle")
 							vehicle.call("send_command", "gear_drive")
-							for tick in 96:
-								vehicle.call("set_manual_input", 0.4, 0.0, 0.0)
+							var goal: Vector3 = course.goal.position
+							var touched := false
+							for tick in 4096:
+								var speed := float(vehicle.call("speed_mps"))
+								vehicle.call("set_manual_input", clampf((3.0 - speed) * 0.5, 0.0, 0.5), 0.0, 0.0)
 								await physics_frame
-							_check(vehicle.position.distance_to(start) > 0.1, "복구한 내부 도로에서 차량이 움직이지 않음")
+								touched = touched or bool(vehicle.call("in_contact"))
+								if vehicle.position.distance_to(goal) < 5.0:
+									break
+							_check(vehicle.position.distance_to(start) > 30.0 and vehicle.position.distance_to(goal) < 5.0, "복구한 내부 도로에서 목표 근처까지 도달하지 못함")
+							_check(not touched, "내부 도로 주행 중 연석 또는 벽 접촉")
 							vehicle.free()
 							DirAccess.remove_absolute(str(saved.path))
 						print("EXPO INTERNAL ROUTE: way ", int(way.id), " · ", way.tags.service, " · ", route.length_m, " m")
@@ -84,6 +94,25 @@ func _run() -> void:
 		for message in failures:
 			printerr("EXPO INTERNAL FAIL: " + message)
 		quit(1)
+
+## 같은 원본의 이전 팩과 대조해 새로 보존한 내부 통로 ID가 과거 자료에는 없음을 검사한다.
+func _check_previous(internal: Array, previous_dir: String) -> void:
+	var old: Object = ClassDB.instantiate("SimRoutePicker")
+	old.set("network", false)
+	old.call("use_data_dir", previous_dir)
+	var opened: Dictionary = old.call("open_region", PackedFloat64Array([34.7505, 127.7475]))
+	_check(opened.ok, "이전 팩 비교를 위한 지역 열기 실패")
+	if opened.ok:
+		var path: String = old.call("source_snapshot")
+		var graph: Dictionary = JSON.parse_string(FileAccess.get_file_as_string(path))
+		var ids := {}
+		for element: Dictionary in graph.get("elements", []):
+			if element.get("type") == "way":
+				ids[int(element.id)] = true
+		for way: Dictionary in internal:
+			_check(not ids.has(int(way.id)), "복구 통로가 이전 팩에도 이미 존재함: " + str(way.id))
+		print("EXPO PREVIOUS COMPARISON: ", internal.size(), " facility services absent from previous pack")
+	old = null
 
 ## 실패 항목을 모아 검증 결과로 출력한다.
 func _check(ok: bool, message: String) -> void:

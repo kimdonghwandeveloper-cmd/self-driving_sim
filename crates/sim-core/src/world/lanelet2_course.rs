@@ -19,6 +19,8 @@ use crate::vehicle::GroundRect;
 pub const LANELET2_COURSE_FORMAT: &str = "lanelet2-course-v1";
 /// 하위 호환용 Lanelet2 코스 형식 이름.
 pub const LANELET2_COURSE_FORMAT_COMPAT: &str = "lanelet2-v1";
+/// 이번 10 km 확장은 OSM 경로 대상이며 Lanelet2 코스는 기존 검증 범위를 유지한다.
+const LANELET2_MAX_EXTENT_M: (f32, f32) = (1500.0, 1500.0);
 
 /// Lanelet2 코스 설정 파일(TOML).
 ///
@@ -432,7 +434,7 @@ pub fn build_lanelet_course(
         strips,
         Vec::new(),
         colliders,
-        route::ROUTE_MAX_EXTENT_M,
+        LANELET2_MAX_EXTENT_M,
     )?;
     course.goal = Some(goal);
     if crate::vehicle::collision::in_contact(
