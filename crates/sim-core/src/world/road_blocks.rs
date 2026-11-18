@@ -1,4 +1,11 @@
-//! OSM 도로 블록 구성 계약. 1단계는 도로 면·경로 선택·주행 코드를 변경하지 않는다.
+//! 경로와 독립적인 OSM 도로 블록 데이터 모델. 도로 면·차량 배치·경로 선택 화면은 이후 단계다.
+//!
+//! 같은 OSM 노드 ID로 연결된 인접 구간을 분기·속성·통행 방향·회전 제한 지점에서 나눈다.
+//! 양방향 way의 원본 저장 방향과 입력 순서는 정규화하며, 다른 성분 추가나 좌표 수정으로 ID를 재번호화하지 않는다.
+//! ID는 판본과 원본 way/node 구간 순서의 SHA-256이며 데이터 판본의 무결성 해시를 대신하지 않는다.
+//! 접근 제한·좁은 폭은 속성으로 보존하고 생성 불가 판정에 사용하지 않는다. 입력의 좌표 모순은 전체 실패다.
+//! 접속은 기존 via-node TurnRestriction 표현을 사용하며 블록 내부 즉시 U턴은 만들지 않는다.
+//! 순수 고리는 최소 노드를 기준으로, 접속로가 있는 고리는 해당 분기점을 기준으로 정규화한다.
 
 use super::osm_graph::{OsmGraphWay, OsmNode, TurnRestriction};
 use super::road_snapshot::sha256_hex;
@@ -269,10 +276,10 @@ fn attributes(way: &OsmGraphWay, config: &RoadGraphConfig) -> Result<BlockAttrib
                 .map(|value| (key.to_owned(), value.clone()))
         })
         .collect();
-    if route::travel(way) == Travel::Closed {
-        if let Some(value) = way.tags.get("oneway") {
-            tags.insert("oneway".to_owned(), value.clone());
-        }
+    if route::travel(way) == Travel::Closed
+        && let Some(value) = way.tags.get("oneway")
+    {
+        tags.insert("oneway".to_owned(), value.clone());
     }
     Ok(BlockAttributes {
         highway: way.highway().unwrap_or_default().to_owned(),
@@ -483,7 +490,7 @@ fn connections(blocks: &[RoadBlock], restrictions: &[TurnRestriction]) -> Vec<Bl
             }
             let applicable = rules
                 .get(&(from.exit, from.last_way))
-                .cloned()
+                .map(Vec::as_slice)
                 .unwrap_or_default();
             if applicable
                 .iter()
