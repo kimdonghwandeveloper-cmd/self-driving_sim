@@ -1,4 +1,10 @@
 //! 고정 스냅샷과 확정 블록 경로의 저장·오프라인 재생. 기존 route-v1은 별도 로더로 유지한다.
+//!
+//! TOML은 자료를 내장하지 않는다. 상대 경로가 가리키는 원본 세대 폴더도 함께 보존해야 한다.
+//! 재생은 저장 통과 순서를 사용하며 새 최단 경로를 찾지 않는다. 결과·자료·규칙 판본 불일치는 오류다.
+//! 건물 파일은 저장에 명시한 것만 읽고, 저장 후 추가된 동반 자료를 자동으로 끼워 넣지 않는다.
+//! v1은 고정 OSM 스냅샷 입력용이다. 지역 보정의 별도 참조와 Lanelet2 입력은 기존 전용 형식을 유지한다.
+//! 신규 UI/저장 버튼 연결은 후속 단계다. hard-link를 지원하지 않는 파일 시스템에서는 저장이 오류로 끝난다.
 use super::{
     block_route::BlockRouteCourse, map::LatLon, road_blocks::BlockTraversal,
     road_network::NetworkSettings, route_plan::RoadGraphConfig,
@@ -78,6 +84,7 @@ pub fn prepare_block_route_file(
     relative_path(request.snapshot)?;
     let path = request.snapshot.replace('\\', "/");
     let snapshot_path = base_dir.join(&path);
+    let locked_snapshot = lock_file(base_dir, &path)?;
     let snapshot = road_snapshot::load_road_snapshot(&snapshot_path)?;
     let model =
         road_blocks::build_road_blocks(&snapshot.ways, &snapshot.restrictions, request.graph)?;
@@ -125,7 +132,7 @@ pub fn prepare_block_route_file(
             default_width_m: request.graph.default_width_m.clone(),
         },
         network: request.network,
-        snapshot: lock_file(base_dir, &path)?,
+        snapshot: locked_snapshot,
         metadata: if extracted {
             Some(dependency("meta.toml")?)
         } else {
@@ -145,8 +152,9 @@ pub fn prepare_block_route_file(
     attach_buildings(&file, base_dir, &mut result)?;
     file.result_sha256 = result_fingerprint(&result);
     file.validate()?;
-    verify_files(&file, base_dir)?;
-    Ok((file, result))
+    // 준비 도중 원본이나 결속 자료가 바뀌었어도 잘못된 판본을 저장 대상으로 내보내지 않는다.
+    let verified = replay_block_route_file(&file, base_dir)?;
+    Ok((file, verified))
 }
 /// 저장 파일의 문법과 지원 판본·설정·참조 형식을 검사한다.
 pub fn parse_block_route_file(text: &str) -> Result<BlockRouteFile, String> {

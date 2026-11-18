@@ -155,6 +155,20 @@ pub fn plan_block_route(
         length_m += cost;
         traversals.extend(path.into_iter().skip(1));
     }
+    // 경유 구간별 묶음 합산과 재생 시 순차 합산의 부동소수점 차이를 없앤다.
+    length_m = traversals
+        .iter()
+        .map(|t| blocks[&t.block_id].length_m)
+        .sum();
+    if !length_m.is_finite() || length_m > max_length_m {
+        return Err(BlockRouteFailure::new(
+            FailureStage::Planning,
+            Some(selected.last().unwrap().block_id.clone()),
+            None,
+            Some(selected.len() - 1),
+            "resolved route exceeds length limit".into(),
+        ));
+    }
     Ok(BlockRoutePlan {
         selected: selected.to_vec(),
         traversals,
