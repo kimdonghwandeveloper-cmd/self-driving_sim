@@ -26,6 +26,11 @@ $requiredFiles = @(
     'godot/project.godot', 'godot/sim_godot.gdextension',
     'godot/.godot/extension_list.cfg', 'godot/.godot/global_script_class_cache.cfg',
     'godot/tests/smoke_test.gd', 'godot/tests/map_course_test.gd',
+    'godot/tests/yeosu_convention_test.gd', 'godot/assets/maps/yeosu-expo/convention-background.glb',
+    'testdata/yeosu-expo/convention/traced-roads.json',
+    'testdata/yeosu-expo/convention/north-access.toml', 'testdata/yeosu-expo/convention/central-gallery.toml',
+    'testdata/yeosu-expo/convention/south-plaza.toml', 'testdata/yeosu-expo/convention/west-link.toml',
+    'testdata/yeosu-expo/convention/east-plaza.toml', 'testdata/yeosu-expo/convention/west-crossing.toml',
     'testdata/yeosu-expo/route-junctions.toml', 'testdata/yeosu-expo/graph-2026-11-06.osm.json',
     'godot/tests/osm_route_drive_test.gd', 'godot/tests/scenario_record_test.gd',
     'assets/scenarios/scenario-a-basic.toml', 'assets/scenarios/scenario-b-space.toml',
@@ -146,6 +151,7 @@ if ($Validate) {
         $checks = @(
             @{ Script = 'smoke_test.gd'; Pattern = 'SMOKE OK:' },
             @{ Script = 'map_course_test.gd'; Pattern = 'MAP COURSE OK:' },
+            @{ Script = 'yeosu_convention_test.gd'; Pattern = 'CONVENTION ALL SIX OK' },
             @{ Script = 'osm_route_drive_test.gd'; Pattern = 'OSM ROUTE DRIVE OK:' },
             @{ Script = 'scenario_record_test.gd'; Pattern = 'SCENARIO RECORD OK:' }
         )
@@ -161,7 +167,7 @@ if ($Validate) {
     } finally { Pop-Location }
     $packageMarker.validated = $true
     $packageMarker | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $outFull '.simulator-release.json') -Encoding UTF8
-    Write-Output "Packaging and all five standalone checks passed: $outFull"
+    Write-Output "Packaging and all $($checks.Count + 1) standalone checks passed: $outFull"
 } else {
     Write-Output "Packaging only (execution checks NOT run): $outFull"
 }
