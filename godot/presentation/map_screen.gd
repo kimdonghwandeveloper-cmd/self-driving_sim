@@ -499,7 +499,7 @@ func _auto_open(delta: float) -> void:
 		return
 	if get_viewport_rect().size.x / camera.zoom.x > AUTO_OPEN_SPAN_M:
 		return
-	if opened_region.has_area() and opened_region.grow(-opened_region.size.x * 0.25).has_point(camera.position):
+	if opened_region.has_area() and opened_region.grow(-minf(opened_region.size.x, opened_region.size.y) * 0.25).has_point(camera.position):
 		return
 	_open_region_at(camera.position)
 

@@ -26,9 +26,13 @@ func _run() -> void:
 				continue
 			var tags: Dictionary = element.get("tags", {})
 			if tags.get("service", "") in ["parking_aisle", "driveway", "drive-through"]:
-				internal.append(element)
+				var center := Vector2.ZERO
+				for point: Dictionary in element.geometry:
+					center += Vector2(point.lat, point.lon) / element.geometry.size()
+				if center.x > 34.747 and center.x < 34.754 and center.y > 127.744 and center.y < 127.751:
+					internal.append(element)
 		_check(not internal.is_empty(), "주차장 통로·진입로가 여전히 팩에서 누락됨")
-		print("EXPO INTERNAL SOURCE: ", source, " · restored services: ", internal.size())
+		print("EXPO INTERNAL SOURCE: ", source, " · facility services: ", internal.size())
 		picker.call("set_restricted_roads", true)
 		var selected := false
 		for way: Dictionary in internal:
@@ -50,6 +54,19 @@ func _run() -> void:
 						if saved.ok:
 							var course: Dictionary = ClassDB.class_call_static("SimCourse", "build", "map:" + str(saved.path))
 							_check(course.get("ok", false), "내부 도로 Godot 코스 생성 실패")
+							var vehicle: Node3D = ClassDB.instantiate("SimVehicle")
+							vehicle.set("course", "map:" + str(saved.path))
+							vehicle.set("read_input", false)
+							root.add_child(vehicle)
+							await physics_frame
+							var start := vehicle.position
+							vehicle.call("send_command", "engine_toggle")
+							vehicle.call("send_command", "gear_drive")
+							for tick in 96:
+								vehicle.call("set_manual_input", 0.4, 0.0, 0.0)
+								await physics_frame
+							_check(vehicle.position.distance_to(start) > 0.1, "복구한 내부 도로에서 차량이 움직이지 않음")
+							vehicle.free()
 							DirAccess.remove_absolute(str(saved.path))
 						print("EXPO INTERNAL ROUTE: way ", int(way.id), " · ", way.tags.service, " · ", route.length_m, " m")
 						selected = true
