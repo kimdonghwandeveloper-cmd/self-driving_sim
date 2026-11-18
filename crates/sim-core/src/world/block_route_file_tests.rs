@@ -541,3 +541,71 @@ fn replay_uses_recorded_walk_without_shortest_path_search() {
     );
     assert_eq!(expected, replay_block_route_file(&f, &c.root).unwrap());
 }
+
+/// 소수 길이의 여러 블록을 지나는 경로도 합산 묶음 차이로 저장/재생이 거부되지 않아야 한다.
+#[test]
+fn fractional_block_lengths_roundtrip() {
+    let mut c = Case::new();
+    for seed in 0..16 {
+        let seed = seed as f64;
+        let lengths = [
+            23.123456789 + seed * 0.01,
+            33.23456789 + seed * 0.013,
+            43.3456789 + seed * 0.017,
+            53.45678912 + seed * 0.019,
+        ];
+        let mut x = [0.0; 5];
+        for i in 0..4 {
+            x[i + 1] = x[i] + lengths[i];
+        }
+        let text = fixtures::overpass_json(&[
+            (
+                10,
+                "service",
+                &[("name", "a"), ("width", "6")],
+                vec![(1, x[0], 0.0), (2, x[1], 0.0)],
+            ),
+            (
+                20,
+                "service",
+                &[("name", "b"), ("width", "6")],
+                vec![(2, x[1], 0.0), (3, x[2], 0.0)],
+            ),
+            (
+                30,
+                "service",
+                &[("name", "c"), ("width", "6")],
+                vec![(3, x[2], 0.0), (4, x[3], 0.0)],
+            ),
+            (
+                40,
+                "service",
+                &[("name", "d"), ("width", "6")],
+                vec![(4, x[3], 0.0), (5, x[4], 0.0)],
+            ),
+        ]);
+        std::fs::write(c.root.join("graph.osm.json"), &text).unwrap();
+        let m = build_road_blocks(
+            &parse_overpass_graph(&text).unwrap(),
+            &[],
+            &RoadGraphConfig::default(),
+        )
+        .unwrap();
+        c.selected = [10, 40]
+            .iter()
+            .map(|id| {
+                let b = m
+                    .blocks
+                    .iter()
+                    .find(|b| b.source_edges[0].way_id == *id)
+                    .unwrap();
+                BlockTraversal {
+                    block_id: b.id.clone(),
+                    direction: BlockDirection::Forward,
+                }
+            })
+            .collect();
+        let (f, expected) = c.prepare();
+        assert_eq!(expected, replay_block_route_file(&f, &c.root).unwrap());
+    }
+}
