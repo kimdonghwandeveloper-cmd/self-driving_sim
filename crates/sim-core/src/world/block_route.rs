@@ -290,7 +290,9 @@ pub fn build_block_route_course(
     .map_err(|m| placement(first, m))?;
     let mut course = course;
     course.goal = Some(goal);
-    course.validate().map_err(|m| placement(first, m))?;
+    course
+        .validate()
+        .map_err(|m| placement(first, m.to_string()))?;
     validate_vehicle(&tagged, &course)?;
     Ok(BlockRouteCourse {
         plan,
