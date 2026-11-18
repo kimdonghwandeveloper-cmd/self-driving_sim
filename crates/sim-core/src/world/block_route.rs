@@ -173,6 +173,19 @@ pub fn build_block_route_course(
     max_length_m: f64,
 ) -> Result<BlockRouteCourse, BlockRouteFailure> {
     let plan = plan_block_route(model, selected, max_length_m)?;
+    build_resolved_block_route_course(name, model, origin, settings, plan, max_length_m)
+}
+
+/// 저장된 확정 순서를 검사해 코스를 복원한다. Dijkstra나 경로 대체를 실행하지 않는다.
+pub(crate) fn build_resolved_block_route_course(
+    name: &str,
+    model: &RoadBlockModel,
+    origin: LatLon,
+    settings: NetworkSettings,
+    plan: BlockRoutePlan,
+    max_length_m: f64,
+) -> Result<BlockRouteCourse, BlockRouteFailure> {
+    validate_resolved_plan(model, &plan, max_length_m)?;
     let network =
         super::road_network::build_road_network(model, origin, settings).map_err(|e| {
             BlockRouteFailure::new(
@@ -324,6 +337,89 @@ pub fn build_block_route_course(
         course,
         guide,
     })
+}
+
+/// 고정 경로의 방향·공유 접속·선택 순서·총 길이를 검사하며 최단 경로를 다시 계산하지 않는다.
+fn validate_resolved_plan(
+    model: &RoadBlockModel,
+    plan: &BlockRoutePlan,
+    limit: f64,
+) -> Result<(), BlockRouteFailure> {
+    let fail =
+        |id, message| BlockRouteFailure::new(FailureStage::Planning, id, None, None, message);
+    if model.version != super::road_blocks::BLOCK_MODEL_VERSION
+        || !(limit.is_finite() && limit > 0.0 && limit <= super::route_plan::ROUTE_LENGTH_CAP_M)
+        || plan.selected.is_empty()
+        || plan.traversals.is_empty()
+    {
+        return Err(fail(None, "invalid resolved route or version".into()));
+    }
+    if plan.selected.first() != plan.traversals.first()
+        || plan.selected.last() != plan.traversals.last()
+        || (plan.selected.len() == 1 && plan.traversals.len() != 1)
+        || plan.selected.windows(2).any(|p| p[0] == p[1])
+    {
+        return Err(fail(
+            None,
+            "resolved route does not match selected endpoint blocks".into(),
+        ));
+    }
+    let blocks: BTreeMap<_, _> = model.blocks.iter().map(|b| (&b.id, b)).collect();
+    if blocks.len() != model.blocks.len() {
+        return Err(fail(None, "duplicate block ID".into()));
+    }
+    let mut length = 0.0;
+    for t in &plan.traversals {
+        let b = blocks
+            .get(&t.block_id)
+            .ok_or_else(|| fail(Some(t.block_id.clone()), "stored block not found".into()))?;
+        if b.nodes.len() < 2
+            || !b.directions.contains(&t.direction)
+            || !(b.length_m.is_finite() && b.length_m > 0.0)
+        {
+            return Err(fail(
+                Some(t.block_id.clone()),
+                "invalid stored block direction or length".into(),
+            ));
+        }
+        length += b.length_m;
+    }
+    for pair in plan.traversals.windows(2) {
+        let from = blocks[&pair[0].block_id];
+        let to = blocks[&pair[1].block_id];
+        let via = traversal_nodes(from, pair[0].direction).1;
+        if traversal_nodes(to, pair[1].direction).0 != via
+            || !model
+                .connections
+                .iter()
+                .any(|c| c.from == pair[0] && c.to == pair[1] && c.via_node == via)
+        {
+            return Err(fail(
+                Some(pair[0].block_id.clone()),
+                format!("stored connection at node {via} is not allowed"),
+            ));
+        }
+    }
+    let mut next = 0;
+    for selected in &plan.selected {
+        let found = plan.traversals[next..]
+            .iter()
+            .position(|t| t == selected)
+            .ok_or_else(|| {
+                fail(
+                    Some(selected.block_id.clone()),
+                    "stored route omits an ordered selection".into(),
+                )
+            })?;
+        next += found + 1;
+    }
+    if !length.is_finite() || length > limit || length.to_bits() != plan.length_m.to_bits() {
+        return Err(fail(
+            None,
+            "stored route length mismatch or limit exceeded".into(),
+        ));
+    }
+    Ok(())
 }
 
 impl BlockRouteFailure {

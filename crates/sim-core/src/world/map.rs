@@ -507,6 +507,13 @@ pub fn load_map_course_with_patch_dir(
     {
         return super::road_polygons::load_road_lines_course(&text, base_dir);
     }
+    if table.get("format").and_then(toml::Value::as_str)
+        == Some(super::block_route_file::BLOCK_ROUTE_FORMAT)
+    {
+        let file = super::block_route_file::parse_block_route_file(&text)?;
+        return super::block_route_file::replay_block_route_file(&file, base_dir)
+            .map(|result| result.course);
+    }
     if let Some(format_str) = table.get("format").and_then(toml::Value::as_str) {
         if format_str == super::lanelet2_course::LANELET2_COURSE_FORMAT
             || format_str == super::lanelet2_course::LANELET2_COURSE_FORMAT_COMPAT
