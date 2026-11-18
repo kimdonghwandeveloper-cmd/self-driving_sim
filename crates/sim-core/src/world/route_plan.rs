@@ -1585,6 +1585,7 @@ mod tests {
         let legacy = RoadGraphConfig {
             allowed_highways: file.allowed_highways.clone(),
             nav_rules: false,
+            max_route_length_m: file.max_route_length_m,
             ..RoadGraphConfig::default()
         };
         let replanned = plan_route(&ways, &file.snapshot, &file.points, &legacy).unwrap();

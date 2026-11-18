@@ -37,6 +37,9 @@ pub fn course_notice(notice: &str) -> String {
         return translated;
     }
     match notice {
+        "Simulation includes access-restricted roads; this is not permission to enter" => {
+            return "접근 제한 도로를 포함한 연습 코스입니다(실제 출입 허가 아님)".to_owned();
+        }
         "Virtual training course from an OSM route (not a surveyed road)" => {
             return "OSM 경로로 만든 가상 교육 코스입니다(실측 도로 아님)".to_owned();
         }
