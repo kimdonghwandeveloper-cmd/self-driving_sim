@@ -232,7 +232,7 @@ fn closed_loop_has_seamless_offsets() {
 /// 잘못된 원점·설정값은 자료가 비어 있어도 거부한다.
 #[test]
 fn invalid_settings_and_origin_are_rejected() {
-    let m = model(vec![]);
+    let m = build_road_blocks(&[], &[], &RoadGraphConfig::default()).unwrap();
     let origin = fixtures::offset(0.0, 0.0);
     assert!(
         build_road_network(
