@@ -204,14 +204,21 @@ pub fn road_join_shape(
         boundary.extend(line.iter().copied());
         corners.push(line);
     }
-    // 별 모양 검사: 중심과 이웃한 두 경계점이 이루는 삼각형이 모두 반시계여야 한다.
+    // 같은 접점을 중복 저장하지 않아 CourseDef의 닫히지 않은 부채꼴 경계 계약을 지킨다.
+    boundary.dedup_by(|a, b| a.distance(*b) <= 1.0e-4);
+    while boundary.len() > 1 && boundary[0].distance(*boundary.last().unwrap()) <= 1.0e-4 {
+        boundary.pop();
+    }
+    // 화면 로더와 동일하게 넓이가 0인 삼각형도 거부한다.
     let m = boundary.len();
+    if m < 3 {
+        return Err(format!(
+            "junction at {center} has fewer than 3 boundary points"
+        ));
+    }
     for k in 0..m {
         let (p, q) = (boundary[k], boundary[(k + 1) % m]);
-        if p.distance(q) <= 1.0e-4 {
-            continue;
-        }
-        if cross(p - center, q - center) < -1.0e-4 {
+        if cross(p - center, q - center) <= 0.0 {
             return Err(format!(
                 "junction at ({:.1}, {:.1}) is not star-shaped near ({:.1}, {:.1})",
                 center.x, center.y, p.x, p.y
@@ -354,5 +361,25 @@ mod tests {
         assert!((shape.cut_m[0] - 8.0).abs() < 1e-3, "{:?}", shape.cut_m);
         assert!((shape.cut_m[1] - 8.0).abs() < 1e-3, "{:?}", shape.cut_m);
         assert!((shape.cut_m[2] - 5.0).abs() < 1e-4, "{:?}", shape.cut_m);
+    }
+    /// 회전·이동한 교차로도 성공을 반환했다면 실제 화면의 부채꼴 형상 검사를 통과해야 한다.
+    #[test]
+    fn successful_shapes_match_course_validation() {
+        let mut successes = 0;
+        for center in [Vec2::ZERO, Vec2::new(2000.0, 3000.0)] {
+            for angle in (30..=150).step_by(5) {
+                let arms = [arm(0.0), arm(angle as f32), arm(180.0), arm(270.0)];
+                if let Ok(shape) = junction_shape(center, &arms, 3.0, 3.0, 25.0) {
+                    let mut course = super::super::course::training_course();
+                    course.areas = vec![super::super::course::Area {
+                        center,
+                        boundary: shape.boundary,
+                    }];
+                    course.validate().unwrap();
+                    successes += 1;
+                }
+            }
+        }
+        assert!(successes > 30);
     }
 }

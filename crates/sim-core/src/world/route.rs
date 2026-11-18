@@ -596,6 +596,20 @@ pub fn build_route_course_detailed(
         ROUTE_MAX_EXTENT_M,
     )?;
     course.goal = Some(map::goal_pose(&last_piece)?);
+    // 저장 후 화면에서만 발견되던 형상 오류를 생성 시점에 같은 계약으로 검사한다.
+    if let Err(error) = course.validate() {
+        let message = format!("course shape check failed: {error}");
+        return Err(match error {
+            super::course::ShapeError::FanNotVisible { index, .. }
+            | super::course::ShapeError::TooFewBoundaryPoints { index, .. } => {
+                match junction_ids.get(index) {
+                    Some(&node) => BuildFailure::at(node, message),
+                    None => message.into(),
+                }
+            }
+            _ => message.into(),
+        });
+    }
     Ok(RouteCourse {
         course,
         guide,

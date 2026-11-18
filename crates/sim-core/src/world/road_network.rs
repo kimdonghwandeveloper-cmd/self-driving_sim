@@ -11,7 +11,7 @@ use glam::Vec2;
 use std::collections::{BTreeMap, BTreeSet};
 
 /// 도로망 형상 규칙 판본. 재생에 영향을 주는 생성 규칙을 바꾸면 올린다.
-pub const NETWORK_GEOMETRY_VERSION: &str = "road-network-v1";
+pub const NETWORK_GEOMETRY_VERSION: &str = "road-network-v2";
 
 /// 동일 지도에서 경로 선택과 무관하게 고정하는 생성 설정.
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
