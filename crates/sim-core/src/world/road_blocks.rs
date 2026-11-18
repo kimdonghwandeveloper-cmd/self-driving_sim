@@ -169,13 +169,8 @@ pub fn build_road_blocks(
                 restriction.id, restriction.via_node
             ));
         }
-        // 허용 도로 밖의 관계는 블록 그래프에 적용하지 않는다.
-        if [from, to]
-            .iter()
-            .all(|way| way.highway().is_some_and(|kind| allowed.contains(kind)))
-        {
-            rules.insert(restriction.id, restriction);
-        }
+        // 지정 출구가 허용 목록 밖이어도 관계를 보존해야 다른 출구로 잘못 진입하지 않는다.
+        rules.insert(restriction.id, restriction);
     }
     let restrictions: Vec<_> = rules.into_values().collect();
     let via: BTreeSet<_> = restrictions.iter().map(|rule| rule.via_node).collect();
