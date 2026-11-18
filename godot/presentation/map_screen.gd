@@ -457,8 +457,6 @@ func _open_region_at(view: Vector2) -> bool:
 		return false
 	var result: Dictionary = picker.call("open_region", latlon)
 	feedback = "" if result.get("ok", false) else str(result.error)
-	if result.get("ok", false):
-		_assign_last_endpoint()
 	_refresh_route()
 	return bool(result.get("ok", false))
 

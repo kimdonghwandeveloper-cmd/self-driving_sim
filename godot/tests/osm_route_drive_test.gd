@@ -29,6 +29,7 @@ func _run() -> void:
 	map._check_data()
 	map.coordinates.text = "34.75264,127.74712"
 	map._jump_coordinate_button()
+	_check(not map.selecting_destination, "지역 열기가 출발 선택 모드를 바꿈")
 	var requested_region: Rect2 = map.opened_region
 	for frame in 45:
 		await process_frame
