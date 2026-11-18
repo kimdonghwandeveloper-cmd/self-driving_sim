@@ -58,7 +58,7 @@ func _run() -> void:
 	_check(map.points == before_drag, "지도 드래그가 선택 지점을 바꿈")
 	_check(map.camera.position != camera_before, "왼쪽 드래그로 지도가 이동하지 않음")
 	map._jump_coordinates("37.4979,127.0276")
-	_check(map.feedback.contains("새 경로") and map.points.size() == 2, "지역 이동이 선택을 삭제함")
+	_check(map.feedback.contains("보존") and map.points.size() == 2, "지역 이동이 선택을 삭제함")
 	map._fit_route()
 	for frame in 4:
 		await process_frame

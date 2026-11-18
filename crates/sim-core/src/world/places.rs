@@ -433,10 +433,14 @@ pub fn access_point(
     let reach =
         MAX_ACCESS_DISTANCE_M + sources.iter().map(|p| p[0].hypot(p[1])).fold(0.0, f64::max);
     let mut best: Option<(f64, [f64; 2])> = None;
-    for way in ways
-        .iter()
-        .filter(|way| route_plan::searchable(way, &allowed, config.nav_rules))
-    {
+    for way in ways.iter().filter(|way| {
+        route_plan::searchable_with_access(
+            way,
+            &allowed,
+            config.nav_rules,
+            config.include_restricted,
+        )
+    }) {
         for pair in way.nodes.windows(2) {
             let (a, b) = (local(pair[0].pos), local(pair[1].pos));
             // 장소에서 아주 먼 구간은 건너뛴다(끝점이 모두 같은 쪽으로 멀면 선분 전체가 멀다).

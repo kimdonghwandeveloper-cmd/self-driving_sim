@@ -813,6 +813,12 @@ impl KoreaData {
     /// 범위와 겹치는 도로·회전 제한·건물·장소를 꺼낸다. 도로가 하나도 없으면 오류다.
     pub fn region(&self, bbox: &Bbox) -> Result<Region, String> {
         bbox.validate()?;
+        self.region_local_route(bbox)
+    }
+
+    /// 10 km 경로를 구성할 때 인접 조각들을 합쳐 읽는다. 온라인 질의 제한과 분리한다.
+    pub fn region_local_route(&self, bbox: &Bbox) -> Result<Region, String> {
+        bbox.validate_local_route()?;
         let area = Area::around(bbox, 0.0);
         let tiles = tiles_covering(bbox);
         let mut roads: BTreeMap<u64, Road> = BTreeMap::new();
@@ -878,7 +884,17 @@ impl KoreaData {
         bbox: &Bbox,
         cache_root: &Path,
     ) -> Result<(PathBuf, Vec<Place>), String> {
-        let region = self.region(bbox)?;
+        bbox.validate()?;
+        self.region_snapshot_local_route(bbox, cache_root)
+    }
+
+    /// 여러 지역에 걸친 도로·장소를 판본 고정 스냅샷으로 저장해 장거리 재생을 보장한다.
+    pub fn region_snapshot_local_route(
+        &self,
+        bbox: &Bbox,
+        cache_root: &Path,
+    ) -> Result<(PathBuf, Vec<Place>), String> {
+        let region = self.region_local_route(bbox)?;
         let dir = cache_root.join(self.version());
         let path = dir.join(format!("{}.osm.json", bbox.cache_name()));
         let places_path = places::snapshot_places_path(&path);
@@ -1523,6 +1539,35 @@ mod tests {
         assert_eq!(region.places[1].outline.len(), 5);
         assert_eq!(region.places[0].kind, "amenity=cafe");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 여러 조각을 잇는 10 km 조회가 중복 없이 재생 가능한 스냅샷을 만들고 온라인 상한은 유지한다.
+    #[test]
+    fn local_route_snapshot_spans_tiles_and_preserves_restrictions() {
+        let dir = temp_dir("long-region");
+        build_fixture(&fixture(), &dir, None);
+        let data = KoreaData::open(&dir).unwrap();
+        let bbox = around(4500.0, 4500.0, 5400.0);
+        assert!(bbox.validate().is_err());
+        assert!(bbox.validate_local_route().is_ok());
+        let cache = dir.join("cache");
+        let (path, _) = data.region_snapshot_local_route(&bbox, &cache).unwrap();
+        let bytes = std::fs::read(&path).unwrap();
+        let graph = parse_graph_full(std::str::from_utf8(&bytes).unwrap()).unwrap();
+        let ids: Vec<u64> = graph.ways.iter().map(|w| w.id).collect();
+        assert_eq!(ids, [100, 101, 102, 105, 106]);
+        assert_eq!(graph.restrictions.len(), 1);
+        assert!(places::snapshot_places_path(&path).exists());
+        assert_eq!(
+            data.region_snapshot_local_route(&bbox, &cache).unwrap().0,
+            path
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        assert!(
+            data.region_local_route(&around(4500.0, 4500.0, 7000.0))
+                .is_err()
+        );
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     /// 같은 입력이면 같은 바이트이고, 조각 경계를 지나는 도로는 양쪽 조각에 있어도 한 번만 나온다.

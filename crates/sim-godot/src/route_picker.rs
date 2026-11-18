@@ -86,6 +86,8 @@ pub struct SimRoutePicker {
     /// 열어 둔 전국 자료(처음 지역을 열 때 연다).
     korea: Option<KoreaData>,
     model: Option<PickerModel>,
+    /// 접근 제한 도로를 포함하는 연습 모드. 실제 통행 허가와 무관하다.
+    include_restricted: bool,
     /// 지금 열린 지역 범위(전국 자료에서 연 경우).
     loaded: Option<Bbox>,
     /// 진행 중인 전국 검색(작업, 요청 번호).
@@ -219,6 +221,57 @@ impl SimRoutePicker {
                 self.message = error.clone();
                 result(false, &error)
             }
+        }
+    }
+
+    /// 선택한 반대편 지점을 보존하며 새 지점까지 필요한 오프라인 지역을 확장한다.
+    #[func]
+    fn expand_route_region(
+        &mut self,
+        target: PackedFloat64Array,
+        destination: bool,
+    ) -> VarDictionary {
+        let [lat, lon] = target.as_slice() else {
+            return result(false, "target must be [lat, lon]");
+        };
+        let Some(previous) = self.model.clone() else {
+            return self.open_region(target);
+        };
+        let other: Vec<[f64; 2]> = if destination {
+            previous.points.first().copied().into_iter().collect()
+        } else {
+            previous.points.get(1).copied().into_iter().collect()
+        };
+        let opened = region::route_bbox(&other, [*lat, *lon]).and_then(|bbox| {
+            let cache_root = repo_path(REGION_CACHE_DIR);
+            let (path, list) = self
+                .korea_data()?
+                .region_snapshot_local_route(&bbox, &cache_root)?;
+            self.open_model(&path)?;
+            if let Some(model) = self.model.as_mut() {
+                model.set_places(list);
+                model.restore_selection(&previous.points, &previous.labels);
+            }
+            Ok(bbox)
+        });
+        match opened {
+            Ok(bbox) => {
+                self.loaded = Some(bbox);
+                result(true, "")
+            }
+            Err(error) => {
+                self.model = Some(previous);
+                result(false, &error)
+            }
+        }
+    }
+
+    /// 제한 도로 포함 정책을 바꾸고 선택된 경로도 같은 정책으로 다시 계산한다.
+    #[func]
+    fn set_restricted_roads(&mut self, enabled: bool) {
+        self.include_restricted = enabled;
+        if let Some(model) = self.model.as_mut() {
+            model.set_include_restricted(enabled);
         }
     }
 
@@ -584,6 +637,7 @@ impl SimRoutePicker {
         if let Some(warning) = warning {
             godot_warn!("{warning}");
         }
+        model.set_include_restricted(self.include_restricted);
         let patch_dir = if self.patch_dir.is_empty() {
             repo_path(PATCH_DIR)
         } else {

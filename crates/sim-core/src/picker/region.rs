@@ -32,6 +32,20 @@ pub fn bbox_around(lat: f64, lon: f64) -> Result<Bbox, String> {
     Ok(bbox)
 }
 
+/// 출발·도착과 주변 여유 750 m를 덮는 오프라인 경로 범위를 만들고 최대 12 km를 검사한다.
+pub fn route_bbox(points: &[[f64; 2]], target: [f64; 2]) -> Result<Bbox, String> {
+    let mut bbox = bbox_around(target[0], target[1])?;
+    for &[lat, lon] in points {
+        let other = bbox_around(lat, lon)?;
+        bbox.south = bbox.south.min(other.south);
+        bbox.west = bbox.west.min(other.west);
+        bbox.north = bbox.north.max(other.north);
+        bbox.east = bbox.east.max(other.east);
+    }
+    bbox.validate_local_route()?;
+    Ok(bbox)
+}
+
 /// 도로 그래프 설정 파일을 읽는다. 없거나 잘못되면 기본값과 경고문을 돌려준다.
 pub fn load_road_graph_config(path: &Path) -> (RoadGraphConfig, Option<String>) {
     match std::fs::read_to_string(path)

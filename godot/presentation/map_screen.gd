@@ -17,6 +17,7 @@ var selecting_destination := false
 var endpoint_label := Label.new()
 var endpoint_buttons: Array[Button] = []
 var advanced := VBoxContainer.new()
+var restricted_roads := CheckButton.new()
 var drive_button := Button.new()
 var cities := OptionButton.new()
 var coordinates := LineEdit.new()
@@ -318,6 +319,10 @@ func _services(canvas: CanvasLayer) -> void:
 		endpoint_buttons.append(button)
 		controls.add_child(button)
 	controls.add_child(endpoint_label)
+	restricted_roads.text = "제한 도로 포함 · 연습용"
+	restricted_roads.tooltip_text = "접근 제한 도로도 경로에 포함합니다. 실제 출입 허가가 아닙니다. 일방통행과 회전 제한은 유지합니다."
+	restricted_roads.toggled.connect(_toggle_restricted_roads)
+	controls.add_child(restricted_roads)
 	_select_endpoint(false)
 	var details := CheckButton.new()
 	details.text = "고급 · 저장/자료"
@@ -407,7 +412,7 @@ func _build_region_controls() -> void:
 	jump.pressed.connect(_jump_coordinate_button)
 	advanced.add_child(jump)
 	var label := Label.new()
-	label.text = "전국 OSM · 한 지역 1.5 km 안에서 선택"
+	label.text = "전국 OSM · 경로 최대 10 km · 지역 자동 연결"
 	row.add_child(label)
 
 ## 이름으로 선택한 도시 좌표를 입력 칸에 넣고 해당 지역을 연다.
@@ -436,10 +441,13 @@ func _jump_coordinates(text: String) -> void:
 	if not is_finite(lat) or not is_finite(lon) or absf(lat) >= 85.0 or absf(lon) > 180.0:
 		feedback = "올바른 위도·경도 범위를 입력하세요."
 		return
-	if not points.is_empty():
-		feedback = "선택한 점을 보존했습니다. 다른 지역을 열려면 '새 경로'를 먼저 누르세요."
-		return
 	var view: Vector2 = picker.call("latlon_to_view", PackedFloat64Array([lat, lon]))
+	if not points.is_empty():
+		camera.position = view
+		camera.force_update_scroll()
+		_clamp_camera()
+		feedback = "선택 지점을 보존했습니다. 이곳에서 도착을 지정하면 필요한 지역을 연결합니다(경로 최대 10 km)."
+		return
 	if _open_region_at(view):
 		_fit_region()
 		coordinates.release_focus()
@@ -470,8 +478,11 @@ func _ensure_region(at: Vector2) -> bool:
 		return true
 	if points.is_empty():
 		return _open_region_at(at)
-	feedback = "출발·도착은 열린 지역(1.5 km) 안에서 고르세요. 다른 곳에서 시작하려면 '새 경로' 후 누르세요."
-	return false
+	var latlon: PackedFloat64Array = picker.call("view_to_latlon", at)
+	var expanded: Dictionary = picker.call("expand_route_region", latlon, selecting_destination)
+	feedback = "" if expanded.get("ok", false) else "지역 연결 실패: " + str(expanded.get("error", ""))
+	_refresh_route()
+	return bool(expanded.get("ok", false))
 
 ## 확대한 화면이 멈추면 그 가운데 지역을 자동으로 연다. 점을 찍은 뒤에는 지역을 바꾸지 않는다(찍은 점 보존).
 func _auto_open(delta: float) -> void:
@@ -575,10 +586,7 @@ func _pick_area_result(chosen: Dictionary) -> void:
 		camera.position = view
 		_clamp_camera()
 		queue_redraw()
-		if not points.is_empty():
-			feedback = "검색한 곳으로 옮겼습니다. 출발·도착은 한 지역(1.5 km) 안에서 고르므로, 여기서 시작하려면 '새 경로' 후 결과를 다시 고르세요."
-			return
-		if not _open_region_at(view):
+		if not _ensure_region(view):
 			return
 	var result: Dictionary = picker.call("add_search_hit", int(chosen.index))
 	feedback = "" if result.get("ok", false) else str(result.error)
@@ -592,6 +600,14 @@ func _add_place(index: int) -> void:
 	feedback = "" if result.get("ok", false) else "시설 진입 경로 없음: " + str(result.error)
 	if result.get("ok", false):
 		_assign_last_endpoint()
+
+## 연습용 제한 도로 옵션을 Rust 계획·표시와 동기화한다.
+func _toggle_restricted_roads(enabled: bool) -> void:
+	if picker == null:
+		return
+	picker.call("set_restricted_roads", enabled)
+	feedback = "제한 도로 포함 · 시뮬레이션용이며 실제 출입 허가가 아닙니다." if enabled else "제한 도로를 제외합니다."
+	_refresh_route()
 
 ## 다음 클릭이나 검색 결과를 출발 또는 도착으로 지정하도록 전환한다.
 func _select_endpoint(destination: bool) -> void:
@@ -669,10 +685,10 @@ func _process(delta: float) -> void:
 		elif points.size() >= 2:
 			route_hint = "경로 생성 실패: " + str(result.error)
 		elif points.size() == 1:
-			route_hint = "출발 선택됨 · 같은 지역 안의 도착 도로를 클릭하세요."
-		var text := (feedback + "\n" if not feedback.is_empty() else "") + (hint + "\n" if not data_ok else "전국 OSM 자료 준비됨 · 한 지역 1.5 km 내 짧은 주행\n") + route_hint + "\n드래그: 이동 / 휠: 확대 / 도로/시설 클릭: 선택 지점 지정 / Shift+클릭: 점 삭제\n" + "\n".join(picker.call("status_lines"))
+			route_hint = "출발 선택됨 · 도착을 지정하세요(최대 10 km)."
+		var text := (feedback + "\n" if not feedback.is_empty() else "") + (hint + "\n" if not data_ok else "전국 OSM 자료 준비됨 · 경로 최대 10 km\n") + route_hint + "\n드래그: 이동 / 휠: 확대 / 도로/시설 클릭: 선택 지점 지정 / Shift+클릭: 점 삭제\n" + "\n".join(picker.call("status_lines"))
 		# 글자가 바뀔 때만 넣는다(같은 글자를 매 프레임 넣으면 글자 배치를 다시 한다).
-		var summary := route_hint
+		var summary := ("[제한 도로 포함 · 실제 출입 허가 아님]\n" if restricted_roads.button_pressed else "") + route_hint
 		if not feedback.is_empty():
 			summary += "\n" + feedback
 		if not data_ok:
