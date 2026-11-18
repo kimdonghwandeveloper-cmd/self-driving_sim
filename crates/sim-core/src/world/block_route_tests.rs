@@ -381,3 +381,103 @@ fn course_rebuild_is_deterministic() {
     m.connections.reverse();
     assert_eq!(a, course(&m, &selected).unwrap());
 }
+
+/// 여러 경유 블록의 순서를 유지하고 구간마다 경유 블록 길이를 중복 계산하지 않는다.
+#[test]
+fn multiple_vias_preserve_order_without_double_counting() {
+    let m = fork();
+    let selected = [
+        choose(&m, 10, 1),
+        choose(&m, 30, 2),
+        choose(&m, 31, 5),
+        choose(&m, 40, 4),
+    ];
+    let p = plan_block_route(&m, &selected, 201.0).unwrap();
+    assert_eq!(ways(&m, &p), [10, 30, 31, 32, 40]);
+    assert!((p.length_m - 200.0).abs() < 0.1);
+}
+/// 더 긴 우회 경로가 존재해도 선택한 최단 경로의 차체 실패를 숨기지 않는다.
+#[test]
+fn vehicle_failure_does_not_trigger_automatic_detour() {
+    let mut m = fork();
+    let narrow = m
+        .blocks
+        .iter_mut()
+        .find(|b| b.source_edges[0].way_id == 31)
+        .unwrap();
+    narrow.attributes.width_m = 0.8;
+    let narrow_id = narrow.id.clone();
+    let selected = [choose(&m, 10, 1), choose(&m, 40, 4)];
+    let p = plan_block_route(&m, &selected, 1000.0).unwrap();
+    assert_eq!(ways(&m, &p), [10, 30, 31, 32, 40]);
+    let e = course(&m, &selected).unwrap_err();
+    assert_eq!(e.stage, FailureStage::Placement);
+    assert_eq!(e.block_id, Some(narrow_id));
+}
+/// 출발 또는 도착 블록이 너무 짧아 차량 자세가 교차로나 다른 블록으로 밀려나면 거부한다.
+#[test]
+fn start_and_goal_stay_in_selected_endpoint_blocks() {
+    let m = model(vec![
+        (
+            10,
+            "service",
+            &[("width", "6"), ("name", "short")],
+            vec![(1, -8.0, 0.0), (2, 0.0, 0.0)],
+        ),
+        (
+            20,
+            "service",
+            &[("width", "6"), ("name", "east")],
+            vec![(2, 0.0, 0.0), (3, 60.0, 0.0)],
+        ),
+        (
+            30,
+            "service",
+            &[("width", "6"), ("name", "north")],
+            vec![(2, 0.0, 0.0), (4, 0.0, 60.0)],
+        ),
+    ]);
+    for selected in [
+        vec![choose(&m, 10, 1), choose(&m, 20, 2)],
+        vec![choose(&m, 20, 3), choose(&m, 10, 2)],
+    ] {
+        let e = course(&m, &selected).unwrap_err();
+        assert_eq!(e.stage, FailureStage::Placement);
+        assert_eq!(e.block_id, Some(choose(&m, 10, 1).block_id));
+    }
+}
+/// 10 km 계약 바로 아래의 코스도 생성되며 길이 제한을 줄이면 탐색 단계에서 실패한다.
+#[test]
+fn ten_km_contract_is_preserved() {
+    let m = model(vec![(
+        10,
+        "service",
+        &[],
+        vec![(1, 0.0, 0.0), (2, 9980.0, 0.0)],
+    )]);
+    let selected = [choose(&m, 10, 1)];
+    assert!(plan_block_route(&m, &selected, 9979.0).is_err());
+    let c = course(&m, &selected).unwrap();
+    assert!(c.plan.length_m > 9979.0);
+    assert_drives(&c);
+}
+/// 실제 엑스포 내부 주차 통로 표본을 블록 선택부터 안내선·운동 모델까지 연결한다.
+#[test]
+fn expo_snapshot_block_route_drives() {
+    let ways = parse_overpass_graph(include_str!(
+        "../../../../testdata/road-network/expo-service.osm.json"
+    ))
+    .unwrap();
+    let m = build_road_blocks(&ways, &[], &RoadGraphConfig::default()).unwrap();
+    let selected = [choose(&m, 532526365, ways[0].nodes[0].id)];
+    let c = build_block_route_course(
+        "expo",
+        &m,
+        ways[0].nodes[0].pos,
+        NetworkSettings::default(),
+        &selected,
+        1000.0,
+    )
+    .unwrap();
+    assert_drives(&c);
+}
