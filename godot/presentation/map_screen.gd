@@ -15,6 +15,7 @@ const CITY_PRESETS := {
 ## 현재 선택할 지점: 출발 또는 도착. 검색과 지도 클릭에 같은 규칙을 적용한다.
 var selecting_destination := false
 var endpoint_label := Label.new()
+var endpoint_buttons: Array[Button] = []
 var advanced := VBoxContainer.new()
 var drive_button := Button.new()
 var cities := OptionButton.new()
@@ -115,7 +116,7 @@ func _ready() -> void:
 	var canvas := CanvasLayer.new()
 	add_child(canvas)
 	status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	status.max_lines_visible = 5
+	status.max_lines_visible = 3
 	status.text = "지도 미리보기 · Rust 지도 서비스 미연결\n우클릭 끌기: 이동 / 휠: 확대·축소\n지역 열기·점 편집·경로 계산·저장은 연결 대기 중입니다.\n회색 칸은 실제 지도 타일이 아닙니다."
 	_services(canvas)
 	get_viewport().size_changed.connect(_layout_toolbar)
@@ -312,7 +313,9 @@ func _services(canvas: CanvasLayer) -> void:
 	for item in [["출발 지정", false], ["도착 지정", true]]:
 		var button := Button.new()
 		button.text = item[0]
+		button.toggle_mode = true
 		button.pressed.connect(_select_endpoint.bind(item[1]))
+		endpoint_buttons.append(button)
 		controls.add_child(button)
 	controls.add_child(endpoint_label)
 	_select_endpoint(false)
@@ -593,6 +596,8 @@ func _add_place(index: int) -> void:
 ## 다음 클릭이나 검색 결과를 출발 또는 도착으로 지정하도록 전환한다.
 func _select_endpoint(destination: bool) -> void:
 	selecting_destination = destination
+	for i in endpoint_buttons.size():
+		endpoint_buttons[i].set_pressed_no_signal((i == 1) == destination)
 	endpoint_label.text = "도착을 선택하세요" if destination else "출발을 선택하세요"
 
 ## 방금 추가한 점을 선택 슬롯으로 옮기며 경유점을 누적하지 않는다.
@@ -667,9 +672,14 @@ func _process(delta: float) -> void:
 			route_hint = "출발 선택됨 · 같은 지역 안의 도착 도로를 클릭하세요."
 		var text := (feedback + "\n" if not feedback.is_empty() else "") + (hint + "\n" if not data_ok else "전국 OSM 자료 준비됨 · 한 지역 1.5 km 내 짧은 주행\n") + route_hint + "\n드래그: 이동 / 휠: 확대 / 도로/시설 클릭: 선택 지점 지정 / Shift+클릭: 점 삭제\n" + "\n".join(picker.call("status_lines"))
 		# 글자가 바뀔 때만 넣는다(같은 글자를 매 프레임 넣으면 글자 배치를 다시 한다).
-		if status.text != text:
-			status.text = text
-			status.tooltip_text = text
+		var summary := route_hint
+		if not feedback.is_empty():
+			summary += "\n" + feedback
+		if not data_ok:
+			summary += "\n" + data_error
+		if status.text != summary:
+			status.text = summary
+		status.tooltip_text = text
 	else:
 		save_button.disabled = true
 		drive_button.disabled = true
