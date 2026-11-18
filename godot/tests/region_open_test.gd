@@ -65,7 +65,7 @@ func _run() -> void:
 
 	# 출발을 보존하면서 인접 지역을 합쳐 더 먼 도착 후보를 조회한다.
 	var before: PackedVector2Array = picker.call("points")
-	var expanded := map._ensure_region(start + Vector2(5000, 0))
+	var expanded: bool = map._ensure_region(start + Vector2(5000, 0))
 	_check(expanded and picker.call("points") == before, "지역 확장이 선택 지점을 변경함: " + map.feedback)
 
 	# 점을 지우고 확대한 화면을 다른 곳에 멈추면 그 가운데 지역이 자동으로 열린다.

@@ -150,6 +150,16 @@ impl SimRoutePicker {
         }
     }
 
+    /// 현재 지역의 판본 고정 스냅샷 경로를 진단·출처 확인용으로 반환한다.
+    #[func]
+    fn source_snapshot(&self) -> GString {
+        self.model
+            .as_ref()
+            .map(|model| model.snapshot_path.to_string_lossy().into_owned())
+            .unwrap_or_default()
+            .into()
+    }
+
     /// 지금 열린 지역 범위. 전국 자료에서 열지 않았으면 스냅샷 도로 범위, 아무것도 없으면 크기 0.
     #[func]
     fn loaded_region(&self) -> Rect2 {
