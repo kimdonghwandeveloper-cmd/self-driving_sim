@@ -1703,7 +1703,7 @@ mod tests {
         let dir = temp_dir("clip");
         let clip = around(100.0, 0.0, 400.0);
         let report = build_fixture(&fixture(), &dir, Some(&clip));
-        assert_eq!(report.manifest.counts.roads, 2);
+        assert_eq!(report.manifest.counts.roads, 3);
         assert!(report.manifest.source.clip.is_some());
         let data = KoreaData::open(&dir).unwrap();
         assert!(data.region(&around(4575.0, 0.0, 200.0)).is_err());

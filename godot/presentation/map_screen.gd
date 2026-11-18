@@ -379,11 +379,11 @@ func _build_region_controls() -> void:
 	coordinates.placeholder_text = "위도,경도 (예: 34.7526,127.7471)"
 	coordinates.custom_minimum_size.x = 290
 	coordinates.text_submitted.connect(_jump_coordinates)
-	row.add_child(coordinates)
+	advanced.add_child(coordinates)
 	var jump := Button.new()
 	jump.text = "좌표 지역 열기"
 	jump.pressed.connect(_jump_coordinate_button)
-	row.add_child(jump)
+	advanced.add_child(jump)
 	var label := Label.new()
 	label.text = "전국 OSM · 한 지역 1.5 km 안에서 선택"
 	row.add_child(label)
