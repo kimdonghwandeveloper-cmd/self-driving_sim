@@ -187,6 +187,7 @@ pub fn build_block_route_course(
         .map(|b| (b.block_id.clone(), b))
         .collect();
     let mut tagged: Vec<GuidePoint> = Vec::new();
+    let mut block_spans = Vec::new();
     for (index, t) in plan.traversals.iter().enumerate() {
         let b = source[&t.block_id];
         let fail = |stage, node, message| {
@@ -249,9 +250,11 @@ pub fn build_block_route_course(
                 }
             }
         }
+        let begin = tagged.len().saturating_sub(1);
         for point in line {
             append(&mut tagged, point, &t.block_id, None);
         }
+        block_spans.push((begin, tagged.len() - 1));
     }
     validate_curvature(&tagged)?;
     let guide: Vec<_> = tagged.iter().map(|p| p.point).collect();
@@ -272,6 +275,23 @@ pub fn build_block_route_course(
         return Err(placement(
             first,
             "route is too short for separate start and goal poses".into(),
+        ));
+    }
+    let start_distance =
+        5.0 + VEHICLE_FOOTPRINT.length_m / 2.0 - VEHICLE_FOOTPRINT.rear_axle_to_center_m;
+    let goal_distance =
+        total - 5.0 - VEHICLE_FOOTPRINT.length_m / 2.0 - VEHICLE_FOOTPRINT.rear_axle_to_center_m;
+    if road_geom::polyline_length(&guide[..=block_spans[0].1]) <= start_distance + 0.01 {
+        return Err(placement(
+            first,
+            "start pose would leave the selected start block".into(),
+        ));
+    }
+    if road_geom::polyline_length(&guide[..=block_spans.last().unwrap().0]) >= goal_distance - 0.01
+    {
+        return Err(placement(
+            last,
+            "goal pose would precede the selected goal block".into(),
         ));
     }
     let start = map::start_pose(&guide).map_err(|m| placement(first, m))?;
