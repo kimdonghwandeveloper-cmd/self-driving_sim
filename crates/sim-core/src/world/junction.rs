@@ -65,6 +65,34 @@ pub fn junction_shape(
     if arms.len() < 3 {
         return Err(format!("junction at {center} has fewer than 3 arms"));
     }
+    road_join_shape(center, arms, corner_radius_m, arc_step_deg, min_gap_deg)
+}
+
+/// 선택 경로와 무관하게 두 팔 이상의 도로 접속부를 만든다. 두 팔은 폭 전환·꺾인 이음에도 쓴다.
+/// 레거시 교차로 함수의 세 팔 이상 계약은 유지한다.
+pub fn road_join_shape(
+    center: Vec2,
+    arms: &[ArmInput],
+    corner_radius_m: f32,
+    arc_step_deg: f32,
+    min_gap_deg: f32,
+) -> Result<JunctionShape, String> {
+    if arms.len() < 2 {
+        return Err(format!("road join at {center} has fewer than 2 arms"));
+    }
+    if !center.is_finite()
+        || !(arc_step_deg.is_finite() && arc_step_deg > 0.0 && arc_step_deg <= 45.0)
+        || !(min_gap_deg.is_finite() && min_gap_deg > 0.0 && min_gap_deg <= 90.0)
+        || arms.iter().any(|a| {
+            !a.direction.is_finite()
+                || (a.direction.length_squared() - 1.0).abs() > 1.0e-3
+                || !(a.half_width_m.is_finite() && a.half_width_m > 0.0)
+                || !(a.min_cut_m.is_finite() && a.min_cut_m >= 0.0)
+                || !(a.ccw_corner_radius_m.is_finite() && a.ccw_corner_radius_m >= 0.0)
+        })
+    {
+        return Err("invalid road join center, arm or angular settings".into());
+    }
     if !(corner_radius_m.is_finite() && corner_radius_m > 0.0) {
         return Err(format!(
             "corner radius must be positive, got {corner_radius_m}"
