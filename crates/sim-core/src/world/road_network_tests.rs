@@ -281,3 +281,141 @@ fn explicit_origin_controls_background_alignment() {
     let b = build_road_network(&m, origin, NetworkSettings::default()).unwrap();
     assert!((a.blocks[0].centerline[0].x - b.blocks[0].centerline[0].x - 100.0).abs() < 0.01);
 }
+
+/// 생성한 도로망을 기존 충돌·운동 모델에 연결해 시험한다. 경로 생성 정책은 넣지 않는다.
+fn drive_network(g: &RoadNetworkGeometry, path: &[Vec2]) {
+    let mut course = crate::world::course::training_course();
+    course.surfaces.clear();
+    course.markings.clear();
+    course.strips = g.blocks.iter().map(|b| b.strip.clone()).collect();
+    course.areas = g.joints.iter().map(|j| j.area.clone()).collect();
+    course.colliders = g.colliders.clone();
+    course.start = crate::world::map::start_pose(path).unwrap();
+    course.goal = Some(crate::world::map::goal_pose(path).unwrap());
+    course.validate().unwrap();
+    for speed in [3.0, 8.0] {
+        let result = crate::world::test_drive::follow_path(&course, path, speed);
+        assert_eq!(result.impacts, 0, "{result:?}");
+        assert!(result.remaining_m < 12.5, "{result:?}");
+    }
+}
+/// 십자 교차로를 지나도 기존 운동 모델의 차체가 접속부 연석에 걸리지 않는다.
+#[test]
+fn four_way_network_supports_straight_driving() {
+    let m = model(vec![
+        (
+            10,
+            "service",
+            &[],
+            vec![(1, -60.0, 0.0), (2, 0.0, 0.0), (3, 60.0, 0.0)],
+        ),
+        (
+            20,
+            "service",
+            &[],
+            vec![(4, 0.0, -60.0), (2, 0.0, 0.0), (5, 0.0, 60.0)],
+        ),
+    ]);
+    let g = build(&m).unwrap();
+    assert_eq!(g.joints[0].openings.len(), 4);
+    drive_network(
+        &g,
+        &[Vec2::new(-60.0, 0.0), Vec2::ZERO, Vec2::new(60.0, 0.0)],
+    );
+    drive_network(
+        &g,
+        &[Vec2::new(0.0, 60.0), Vec2::ZERO, Vec2::new(0.0, -60.0)],
+    );
+}
+/// 원본 곡선 중심선을 유지한 노면과 연석으로 실제 운동 모델이 주행할 수 있다.
+#[test]
+fn curved_network_preserves_centerline_and_drives() {
+    let m = model(fixtures::curved_road());
+    let g = build(&m).unwrap();
+    assert_eq!(g.blocks.len(), 1);
+    drive_network(&g, &g.blocks[0].centerline);
+}
+/// 각 도로 띠 삼각형은 뒤집히거나 넓이 0이 되지 않아야 한다.
+#[test]
+fn strip_mesh_winding_remains_valid() {
+    for m in [
+        tee(),
+        model(fixtures::curved_road()),
+        model(vec![(
+            10,
+            "service",
+            &[],
+            vec![
+                (1, 0.0, 0.0),
+                (2, 60.0, 0.0),
+                (3, 60.0, 60.0),
+                (4, 0.0, 60.0),
+                (1, 0.0, 0.0),
+            ],
+        )]),
+    ] {
+        for b in build(&m).unwrap().blocks {
+            for (l, r) in b.strip.left.windows(2).zip(b.strip.right.windows(2)) {
+                for (a, b, c) in [(l[0], r[0], l[1]), (r[0], r[1], l[1])] {
+                    assert!((b - a).perp_dot(c - a) < -1.0e-6, "inverted road triangle");
+                }
+            }
+        }
+    }
+}
+/// 원본이 겹치는 되돌림은 부분 성공으로 숨기지 않고 블록 ID를 포함해 거부한다.
+#[test]
+fn invalid_offset_geometry_reports_block() {
+    let m = model(vec![(
+        10,
+        "service",
+        &[],
+        vec![(1, 0.0, 0.0), (2, 30.0, 0.0), (3, 0.0, 0.1)],
+    )]);
+    let error = build(&m).unwrap_err();
+    assert!(error.block_id.is_some());
+}
+/// 고리에 접속로가 있으면 고리 양쪽과 접속로 모두 같은 입구 면에 연결한다.
+#[test]
+fn attached_loop_keeps_three_openings() {
+    let m = model(vec![
+        (
+            10,
+            "service",
+            &[],
+            vec![
+                (1, 0.0, 0.0),
+                (2, 60.0, 0.0),
+                (3, 60.0, 60.0),
+                (4, 0.0, 60.0),
+                (1, 0.0, 0.0),
+            ],
+        ),
+        (20, "service", &[], vec![(1, 0.0, 0.0), (5, -60.0, 0.0)]),
+    ]);
+    let g = build(&m).unwrap();
+    assert_eq!(g.joints.len(), 1);
+    assert_eq!(g.joints[0].openings.len(), 3);
+}
+/// 엑스포 내부 주차 통로의 실제 OSM 표본을 동일 파서·블록·도로망 경로로 생성하고 주행한다.
+/// 지도의 통로 존재를 검증하며 실제 출입 허가나 실측 폭을 뜻하지 않는다.
+#[test]
+fn expo_parking_aisle_snapshot_generates_and_drives() {
+    let ways = parse_overpass_graph(include_str!(
+        "../../../../testdata/road-network/expo-service.osm.json"
+    ))
+    .unwrap();
+    assert_eq!(ways[0].id, 532526365);
+    let m = build_road_blocks(&ways, &[], &RoadGraphConfig::default()).unwrap();
+    let g = build_road_network(&m, ways[0].nodes[0].pos, NetworkSettings::default()).unwrap();
+    assert_eq!(g.blocks.len(), 1);
+    assert_eq!(
+        m.blocks[0]
+            .attributes
+            .tags
+            .get("service")
+            .map(String::as_str),
+        Some("parking_aisle")
+    );
+    drive_network(&g, &g.blocks[0].centerline);
+}
