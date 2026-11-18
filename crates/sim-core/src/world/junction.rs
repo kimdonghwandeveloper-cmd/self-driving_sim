@@ -170,7 +170,9 @@ pub fn road_join_shape(
             // 반폭이 같으면 두 가장자리 사이 각은 φ - 180°다. 180°보다 조금 작은 φ(위 원호 조건의 허용 범위)는
             // 각을 0..360°로 감으면 거의 한 바퀴가 되어 중심을 도는 고리가 생기므로, 0 이하로 보고 직선으로 잇는다.
             let sweep = gap - PI;
-            if (a.half_width_m - b.half_width_m).abs() < 1.0e-4 && sweep <= 1.0e-3 {
+            // 직선 이음의 폭 변화는 양쪽 입구 단면을 직접 이어 테이퍼로 만든다.
+            // 중심의 같은 방사선 위에 서로 다른 폭 점을 세우면 넓이 0인 부채꼴이 생긴다.
+            if sweep <= 1.0e-3 {
                 Vec::new()
             } else if (a.half_width_m - b.half_width_m).abs() < 1.0e-4 {
                 let from = edge_a;

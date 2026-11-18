@@ -155,6 +155,11 @@ fn width_transition_keeps_each_block_width() {
             .width_m;
         assert!((block.strip.left[0].distance(block.strip.right[0]) - w).abs() < 0.001);
     }
+    // 도로 폭 전환의 접속부도 실제 화면 형상 검사와 차량 주행을 통과해야 한다.
+    drive_network(
+        &g,
+        &[Vec2::new(-50.0, 0.0), Vec2::ZERO, Vec2::new(50.0, 0.0)],
+    );
 }
 /// 차량 최소 회전 반경이나 접근 제한은 도로 존재 자체를 없애는 조건이 아니다.
 #[test]
