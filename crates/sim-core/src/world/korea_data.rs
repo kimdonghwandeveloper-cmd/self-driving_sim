@@ -1587,7 +1587,6 @@ mod tests {
         }
     }
 
-    /// 형식 이름·묶음 크기·내용 해시가 맞지 않으면 열기·검사가 실패한다. 잘린 조각 본문도 오류다.
     /// 도로는 그대로이고 건물 높이만 바뀌면 새 캐시를 만들고 옛 건물 스냅샷은 보존한다.
     #[test]
     fn building_only_update_creates_independent_snapshot_generation() {
@@ -1655,7 +1654,7 @@ mod tests {
         assert_ne!(a.version(), different_format.version());
     }
 
-    /// 형식 이름·묶음 크기·내용 해시가 맞지 않으면 열기·검사가 실패한다. 잘린 조각 본문도 오류다。
+    /// 형식 이름·묶음 크기·내용 해시가 맞지 않으면 열기·검사가 실패한다. 잘린 조각 본문도 오류다.
     #[test]
     fn mismatched_data_is_rejected() {
         let dir = temp_dir("reject");

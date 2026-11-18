@@ -224,7 +224,6 @@ pub fn parse_places(json: &str) -> Result<Vec<Place>, String> {
     Ok(places)
 }
 
-/// 장소 파일을 읽는다.
 /// 도로 스냅샷 이름과 일대일로 대응하는 건물·장소 파일 경로를 반환한다.
 pub fn snapshot_places_path(snapshot: &std::path::Path) -> std::path::PathBuf {
     let name = snapshot.file_name().unwrap_or_default().to_string_lossy();

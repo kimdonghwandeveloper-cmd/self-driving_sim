@@ -1056,7 +1056,7 @@ fn build_course_checked(
             .flat_map(|way| &way.nodes)
             .find(|node| node.id == file.nodes[0])
             .map(|node| node.pos)
-            .ok_or("route start node missing")?,
+            .ok_or_else(|| "route start node missing".to_owned())?,
         &[route_course.guide.clone()],
         &route_course.course.surfaces,
         &route_course.course.strips,
