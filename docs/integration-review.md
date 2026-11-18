@@ -1,4 +1,4 @@
-# 브랜치 통합 검토 (2026-11-18)
+# 브랜치 통합 검토 (2026-11-18~19)
 
 ## 범위와 승인 상태
 
@@ -55,4 +55,64 @@
 
 ## 검증 결과
 
-통합 변경에 대한 검증 진행 중. 최종 커밋과 실행 결과를 확인한 후 이 절을 갱신한다.
+실행 코드 기준: `5e145cb` (이후 변경은 이 검증 기록과 PLAN 상태만 갱신한다).
+
+| 검사 | 결과 |
+| --- | --- |
+| 본체 fmt / clippy (`--locked --all-targets --all-features -- -D warnings`) | 통과, 경고 0 |
+| 본체 Rust 시험 | 457개 통과: core 438 + 통합 4 + Godot 바인딩 12 + CLI 3 |
+| 독립 verification-gate fmt / clippy / test | 통과, 단위 3 + 실제 실행 파일 프로토콜 왕복 1 |
+| Godot 최초 import / GDExtension debug 빌드 | 통과 |
+| Godot 헤드리스 전체 시험 | 24종 통과, probe 2개는 성능 측정 도구이므로 시험 목록에서 제외 |
+| 실제 전국 팩 | 8개 도시·엑스포 내부 통로·약 10 km 회귀 통과 |
+| 패키징 안전성 | 86개 거부/보존 사례 통과 |
+| release 빌드와 배포 폴더 독립 실행 | CLI + Godot 5종 = 6개 검사 통과, 컨벤션 6개 통로 포함 |
+| 파일/참조 보존 재대조 | 기존 브랜치 25개 SHA 동일, 원래 변경 파일 54개 SHA 동일 |
+
+배포 위치: `../self-driving_sim-test/dist/integration-reviewed-20261118/START_SIMULATOR.bat`.
+배포 바이너리 두 개의 SHA-256을 현재 release 빌드와 대조했고 배포 마커의 `validated=true`도 확인했다.
+개발 환경 없는 별도 PC/사람의 화면·시나리오 적합성 검수는 수행하지 않았다. 블록 선택 UI 구현도 아직 남아 있다.
+
+처음 통합 시험에서는 폭 전환 접속부 두 시험이 실패했다. 폭이 다른 직선 입구를 직접 잇는 테이퍼로 수정하고 차량 주행 검사를 보강한 뒤 전체 시험을 재실행했다.
+메뉴 검사의 기존 전용 2코스 허용 목록은 통합한 6개 코스를 더한 정확한 8개 목록으로 갱신했다. 나머지 시험 자료를 무조건 허용하지 않는다.
+
+main/브랜치/워크트리 정리·push는 수행하지 않았다. 원래 main의 미추적 설계 PNG도 그대로이므로 실제 main 병합 시 백업 상태를 다시 확인하고 파일 충돌을 처리해야 한다.
+
+
+## 변경 파일·줄 위치 (기준 `refactor/remove-lanelet2`)
+
+| 파일 | 통합 후 위치 |
+| --- | --- |
+| `Car_photo/phase3-visual-guide-v1.png` | 신규 바이너리 |
+| `README.md` | 41, 79줄 |
+| `config/vehicle.toml` | 15줄 |
+| `crates/sim-core/src/world/junction.rs` | 173, 209, 216, 223, 367줄 |
+| `crates/sim-core/src/world/road_network.rs` | 14줄 |
+| `crates/sim-core/src/world/road_network_tests.rs` | 158줄 |
+| `crates/sim-core/src/world/route.rs` | 599줄 |
+| `docs/history/plan-audit-2026-10-29.md` | 전체 신규 (1줄부터) |
+| `docs/integration-review.md` | 전체 신규 (1줄부터) |
+| `docs/verification-signals.md` | 전체 신규 (1줄부터) |
+| `godot/assets/maps/yeosu-expo/convention-background.glb` | 신규 바이너리 |
+| `godot/assets/maps/yeosu-expo/convention-background.glb.import` | 전체 신규 (1줄부터) |
+| `godot/presentation/drive_screen.gd` | 17, 121, 200줄 |
+| `godot/presentation/menu_screen.gd` | 150줄 |
+| `godot/tests/menu_flow_test.gd` | 12줄 |
+| `godot/tests/yeosu_convention_test.gd` | 전체 신규 (1줄부터) |
+| `godot/tests/yeosu_convention_test.gd.uid` | 전체 신규 (1줄부터) |
+| `scripts/package_release.ps1` | 29, 154, 170줄 |
+| `testdata/yeosu-expo/convention/README.md` | 전체 신규 (1줄부터) |
+| `testdata/yeosu-expo/convention/build_background.py` | 전체 신규 (1줄부터) |
+| `testdata/yeosu-expo/convention/central-gallery.toml` | 전체 신규 (1줄부터) |
+| `testdata/yeosu-expo/convention/east-plaza.toml` | 전체 신규 (1줄부터) |
+| `testdata/yeosu-expo/convention/north-access.toml` | 전체 신규 (1줄부터) |
+| `testdata/yeosu-expo/convention/south-plaza.toml` | 전체 신규 (1줄부터) |
+| `testdata/yeosu-expo/convention/trace.json` | 전체 신규 (1줄부터) |
+| `testdata/yeosu-expo/convention/traced-roads.json` | 전체 신규 (1줄부터) |
+| `testdata/yeosu-expo/convention/west-crossing.toml` | 전체 신규 (1줄부터) |
+| `testdata/yeosu-expo/convention/west-link.toml` | 전체 신규 (1줄부터) |
+| `tools/verification-gate/.gitignore` | 전체 신규 (1줄부터) |
+| `tools/verification-gate/Cargo.lock` | 전체 신규 (1줄부터) |
+| `tools/verification-gate/Cargo.toml` | 전체 신규 (1줄부터) |
+| `tools/verification-gate/src/main.rs` | 전체 신규 (1줄부터) |
+| `tools/verification-gate/tests/protocol.rs` | 전체 신규 (1줄부터) |
