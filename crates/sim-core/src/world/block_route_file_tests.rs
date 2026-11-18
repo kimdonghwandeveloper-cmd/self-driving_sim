@@ -269,3 +269,275 @@ fn recorded_hash_matches_explicit_source() {
         .unwrap()
     );
 }
+
+/// 도로 밖의 작은 건물을 실측 주장 없이 합성 자료로 준비한다.
+fn building_text(height: f32) -> String {
+    let geometry: Vec<_> = [
+        (25.0, 20.0),
+        (35.0, 20.0),
+        (35.0, 30.0),
+        (25.0, 30.0),
+        (25.0, 20.0),
+    ]
+    .into_iter()
+    .map(|(e, n)| {
+        let p = fixtures::offset(e, n);
+        serde_json::json!({"lat":p.lat,"lon":p.lon})
+    })
+    .collect();
+    serde_json::json!({"elements":[{"type":"way","id":9001,"tags":{"building":"yes","height":height.to_string()},"geometry":geometry}]}).to_string()
+}
+/// 기록한 건물의 변경/누락은 조용히 건물 없는 코스로 재생하지 않고 자료 불일치로 거부한다.
+#[test]
+fn recorded_buildings_are_locked_and_required() {
+    let c = Case::new();
+    let p = c.root.join("graph.places.osm.json");
+    std::fs::write(&p, building_text(12.0)).unwrap();
+    let (f, expected) = c.prepare();
+    assert!(f.places.is_some());
+    assert_eq!(expected.course.buildings.len(), 1);
+    assert_eq!(expected, replay_block_route_file(&f, &c.root).unwrap());
+    std::fs::write(&p, building_text(18.0)).unwrap();
+    assert!(
+        replay_block_route_file(&f, &c.root)
+            .unwrap_err()
+            .contains("SHA-256")
+    );
+    std::fs::remove_file(&p).unwrap();
+    assert!(replay_block_route_file(&f, &c.root).is_err());
+}
+/// 건물만 바뀐 새 자료 폴더를 만들면 결과 해시는 달라지고 옛 폴더의 경로는 계속 재생된다.
+#[test]
+fn building_only_revision_keeps_both_generations_replayable() {
+    let c = Case::new();
+    std::fs::write(c.root.join("graph.places.osm.json"), building_text(12.0)).unwrap();
+    let (old, old_course) = c.prepare();
+    save_block_route_file(&c.root.join("old.toml"), &old).unwrap();
+    let next = c.root.join("next");
+    std::fs::create_dir(&next).unwrap();
+    std::fs::copy(c.root.join("graph.osm.json"), next.join("graph.osm.json")).unwrap();
+    std::fs::write(next.join("graph.places.osm.json"), building_text(18.0)).unwrap();
+    let (new, new_course) = prepare_block_route_file(
+        &next,
+        &BlockRouteRequest {
+            name: "saved demo",
+            snapshot: "graph.osm.json",
+            origin: fixtures::ORIGIN,
+            graph: &RoadGraphConfig::default(),
+            network: NetworkSettings::default(),
+            selected: &c.selected,
+        },
+    )
+    .unwrap();
+    assert_eq!(old.snapshot.sha256, new.snapshot.sha256);
+    assert_eq!(old.traversals, new.traversals);
+    assert_ne!(old.places, new.places);
+    assert_ne!(old.result_sha256, new.result_sha256);
+    save_block_route_file(&next.join("new.toml"), &new).unwrap();
+    assert_eq!(
+        old_course,
+        load_block_route_file(&c.root.join("old.toml")).unwrap()
+    );
+    assert_eq!(
+        new_course,
+        load_block_route_file(&next.join("new.toml")).unwrap()
+    );
+}
+/// Geofabrik 로더가 읽는 메타·연결 자료를 작은 합성 스냅샷에 결속한다.
+fn extracted_case(c: &Case, incomplete: bool) {
+    use crate::world::road_snapshot::*;
+    let path = c.root.join("graph.osm.json");
+    let mut graph: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    graph["generator"] = serde_json::json!("self-driving-sim geofabrik-extract v1");
+    let body = serde_json::to_vec(&graph).unwrap();
+    std::fs::write(&path, &body).unwrap();
+    let allowed = normalized_highways(&RoadGraphConfig::default().allowed_highways);
+    let connection = Connectivity {
+        format: CONNECTIVITY_FORMAT.into(),
+        rule_version: EXTRACT_RULE_VERSION,
+        graph_sha256: sha256_hex(&body),
+        allowed_highways: allowed.clone(),
+        checked_nodes: 3,
+        incomplete: if incomplete {
+            vec![IncompleteNode {
+                node: 2,
+                national_degree: 3,
+                local_degree: 2,
+                missing: vec![[999, 999]],
+            }]
+        } else {
+            vec![]
+        },
+    };
+    let bytes = connection.to_json();
+    std::fs::write(c.root.join(CONNECTIVITY_FILE), &bytes).unwrap();
+    let meta = SnapshotMetaV2 {
+        meta_format: META_FORMAT_V2.into(),
+        source: "geofabrik".into(),
+        bbox: crate::world::map_fetch::Bbox {
+            south: 34.748,
+            west: 127.748,
+            north: 34.752,
+            east: 127.752,
+        },
+        created_at: "2026-11-18T00:00:00Z".into(),
+        graph_file: "graph.osm.json".into(),
+        graph_sha256: sha256_hex(&body),
+        graph_bytes: body.len() as u64,
+        geofabrik: GeofabrikSource {
+            pbf_file_name: "synthetic.osm.pbf".into(),
+            pbf_url: None,
+            pbf_sha256: "0".repeat(64),
+            pbf_bytes: 0,
+            integrity: "unverified".into(),
+            replication_timestamp: None,
+            replication_sequence: None,
+            data_time: "unknown".into(),
+            extract_rule_version: EXTRACT_RULE_VERSION,
+            margin_m: 150.0,
+            allowed_highways: allowed,
+        },
+        connectivity: ConnectivityRecord {
+            file: CONNECTIVITY_FILE.into(),
+            format: CONNECTIVITY_FORMAT.into(),
+            sha256: sha256_hex(bytes.as_bytes()),
+            checked_nodes: 3,
+            incomplete_nodes: connection.incomplete.len() as u64,
+        },
+    };
+    std::fs::write(c.root.join("meta.toml"), toml::to_string(&meta).unwrap()).unwrap();
+}
+/// 메타·연결 자료를 함께 기록하고 각 파일이 바뀌거나 빠지면 거부한다.
+#[test]
+fn extract_dependencies_are_locked() {
+    let c = Case::new();
+    extracted_case(&c, false);
+    let (f, expected) = c.prepare();
+    assert!(f.metadata.is_some());
+    assert!(f.connectivity.is_some());
+    assert_eq!(expected, replay_block_route_file(&f, &c.root).unwrap());
+    for name in ["meta.toml", "connectivity.json"] {
+        let p = c.root.join(name);
+        let original = std::fs::read(&p).unwrap();
+        let mut changed = original.clone();
+        changed.push(b' ');
+        std::fs::write(&p, &changed).unwrap();
+        assert!(
+            replay_block_route_file(&f, &c.root)
+                .unwrap_err()
+                .contains("SHA-256")
+        );
+        std::fs::remove_file(&p).unwrap();
+        assert!(replay_block_route_file(&f, &c.root).is_err());
+        std::fs::write(p, original).unwrap();
+    }
+}
+/// 경로 위에 지역 밖 연결이 빠진 노드가 있으면 불완전한 스냅샷으로 새 파일을 만들지 않는다.
+#[test]
+fn incomplete_extract_is_rejected() {
+    let c = Case::new();
+    extracted_case(&c, true);
+    let error = prepare_block_route_file(
+        &c.root,
+        &BlockRouteRequest {
+            name: "bad",
+            snapshot: "graph.osm.json",
+            origin: fixtures::ORIGIN,
+            graph: &RoadGraphConfig::default(),
+            network: NetworkSettings::default(),
+            selected: &c.selected,
+        },
+    )
+    .unwrap_err();
+    assert!(error.contains("outside the extract"), "{error}");
+}
+/// 저장된 유효한 우회 통과 순서를 재생할 때 지금의 최단 경로로 단축하지 않는다.
+#[test]
+fn replay_uses_recorded_walk_without_shortest_path_search() {
+    let mut c = Case::new();
+    let text = fixtures::overpass_json(&[
+        (
+            10,
+            "service",
+            &[("name", "start"), ("width", "6")],
+            vec![(1, -60.0, 0.0), (2, 0.0, 0.0)],
+        ),
+        (
+            20,
+            "service",
+            &[("name", "up"), ("width", "6")],
+            vec![(2, 0.0, 0.0), (3, 0.0, 60.0)],
+        ),
+        (
+            21,
+            "service",
+            &[("name", "across"), ("width", "6")],
+            vec![(3, 0.0, 60.0), (4, 100.0, 60.0)],
+        ),
+        (
+            22,
+            "service",
+            &[("name", "down"), ("width", "6")],
+            vec![(4, 100.0, 60.0), (5, 100.0, 0.0)],
+        ),
+        (
+            30,
+            "service",
+            &[("name", "shortcut"), ("width", "6")],
+            vec![(2, 0.0, 0.0), (5, 100.0, 0.0)],
+        ),
+        (
+            40,
+            "service",
+            &[("name", "goal"), ("width", "6")],
+            vec![(5, 100.0, 0.0), (6, 160.0, 0.0)],
+        ),
+    ]);
+    std::fs::write(c.root.join("graph.osm.json"), &text).unwrap();
+    let m = build_road_blocks(
+        &parse_overpass_graph(&text).unwrap(),
+        &[],
+        &RoadGraphConfig::default(),
+    )
+    .unwrap();
+    c.selected = [10, 20, 40]
+        .iter()
+        .map(|id| {
+            let b = m
+                .blocks
+                .iter()
+                .find(|b| b.source_edges[0].way_id == *id)
+                .unwrap();
+            BlockTraversal {
+                block_id: b.id.clone(),
+                direction: BlockDirection::Forward,
+            }
+        })
+        .collect();
+    let (mut f, _) = c.prepare();
+    f.selected.remove(1);
+    let plan = block_route::BlockRoutePlan {
+        selected: f.selected.clone(),
+        traversals: f.traversals.clone(),
+        length_m: f.length_m,
+    };
+    let expected = block_route::build_resolved_block_route_course(
+        &f.name,
+        &m,
+        fixtures::ORIGIN,
+        NetworkSettings::default(),
+        plan,
+        10_000.0,
+    )
+    .unwrap();
+    f.result_sha256 = result_fingerprint(&expected);
+    assert!(
+        block_route::plan_block_route(&m, &f.selected, 10_000.0)
+            .unwrap()
+            .length_m
+            + 100.0
+            < f.length_m
+    );
+    assert_eq!(expected, replay_block_route_file(&f, &c.root).unwrap());
+}
