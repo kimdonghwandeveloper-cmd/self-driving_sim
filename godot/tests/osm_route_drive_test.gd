@@ -51,6 +51,7 @@ func _run() -> void:
 		map.camera.force_update_scroll()
 		await _click(map.get_canvas_transform() * view)
 	_check(map.points.size() == 2, "실제 도로 클릭으로 출발·도착을 선택하지 못함")
+	_check(map.selecting_destination, "도로 선택 후 도착 교체 모드로 전환되지 않음")
 	_check(not map.drive_button.disabled, "선택 경로 주행 버튼 비활성")
 	var before_drag: PackedVector2Array = map.points.duplicate()
 	var camera_before: Vector2 = map.camera.position
