@@ -447,3 +447,36 @@ fn empty_input_has_no_blocks_or_connections() {
     let built = model(&[]);
     assert!(built.blocks.is_empty() && built.connections.is_empty());
 }
+
+/// 허용 목록 밖 도로로만 회전할 수 있는 관계도 보존하고 다른 출구를 열어 주지 않는다.
+#[test]
+fn only_turn_to_excluded_highway_does_not_open_other_exit() {
+    let mut ways = chain();
+    ways.extend(parse(vec![(
+        30,
+        "footway",
+        &[],
+        vec![(2, 50.0, 0.0), (4, 50.0, 50.0)],
+    )]));
+    let restriction = TurnRestriction {
+        id: 99,
+        from_way: 10,
+        via_node: 2,
+        to_way: 30,
+        only: true,
+    };
+    let built = build_road_blocks(&ways, &[restriction], &RoadGraphConfig::default()).unwrap();
+    assert_eq!(built.restrictions, [restriction]);
+    assert_eq!(built.blocks.len(), 2);
+    let from = built
+        .blocks
+        .iter()
+        .find(|block| block.source_edges[0].way_id == 10)
+        .unwrap();
+    assert!(
+        built
+            .connections
+            .iter()
+            .all(|connection| connection.from.block_id != from.id)
+    );
+}
