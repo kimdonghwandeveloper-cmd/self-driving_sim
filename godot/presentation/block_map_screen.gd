@@ -10,61 +10,131 @@ var preview_button := Button.new()
 var span := OptionButton.new()
 var failure_lines: Array = []
 var failure_blocks: Array = []
+var details_toggle := CheckButton.new()
+var sidebar_scroll := ScrollContainer.new()
+var technical_feedback := ""
+var role_buttons: Array[Button] = []
 
-## 기존 지도 서비스 위에 블록 후보·확정·경유 편집 제어를 붙인다.
+## 기존 지도 서비스는 유지하고 도구를 좁은 사이드바와 고정 주행 버튼으로 정리한다.
 func _services(canvas: CanvasLayer) -> void:
 	super._services(canvas)
-	for button in toolbar.find_children("*", "Button", true, false):
-		if button.text == "도착 취소": button.text = "마지막 경유 취소"
-	for label in toolbar.find_children("*", "Label", true, false):
-		if label.text.contains("지역 자동 연결"): label.text = "전국 OSM · 경로 최대 10 km · 블록/방향 선택"
+	for child in toolbar.get_children(): child.hide()
 	for button in endpoint_buttons: button.hide()
 	endpoint_label.hide()
 	restricted_roads.hide()
 	overwrite.hide()
-	var row := HFlowContainer.new()
-	toolbar.add_child(row)
-	candidate_list.custom_minimum_size.x = 360
+	toolbar_panel.remove_child(toolbar)
+	var body := VBoxContainer.new()
+	body.add_theme_constant_override("separation", 10)
+	toolbar_panel.add_child(body)
+	sidebar_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	sidebar_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	body.add_child(sidebar_scroll)
+	sidebar_scroll.add_child(toolbar)
+	toolbar.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	toolbar.add_theme_constant_override("separation", 7)
+	var title := Label.new()
+	title.text = "주행 경로 만들기"
+	title.add_theme_font_size_override("font_size", 20)
+	toolbar.add_child(title)
+	var search_row := HBoxContainer.new()
+	toolbar.add_child(search_row)
+	_move_control(place_search, search_row)
+	place_search.custom_minimum_size.x = 0
+	place_search.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	place_search.placeholder_text = "지역·장소 검색"
+	_add_button(search_row, "검색", func(): _search_submitted(place_search.text))
+	_move_control(place_results, toolbar)
+	place_results.custom_minimum_size.x = 0
+	place_results.fit_to_longest_item = false
+	place_results.clip_text = true
+	var navigation := HBoxContainer.new()
+	toolbar.add_child(navigation)
+	_move_control(cities, navigation)
+	cities.fit_to_longest_item = false
+	cities.clip_text = true
+	cities.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_add_button(navigation, "전체", _fit_country)
+	_add_button(navigation, "지역", _fit_region)
+	toolbar.add_child(HSeparator.new())
+	var instruction := Label.new()
+	instruction.text = "도로 클릭 → 방향 확인 → 출발·도착 지정"
+	instruction.add_theme_font_size_override("font_size", 13)
+	toolbar.add_child(instruction)
 	candidate_list.fit_to_longest_item = false
 	candidate_list.clip_text = true
 	candidate_list.item_selected.connect(_focus_candidate)
-	row.add_child(candidate_list)
-	for role in [["출발로 확정", "start"], ["경유 추가", "via"], ["도착으로 확정", "goal"]]:
-		var button := Button.new()
-		button.text = role[0]
-		button.pressed.connect(_confirm_block.bind(role[1]))
-		row.add_child(button)
-	preview_button.text = "경로 미리보기"
-	preview_button.pressed.connect(_preview_blocks)
-	row.add_child(preview_button)
+	toolbar.add_child(candidate_list)
+	var roles := HBoxContainer.new()
+	toolbar.add_child(roles)
+	for role in [["출발로 지정", "start"], ["도착으로 지정", "goal"]]:
+		var button := _add_button(roles, role[0], _confirm_block.bind(role[1]))
+		button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		role_buttons.append(button)
+	selection_list.custom_minimum_size.y = 78
+	selection_list.tooltip_text = "선택한 출발·경유·도착. 진행 방향은 지도 화살표로 확인하세요."
+	toolbar.add_child(selection_list)
+	details_toggle.text = "더 보기 · 경유 / 저장 / 예제"
+	details_toggle.toggled.connect(func(value: bool): advanced.visible = value)
+	toolbar.add_child(details_toggle)
+	toolbar.move_child(advanced, toolbar.get_child_count() - 1)
+	advanced.visible = false
+	coordinates.custom_minimum_size.x = 0
+	route_name.custom_minimum_size.x = 0
+	var extra := HFlowContainer.new()
+	advanced.add_child(extra)
+	_add_button(extra, "경유 추가", _confirm_block.bind("via"))
+	_add_button(extra, "마지막 경유 취소", _remove_last)
 	span.add_item("지역 1.5 km", 1500)
 	span.add_item("지역 5 km", 5000)
 	span.add_item("지역 10 km", 10000)
-	span.tooltip_text = "선택 전에 열 지역 크기를 고르세요. 경로 길이는 최대 10 km입니다."
-	row.add_child(span)
-	for preset in [["엑스포 내부 실제 표본", "expo-internal"], ["엑스포 곡선 실제 표본", "expo-curved-joint"], ["강남 실제 표본", "gangnam-working-area"]]:
-		var button := Button.new()
-		button.text = preset[0]
-		button.tooltip_text = "오늘 검증용으로 범위를 고정한 실제 OSM 도로 표본입니다. 지역 전체가 아닙니다."
-		button.pressed.connect(_load_snapshot.bind("testdata/block-real/%s.osm.json" % preset[1]))
-		row.add_child(button)
-	selection_list.custom_minimum_size.y = 66
-	selection_list.tooltip_text = "출발·경유·도착 목록. 경유를 고르고 순서 이동 또는 삭제하세요."
-	toolbar.add_child(selection_list)
-	var edit := HFlowContainer.new()
-	toolbar.add_child(edit)
-	for item in [["경유 ↑", -1], ["경유 ↓", 1], ["경유 삭제", 0]]:
-		var button := Button.new()
-		button.text = item[0]
-		button.pressed.connect(_edit_via.bind(item[1]))
-		edit.add_child(button)
+	span.tooltip_text = "새 경로를 만들기 전에 열 지역의 크기를 선택합니다."
+	advanced.add_child(span)
+	for preset in [["엑스포 내부 예제 · 98 m", "expo-internal"], ["엑스포 주변 곡선 예제 · 1 km", "expo-curved-joint"], ["강남 예제 · 253 m", "gangnam-working-area"]]:
+		var button := _add_button(advanced, preset[0], _load_snapshot.bind("testdata/block-real/%s.osm.json" % preset[1]))
+		button.tooltip_text = "검증한 실제 OSM 표본입니다. 해당 지역 전체가 아닙니다."
 	var note := Label.new()
+	note.text = "연습용 · 경로 최대 10 km\n일부 교차로는 도로 생성이 제한됩니다."
 	note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	note.custom_minimum_size.x = 260
-	note.text = "도로 블록·방향 선택 · 제한 통로 포함(연습용) · 지역 보정은 기존 점 경로 전용"
-	edit.add_child(note)
-	candidate_list.add_item("도로를 클릭해 블록과 방향 후보 보기")
+	note.add_theme_font_size_override("font_size", 12)
+	advanced.add_child(note)
+	var actions := HBoxContainer.new()
+	body.add_child(actions)
+	preview_button.text = "경로 확인"
+	preview_button.pressed.connect(_preview_blocks)
+	actions.add_child(preview_button)
+	_move_control(drive_button, actions)
+	drive_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	drive_button.modulate = Color("84e6cd")
+	_add_button(actions, "새 경로", _clear_points)
+	_move_control(status, body)
+	status.max_lines_visible = 4
+	status.custom_minimum_size.y = 74
+	status.add_theme_font_size_override("font_size", 13)
+	candidate_list.add_item("지도의 도로를 클릭하세요")
 	candidate_list.disabled = true
+	_layout_toolbar()
+
+## 재사용할 검색·저장 위젯의 연결은 유지하고 새 레이아웃으로 이동한다.
+func _move_control(control: Control, parent: Node) -> void:
+	control.reparent(parent)
+	control.show()
+
+## 같은 높이와 글자 크기를 가진 지도 작업 버튼을 생성한다.
+func _add_button(parent: Node, text: String, action: Callable) -> Button:
+	var button := Button.new()
+	button.text = text
+	button.custom_minimum_size.y = 30
+	button.add_theme_font_size_override("font_size", 14)
+	button.pressed.connect(action)
+	parent.add_child(button)
+	return button
+
+## 작은 창에서는 패널 안만 스크롤하고 지도와 주행 버튼은 화면에 유지한다.
+func _layout_toolbar() -> void:
+	var view := get_viewport_rect().size
+	toolbar_panel.position = Vector2(16, 64)
+	toolbar_panel.size = Vector2(minf(360.0, view.x * 0.42), maxf(260.0, view.y - 96.0))
 
 ## 클릭은 후보를 조회하며 Shift 클릭도 임의로 도로 선택을 삭제하지 않는다.
 func _select_map_position(screen_position: Vector2, _remove: bool) -> void:
@@ -76,7 +146,9 @@ func _show_candidates(at: Vector2) -> void:
 	candidate_items = picker.call("block_candidates", at, clampf(12.0 / camera.zoom.x, 2.0, 300.0))
 	candidate_list.clear()
 	for item in candidate_items:
-		candidate_list.add_item("%s · %.0f m · 폭 %.1f m · %s→%s · way %s" % [item.name, item.length_m, item.width_m, item.from_node, item.to_node, item.way_id])
+		var direction := "정방향 →" if item.direction == "forward" else "역방향 ←"
+		candidate_list.add_item("%s · %s · %.0f m" % [item.name, direction, item.length_m])
+		candidate_list.set_item_tooltip(candidate_list.item_count - 1, "폭 %.1f m · %s→%s · way %s" % [item.width_m, item.from_node, item.to_node, item.way_id])
 	candidate_list.disabled = candidate_items.is_empty()
 	if candidate_items.is_empty():
 		candidate_list.add_item("클릭 반경에 블록 없음 · 확대 후 도로를 클릭하세요")
@@ -125,8 +197,19 @@ func _apply_selection_result(result: Dictionary, success_message: String) -> voi
 	failure_blocks = result.get("highlights", [])
 	for item in failure_blocks:
 		failure_lines.append(item.line)
-	feedback = success_message if result.ok else str(result.error)
+	technical_feedback = "" if result.ok else str(result.error)
+	feedback = success_message if result.ok else _friendly_error(technical_feedback)
 	overlay_layer.queue_redraw()
+
+## 내부 진단은 툴팁에 보존하고 기본 화면에는 사용자가 판단할 수 있는 짧은 설명을 표시한다.
+func _friendly_error(raw: String) -> String:
+	if raw.contains("block too short for joint cut"):
+		return "짧은 도로의 교차로 접속부를 만들지 못했습니다. 다른 구간이나 검증된 예제로 확인해 주세요."
+	if raw.contains("self-intersect") or raw.contains("self intersect"):
+		return "교차로 도로 면이 겹쳐 생성하지 못했습니다. 다른 구간이나 검증된 예제로 확인해 주세요."
+	if raw.contains("BlockRouteFailure"):
+		return "이 구간의 도로 형상을 만들지 못했습니다. 다른 구간을 선택해 주세요. 상세 진단은 안내에 마우스를 올리면 볼 수 있습니다."
+	return raw
 
 ## 새 지역을 열면 선택을 지우므로 기존 선택이 있는 동안에는 지역 교체를 명시적으로 막는다.
 func _ensure_region(at: Vector2) -> bool:
@@ -208,6 +291,7 @@ func _clear_candidates() -> void:
 	failure_lines.clear()
 	failure_blocks.clear()
 	feedback = ""
+	technical_feedback = ""
 
 ## 미리보기한 블록 경로를 새 파일로 저장한다. 덮어쓰기는 지원하지 않는다.
 func _save_route() -> void:
@@ -245,7 +329,8 @@ func _refresh_route() -> void:
 	var selected_points := PackedVector2Array()
 	for item in selected_blocks:
 		var role := "출발" if item.role == "start" else ("도착" if item.role == "goal" else "경유 %d" % (int(item.index)+1))
-		selection_list.add_item("%s · %s · %s→%s · way %s" % [role, item.name, item.from_node, item.to_node, item.way_id])
+		selection_list.add_item("%s · %s · %s" % [role, item.name, "→" if item.direction == "forward" else "←"])
+		selection_list.set_item_tooltip(selection_list.item_count - 1, "%s→%s · way %s" % [item.from_node, item.to_node, item.way_id])
 		if failure_blocks.any(func(b): return b.id == item.id):
 			selection_list.set_item_custom_fg_color(selection_list.item_count - 1, Color("ff7474"))
 		selected_points.append(item.line[0])
@@ -263,10 +348,11 @@ func _process(delta: float) -> void:
 		drive_button.disabled = not route.ok or not failure_lines.is_empty()
 		var summary := "선택 연결 검사 실패 · 기존 선택 유지" if not failure_lines.is_empty() else ("검증된 경로 %.0f m" % float(route.length_m) if route.ok else "도로 후보·방향 확인 → 역할 확정 → 경로 미리보기")
 		status.text = summary + "\n" + feedback
-		status.tooltip_text = feedback
+		status.tooltip_text = technical_feedback if not technical_feedback.is_empty() else feedback
+		for button in role_buttons: button.disabled = candidate_items.is_empty()
 		var diagnostics: PackedStringArray = picker.call("block_diagnostics")
 		if not diagnostics.is_empty():
-			status.text += "\n회전 제한 참조 불일치 %d건 · 해당 진입 연결 차단(자세한 내용은 마우스를 올려 확인)" % diagnostics.size()
+			status.text += "\n연결 제한 %d건 · 상세 내용은 마우스를 올려 확인" % diagnostics.size()
 			status.tooltip_text += "\n" + "\n".join(diagnostics)
 	if tiles != null: _update_tiles()
 	if camera.zoom.x != overlay_zoom: overlay_layer.queue_redraw()
@@ -296,16 +382,16 @@ func _draw_failure_lines(scale_m: float) -> void:
 	for line in failure_lines:
 		if line.size() >= 2: overlay_layer.draw_polyline(line, Color("ff5252"), 9.0 / scale_m, true)
 
-## 실제 도구 줄 아래의 남은 지도 영역에 표본 전체가 보이게 맞춘다.
+## 왼쪽 사이드바를 제외한 지도 영역 가운데로 도로와 경로를 맞춘다.
 func _fit_rect(bounds: Rect2) -> void:
 	if bounds.size.x <= 0.0 or bounds.size.y <= 0.0: return
 	var view := get_viewport_rect().size
-	var top := maxf(180.0, toolbar_panel.get_global_rect().end.y + 20.0)
-	var available := Vector2(view.x - 60.0, view.y - top - 30.0)
+	var left := toolbar_panel.get_global_rect().end.x + 24.0
+	var available := Vector2(view.x - left - 24.0, view.y - 100.0)
 	if available.x <= 0.0 or available.y <= 0.0: return
 	var value := clampf(minf(available.x / bounds.size.x, available.y / bounds.size.y), 0.0005, 8.0)
 	camera.zoom = Vector2.ONE * value
-	camera.position = bounds.get_center() - Vector2(0, top * 0.5 / value)
+	camera.position = bounds.get_center() - Vector2(left * 0.5 / value, 20.0 / value)
 	_clamp_camera()
 	last_camera = camera.position
 	last_zoom = camera.zoom.x

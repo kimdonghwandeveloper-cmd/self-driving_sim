@@ -20,7 +20,7 @@ func _run() -> void:
 		screen._load_snapshot("testdata/block-real/%s.osm.json" % sample[0])
 		await process_frame
 		_check(screen.opened_region.has_area(), str(sample[0]) + ": region missing")
-		_check(screen.toolbar_panel.get_global_rect().end.y < root.size.y - 100, "toolbar leaves no map area")
+		_check(screen.toolbar_panel.get_global_rect().size.x < root.size.x * 0.45, "sidebar leaves no map area")
 		_choose(screen, sample[1], sample[2], sample[3], "start")
 		_choose(screen, sample[4], sample[5], sample[6], "goal")
 		if sample[0] == "gangnam-working-area":
