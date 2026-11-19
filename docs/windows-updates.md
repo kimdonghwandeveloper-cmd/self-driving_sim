@@ -45,3 +45,30 @@ GitHub 제한과 다운로드 형식: https://docs.github.com/en/repositories/re
 ## 검증
 
 `powershell.exe -NoProfile -File scripts/test-updater.ps1`은 경로 탈출/Windows 특수 이름, 서명 변조, 필수 파일/중복/과거 세대 거부, 파일 재사용, 원자 세대 전환, 해시 및 엔진 실패 시 기존 세대 유지, 사용자 자료, 실제 EXE 오프라인/오류 복구 실행, 게시 서명 왕복을 검사한다. 시험용 엔진/키는 임시 폴더에만 만든다. 실제 인터넷 HTTPS 서버의 운영 배포와 별도 PC 수동 검수는 별도다.
+
+## 이번 검증 기록 (2026-11-19)
+
+- 기능 브랜치 `feature/windows-auto-update`, 실행 코드 `13222ea`. main/develop은 `f9a3eef` 유지, 기능 브랜치 push/병합 없음.
+- 테스트를 먼저 작성하고 구현 파일 없음으로 실패를 확인한 뒤 구현했다.
+- 별도 detached test 워크트리: 업데이트 35개, 패키징 안전성 92개 통과.
+- 본체 fmt/clippy 통과, Rust 457개 통과. 이번 변경은 Rust 소스를 바꾸지 않았다.
+- release DLL/CLI는 기존 검증 바이너리를 재사용(-SkipBuild), Windows 런처는 새로 컴파일했다. 실제 새 번들 CLI + Godot 5종 = 6개 통과.
+- 최종 검토 번들: `../self-driving_sim-test/dist/windows-exe-update-review/Simulator.exe`, release_version=1, validated=true, update.enabled=false.
+- EXE 프로세스 실행은 시험용 엔진으로 자동 검사했고 실제 Godot은 번들 경로에서 헤드리스 검사했다. 실제 화면 EXE 실행과 별도 PC 사용자 확인은 대기다.
+- 게시 원문 서명 검증·파일 재사용·세대 교체·사용자 자료 보존·불량 엔진 거부는 로컬에서 검사했다. 실제 공개 서버 다운로드는 아직 검증하지 않았다.
+- 공개 저장소 여부는 GitHub API로 확인했으며 GITHUB_TOKEN 존재 여부만 조회했다(미설정). 토큰이나 운영 개인 키를 생성·출력·저장소에 추가하지 않았다.
+
+## 수정 파일·라인
+
+| 파일 | 변경 위치와 내용 |
+| --- | --- |
+| `scripts/build-launcher.ps1` | 1줄부터 신규, Windows EXE 빌드 |
+| `scripts/run-simulator.ps1` | 1줄부터 신규, 업데이트 확인 및 기존/새 엔진 실행 |
+| `scripts/updater-support.ps1` | 1줄부터 신규, 서명·경로·파일·세대 검증과 적용 |
+| `scripts/publish-update.ps1` | 1줄부터 신규, 서명 manifest와 배포 파일 생성 |
+| `scripts/publish-github-release.ps1` | 1줄부터 신규, 설치 ZIP 준비·draft 자산 업로드·선택 공개 |
+| `scripts/test-updater.ps1` | 1줄부터 신규, 로컬 적용/실행/게시 회귀 시험 |
+| `scripts/package_release.ps1` | 5, 24, 75, 114, 123줄, 세대·빌드 입력·EXE/업데이트 파일 패키징·안내 |
+| `scripts/test-package-release.ps1` | 57줄, 새 필수 빌드 입력 누락 시험 |
+| `README.md` | 467줄, EXE 실행과 업데이트 안내 |
+| `docs/windows-updates.md` | 1줄부터 신규, 운영 정책·검증·수정 위치 |
