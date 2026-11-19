@@ -72,9 +72,10 @@ func _run() -> void:
 
 ## 원본 way 노드 순서를 따르는 블록·방향을 결정한다. 경로 실패 뒤 후보를 바꾸지 않는다.
 func _source_blocks(blocks: Array, source: Dictionary, way: int, reversed: bool) -> Array:
-	var nodes: Array = []
+	var nodes: Array[int] = []
 	for item in source.elements:
-		if item.type == "way" and int(item.id) == way: nodes = item.nodes
+		if item.type == "way" and int(item.id) == way:
+			for node in item.nodes: nodes.append(int(node))
 	var selected: Array = []
 	for block in blocks:
 		if int(block.way_id) != way: continue
