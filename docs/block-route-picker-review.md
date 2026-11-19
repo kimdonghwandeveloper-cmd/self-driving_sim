@@ -1,5 +1,7 @@
 # 블록 경로 선택 UI 검토
 
+후속 실제 자료 수정과 오늘 검증 결과는 [실제 지도 수정 기록](block-real-map-fixes-review.md)을 우선 참고한다. 이 문서는 초기 UI 브랜치의 검토 시점 기록이다.
+
 ## 병합과 작업 범위
 
 사용자 승인한 Windows 업데이트 브랜치를 main에 병합했고 main/develop을 `96c04ec`로 동기화·push했다. main의 미커밋 gitignore는 공통 Git 폴더 integration-preservation/auto-update-merge-*에 원본/패치를 보관하고 사용자 환경변수 주석과 .env 제외를 유지했다. IDE·Blender·기타 미커밋 파일과 개발 .env는 건드리지 않았다.
