@@ -78,6 +78,6 @@ foreach ($file in @(Get-ChildItem -LiteralPath $output -File | Sort-Object Name)
     if ($done % 10 -eq 0) { Write-Output "Release assets completed: $done" }
 }
 if ($Publish) {
-    Invoke-RestMethod -Method Patch -Uri "$api/releases/$($release.id)" -Headers $headers -ContentType 'application/json' -Body '{"draft":false,"make_latest":"true"}' | Out-Null
+    $release = Invoke-RestMethod -Method Patch -Uri "$api/releases/$($release.id)" -Headers $headers -ContentType 'application/json' -Body '{"draft":false,"make_latest":"true"}'
 }
 Write-Output "GitHub release created: $($release.html_url); published=$Publish"

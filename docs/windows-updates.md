@@ -1,5 +1,33 @@
 # Windows EXE와 업데이트 운영
 
+## 현재 운영 상태: sim-v1 실제 공개
+
+- 사용자의 실제 게시 승인에 따라 `sim-v1`을 GitHub Releases에 공개했다. 릴리스 대상 커밋은 `ab7c39422b8338be88d602ce5fa0f956690b894b`다. main/develop은 `f9a3eef`로 유지했으며 기능 브랜치만 push했다.
+- 설치 ZIP: https://github.com/kimdonghwandeveloper-cmd/self-driving_sim/releases/download/sim-v1/Simulator-Windows-v1.zip
+- ZIP 크기 261,402,412바이트, SHA-256 `be7a5c947be4ef8ccaa139aaadde878f02e961124976280063e8116f553dbce9`. GitHub 공개 API의 digest/크기를 로컬과 대조했다.
+- ZIP 전체를 풀고 `Simulator.exe`를 실행한다. 공개 키와 GitHub latest 채널이 설정되어 있다. 배포에는 토큰·개인 키·.env가 포함되지 않는다.
+- 게시 스크립트는 저장소 `.env`를 자동으로 읽는다. 명시한 `-PrivateKeyFile`/`-Repository` 인자가 우선이며, GITHUB_TOKEN은 이미 설정한 프로세스 환경 변수가 있으면 유지한다. 값을 출력하거나 코드로 실행하지 않는다.
+- 운영 RSA 키는 사용자의 로컬 Signing 폴더에 보존했다. 토큰 인증/저장소 접근 및 실제 draft 생성·업로드로 게시 권한을 확인했다.
+- 최신 시험: env 파서 7개, 업데이트 36개, 패키징 안전성 92개, 실제 번들 CLI/Godot 6개 통과.
+- 공개 후 무인증 HTTPS로 manifest 서명 검증과 실제 업데이트 적용을 통과했다. 입력 168파일 중 2파일을 실제 다운로드하고 나머지는 재사용/빈 파일 생성했다. 실제 Godot smoke 검사와 설정·저장 경로 보존도 통과했다. 원본 번들 대신 임시 설치를 사용했다.
+- GitHub는 0바이트 자산을 거부하므로 서명 manifest에는 빈 파일을 기록하되 별도 blob을 업로드하지 않는다. 업데이트 적용 시 빈 파일을 직접 만들고 같은 SHA-256 검사를 수행한다.
+- 게시 중 실패한 초안은 `-ResumeDraft`로 재개한다. 공개 릴리스는 재개/수정하지 않는다. 기존 자산은 이름·크기·GitHub SHA-256 digest로 재사용하며 API 페이지를 모두 읽는다.
+- 아래 초기 구현 검증 기록의 '게시 전/미설정' 표기는 당시 상태다. 현재 상태는 이 절을 우선한다. 사용자 실제 화면 및 별도 PC 수동 확인은 별도다.
+
+### 이번 추가 수정 파일·줄
+
+| 파일 | 위치 | 내용 |
+| --- | --- | --- |
+| `scripts/release-env.ps1` | 1줄부터 신규 | 허용 키만 코드 실행 없이 읽고 비밀 값 없는 오류 반환 |
+| `scripts/test-release-env.ps1` | 1줄부터 신규 | 인용·중복·문법·값 비노출·코드 실행 방지 시험 |
+| `scripts/test-live-release.ps1` | 1줄부터 신규 | 공개 채널 서명·다운로드·실제 엔진·보존 시험 |
+| `scripts/publish-github-release.ps1` | 4, 11줄부터 및 게시 부분 | env 기본값, 원격 커밋, 초안 재개, 페이지/해시 대조, 공개 URL 갱신 |
+| `scripts/publish-update.ps1` | 19줄 이후 | 비밀 env가 포함된 번들 거부, 0바이트 blob 제외 |
+| `scripts/updater-support.ps1` | 93줄 | 빈 파일 로컬 생성 후 해시 검증 |
+| `scripts/test-updater.ps1` | 시험 자료·최초 설치 검사 | 빈 파일 다운로드 불필요 회귀 |
+| `docs/windows-updates.md` | 3줄부터 | 실제 운영 결과·다운로드·변경 위치 |
+
+
 ## 사용자 실행
 
 배포 폴더의 `Simulator.exe`를 실행한다. Godot과 DLL은 폴더에 함께 있어야 하며 EXE 하나만 복사해서 실행하는 단일 파일 배포가 아니다. Windows 10/11의 Windows PowerShell과 .NET Framework를 사용한다. 관리자 권한 없이 쓸 수 있는 쓰기 가능한 폴더에 압축을 푼다.
