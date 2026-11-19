@@ -8,7 +8,7 @@ $ErrorActionPreference = 'Stop'
 . "$PSScriptRoot/updater-support.ps1"
 $Bundle = (Resolve-Path -LiteralPath $Bundle).Path
 $marker = Get-Content -Raw -LiteralPath (Join-Path $Bundle '.simulator-release.json') | ConvertFrom-Json
-if (-not $marker.validated) { throw 'Only validated bundles can be published' }
+if ($marker.format -ne 'simulator-release-bundle-v1' -or $marker.validated -ne $true) { throw 'Only validated bundles can be published' }
 if (Test-Path -LiteralPath $OutputDir) { throw 'Output directory must be new; existing releases are never overwritten' }
 $output = [IO.Path]::GetFullPath($OutputDir)
 if ($output.StartsWith($Bundle + '\', [StringComparison]::OrdinalIgnoreCase)) { throw 'Output must be outside bundle' }

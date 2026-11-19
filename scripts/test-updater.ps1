@@ -89,4 +89,24 @@ if (-not $process.WaitForExit(30000)) { $process.Kill(); throw 'Offline launcher
 $process.Refresh()
 if ($process.ExitCode -ne 0) { throw 'Offline EXE launcher failed' }
 $checks++
+# 잘못된 서버 설정도 기존 EXE 실행을 막지 않아야 한다.
+[IO.File]::WriteAllText((Join-Path $fixture 'update.json'), '{"enabled":true,"url":"http://invalid/","public_key":"invalid"}')
+$process = Start-Process -FilePath $launcher -PassThru
+if (-not $process.WaitForExit(30000)) { $process.Kill(); throw 'Fallback launch timed out' }
+$process.Refresh()
+if ($process.ExitCode -ne 0 -or -not (Test-Path -LiteralPath (Join-Path $fixture 'update.log'))) { throw 'Fallback launch failed' }
+$checks++
+# 게시 도구의 결과 서명을 실제 공개 키로 대조하며 검증되지 않은 번들은 거부한다.
+$signer = New-Object Security.Cryptography.RSACryptoServiceProvider 2048
+try {
+    $key = Join-Path $fixture 'test-only-private-key.xml'
+    [IO.File]::WriteAllText($key, $signer.ToXmlString($true))
+    [IO.File]::WriteAllText((Join-Path $payload '.simulator-release.json'), '{"format":"simulator-release-bundle-v1","validated":true}')
+    $published = Join-Path $fixture 'published'
+    & "$PSScriptRoot/publish-update.ps1" -Bundle $payload -OutputDir $published -PrivateKeyFile $key -Version 4
+    Assert-UpdateSignature ([IO.File]::ReadAllBytes((Join-Path $published 'manifest.json'))) ([IO.File]::ReadAllText((Join-Path $published 'manifest.sig'))) $signer.ToXmlString($false)
+    $checks++
+    [IO.File]::WriteAllText((Join-Path $payload '.simulator-release.json'), '{"format":"simulator-release-bundle-v1","validated":false}')
+    Reject { & "$PSScriptRoot/publish-update.ps1" -Bundle $payload -OutputDir (Join-Path $fixture 'not-published') -PrivateKeyFile $key -Version 5 }
+} finally { $signer.Dispose() }
 Write-Output "UPDATER TEST OK: $checks; fixture=$fixture"
