@@ -101,7 +101,7 @@ $signer = New-Object Security.Cryptography.RSACryptoServiceProvider 2048
 try {
     $key = Join-Path $fixture 'test-only-private-key.xml'
     [IO.File]::WriteAllText($key, $signer.ToXmlString($true))
-    [IO.File]::WriteAllText((Join-Path $payload '.simulator-release.json'), '{"format":"simulator-release-bundle-v1","validated":true}')
+    [IO.File]::WriteAllText((Join-Path $payload '.simulator-release.json'), '{"format":"simulator-release-bundle-v1","validated":true,"release_version":4}')
     $published = Join-Path $fixture 'published'
     & "$PSScriptRoot/publish-update.ps1" -Bundle $payload -OutputDir $published -PrivateKeyFile $key -Version 4
     Assert-UpdateSignature ([IO.File]::ReadAllBytes((Join-Path $published 'manifest.json'))) ([IO.File]::ReadAllText((Join-Path $published 'manifest.sig'))) $signer.ToXmlString($false)

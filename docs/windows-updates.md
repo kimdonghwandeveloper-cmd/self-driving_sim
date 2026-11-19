@@ -14,7 +14,7 @@
 {"enabled":true,"url":"https://YOUR-SERVER/releases/stable/","public_key":"<RSAKeyValue>공개 키 XML</RSAKeyValue>"}
 ```
 
-1. 기존 `scripts/package_release.ps1`로 독립 번들을 만들고 검증한다.
+1. 기존 `scripts/package_release.ps1 -ReleaseVersion 1`로 독립 번들을 만들고 검증한다. 배포 세대는 매번 증가시키며 신규 설치도 이 번호에서 시작하므로 이전 서버 버전으로 내려가지 않는다. 기본값 0은 로컬 검토용이며 게시할 수 없다.
 2. `scripts/publish-update.ps1 -Bundle dist/검증번들 -OutputDir dist/새게시폴더 -PrivateKeyFile D:/보안위치/private.xml -Version 1`을 실행한다. 세대 번호는 매번 증가시킨다. 기존 출력 폴더는 덮어쓰지 않는다.
 3. 새 게시 폴더를 HTTPS 서버에 올린다. `files/`의 모든 파일을 먼저 올리고 `manifest.json`과 `manifest.sig`를 마지막에 함께 전환한다. 가장 안전한 방법은 서버의 게시 폴더를 원자 교체하는 것이다. 리다이렉트 URL은 지원하지 않는다.
 4. 시험 설치에서 업데이트·기존 저장 경로 재진입을 확인한 뒤 배포한다. Git push 자체는 공개 업데이트 게시를 뜻하지 않는다.

@@ -2,6 +2,7 @@
 param(
     [string]$OutputDir = "dist/self-driving-sim-release",
     [string]$GodotPath = "",
+    [ValidateRange(0,2147483647)][int]$ReleaseVersion = 0,
     [switch]$SkipBuild = $false,
     [switch]$Validate = $true
 )
@@ -71,7 +72,7 @@ if (Test-Path -LiteralPath $outFull) {
     Remove-Item -LiteralPath $outFull -Recurse -Force
 }
 New-Item -ItemType Directory -Path $outFull -Force | Out-Null
-$packageMarker = @{ format = 'simulator-release-bundle-v1'; repository = $repoRoot; validated = $false }
+$packageMarker = @{ format = 'simulator-release-bundle-v1'; repository = $repoRoot; validated = $false; release_version = $ReleaseVersion }
 $packageMarker | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $outFull '.simulator-release.json') -Encoding UTF8
 New-Item -ItemType Directory -Path (Join-Path $outFull "bin") -Force | Out-Null
 New-Item -ItemType Directory -Path (Join-Path $outFull "godot") -Force | Out-Null

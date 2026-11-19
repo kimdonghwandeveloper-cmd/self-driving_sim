@@ -9,6 +9,7 @@ $ErrorActionPreference = 'Stop'
 $Bundle = (Resolve-Path -LiteralPath $Bundle).Path
 $marker = Get-Content -Raw -LiteralPath (Join-Path $Bundle '.simulator-release.json') | ConvertFrom-Json
 if ($marker.format -ne 'simulator-release-bundle-v1' -or $marker.validated -ne $true) { throw 'Only validated bundles can be published' }
+if ($Version -lt 1 -or $marker.release_version -ne $Version) { throw 'Build bundle with -ReleaseVersion matching published Version' }
 if (Test-Path -LiteralPath $OutputDir) { throw 'Output directory must be new; existing releases are never overwritten' }
 $output = [IO.Path]::GetFullPath($OutputDir)
 if ($output.StartsWith($Bundle + '\', [StringComparison]::OrdinalIgnoreCase)) { throw 'Output must be outside bundle' }

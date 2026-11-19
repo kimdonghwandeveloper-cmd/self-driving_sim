@@ -50,7 +50,15 @@ function Assert-NoUpdateLinks([string]$Path) {
 # 로컬 세대 포인터는 검증한 고정 이름만 허용한다. 손상 시 호출자가 초기 번들로 복구한다.
 function Get-UpdateCurrent([string]$Root) {
     $pointer = Join-Path $Root 'current.json'
-    if (-not (Test-Path -LiteralPath $pointer)) { return @{version=0; path=$Root} }
+    if (-not (Test-Path -LiteralPath $pointer)) {
+        $version = 0
+        $marker = Join-Path $Root '.simulator-release.json'
+        if (Test-Path -LiteralPath $marker) {
+            $bundle = Get-Content -Raw -LiteralPath $marker | ConvertFrom-Json
+            if ($bundle.release_version -ge 0 -and $bundle.release_version -le 2147483647) { $version = [long]$bundle.release_version }
+        }
+        return @{version=$version; path=$Root}
+    }
     $current = Get-Content -Raw -LiteralPath $pointer | ConvertFrom-Json
     if ($current.version -lt 1 -or $current.folder -cne ('v' + $current.version)) { throw 'Invalid current pointer' }
     $path = Join-Path $Root ('versions/' + $current.folder)
