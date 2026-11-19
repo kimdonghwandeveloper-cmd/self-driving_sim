@@ -50,7 +50,8 @@ $tag = "sim-v$Version"
 # 업로드가 중단되면 draft를 그대로 남긴다. 모든 자산 업로드 성공 전에는 latest가 바뀌지 않는다.
 $body = @{tag_name=$tag;target_commitish=$Commit;name="Simulator v$Version";draft=$true;prerelease=$false;body='Windows simulator. Download Simulator-Windows ZIP, extract the whole folder, and run Simulator.exe.'} | ConvertTo-Json
 if ($ResumeDraft) {
-    $drafts = @(Invoke-RestMethod -Uri "$api/releases?per_page=100" -Headers $headers | Where-Object { $_.tag_name -eq $tag -and $_.draft })
+    $allReleases = Invoke-RestMethod -Uri "$api/releases?per_page=100" -Headers $headers
+    $drafts = @($allReleases | Where-Object { $_.tag_name -eq $tag -and $_.draft })
     if ($drafts.Count -ne 1) { throw 'Exactly one matching draft is required for resume' }
     $release = $drafts[0]
     if (-not $release.draft) { throw 'Only an unpublished draft may be resumed' }
@@ -59,8 +60,12 @@ if ($ResumeDraft) {
     $release = Invoke-RestMethod -Method Post -Uri "$api/releases" -Headers $headers -ContentType 'application/json' -Body $body
 }
 $upload = $release.upload_url -replace '\{.*$', ''
-$existing = @(Invoke-RestMethod -Uri "$api/releases/$($release.id)/assets?per_page=100" -Headers $headers)
-if ($existing.Count -eq 100) { $existing += @(Invoke-RestMethod -Uri "$api/releases/$($release.id)/assets?per_page=100&page=2" -Headers $headers) }
+$existing = @()
+for ($pageNumber=1; $pageNumber -le 10; $pageNumber++) {
+    $page = Invoke-RestMethod -Uri "$api/releases/$($release.id)/assets?per_page=100&page=$pageNumber" -Headers $headers
+    $existing += @($page)
+    if (@($page).Count -lt 100) { break }
+}
 $done=0
 foreach ($file in @(Get-ChildItem -LiteralPath $output -File | Sort-Object Name)) {
     if ($file.Length -eq 0) { throw 'GitHub does not accept empty assets' }
