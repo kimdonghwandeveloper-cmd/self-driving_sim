@@ -1,0 +1,267 @@
+{
+  "elements": [
+    {
+      "type": "way",
+      "id": 129731721,
+      "nodes": [
+        1906756396,
+        12061682123,
+        9889607759,
+        9608955343,
+        12061673699,
+        4944067989
+      ],
+      "geometry": [
+        {
+          "lat": 37.4975028,
+          "lon": 127.0259134
+        },
+        {
+          "lat": 37.4975876,
+          "lon": 127.0258706
+        },
+        {
+          "lat": 37.4976251,
+          "lon": 127.0258517
+        },
+        {
+          "lat": 37.4979247,
+          "lon": 127.0257082
+        },
+        {
+          "lat": 37.4988965,
+          "lon": 127.025242
+        },
+        {
+          "lat": 37.4989723,
+          "lon": 127.0252056
+        }
+      ],
+      "tags": {
+        "highway": "residential",
+        "name": "서초대로73길"
+      }
+    },
+    {
+      "type": "way",
+      "id": 504227065,
+      "nodes": [
+        1906756396,
+        3089780844
+      ],
+      "geometry": [
+        {
+          "lat": 37.4975028,
+          "lon": 127.0259134
+        },
+        {
+          "lat": 37.4972561,
+          "lon": 127.0250866
+        }
+      ],
+      "tags": {
+        "highway": "primary",
+        "name": "서초대로",
+        "oneway": "yes"
+      }
+    },
+    {
+      "type": "way",
+      "id": 504512001,
+      "nodes": [
+        3089780840,
+        1906756396
+      ],
+      "geometry": [
+        {
+          "lat": 37.4976567,
+          "lon": 127.0264051
+        },
+        {
+          "lat": 37.4975028,
+          "lon": 127.0259134
+        }
+      ],
+      "tags": {
+        "highway": "primary",
+        "name": "서초대로",
+        "oneway": "yes"
+      }
+    },
+    {
+      "type": "relation",
+      "id": 7365608,
+      "members": [
+        {
+          "type": "way",
+          "ref": 504227065,
+          "role": "from"
+        },
+        {
+          "type": "node",
+          "ref": 1906756396,
+          "role": "via"
+        },
+        {
+          "type": "way",
+          "ref": 504227065,
+          "role": "to"
+        }
+      ],
+      "tags": {
+        "restriction": "no_u_turn",
+        "type": "restriction"
+      }
+    },
+    {
+      "type": "relation",
+      "id": 7365609,
+      "members": [
+        {
+          "type": "way",
+          "ref": 504227065,
+          "role": "from"
+        },
+        {
+          "type": "node",
+          "ref": 1906756396,
+          "role": "via"
+        },
+        {
+          "type": "way",
+          "ref": 129731721,
+          "role": "to"
+        }
+      ],
+      "tags": {
+        "restriction": "no_left_turn",
+        "type": "restriction"
+      }
+    },
+    {
+      "type": "relation",
+      "id": 7365613,
+      "members": [
+        {
+          "type": "way",
+          "ref": 504512001,
+          "role": "from"
+        },
+        {
+          "type": "node",
+          "ref": 1906756396,
+          "role": "via"
+        },
+        {
+          "type": "way",
+          "ref": 480850873,
+          "role": "to"
+        }
+      ],
+      "tags": {
+        "restriction": "no_u_turn",
+        "type": "restriction"
+      }
+    },
+    {
+      "type": "relation",
+      "id": 7365615,
+      "members": [
+        {
+          "type": "way",
+          "ref": 129731721,
+          "role": "from"
+        },
+        {
+          "type": "node",
+          "ref": 1906756396,
+          "role": "via"
+        },
+        {
+          "type": "way",
+          "ref": 129731721,
+          "role": "to"
+        }
+      ],
+      "tags": {
+        "restriction": "no_u_turn",
+        "type": "restriction"
+      }
+    },
+    {
+      "type": "relation",
+      "id": 7365616,
+      "members": [
+        {
+          "type": "way",
+          "ref": 129731721,
+          "role": "from"
+        },
+        {
+          "type": "node",
+          "ref": 1906756396,
+          "role": "via"
+        },
+        {
+          "type": "way",
+          "ref": 504512001,
+          "role": "to"
+        }
+      ],
+      "tags": {
+        "restriction": "no_left_turn",
+        "type": "restriction"
+      }
+    },
+    {
+      "type": "relation",
+      "id": 7365749,
+      "members": [
+        {
+          "type": "way",
+          "ref": 504227065,
+          "role": "from"
+        },
+        {
+          "type": "node",
+          "ref": 3089780844,
+          "role": "via"
+        },
+        {
+          "type": "way",
+          "ref": 504227065,
+          "role": "to"
+        }
+      ],
+      "tags": {
+        "restriction": "no_u_turn",
+        "type": "restriction"
+      }
+    },
+    {
+      "type": "relation",
+      "id": 7369844,
+      "members": [
+        {
+          "type": "way",
+          "ref": 504512001,
+          "role": "from"
+        },
+        {
+          "type": "node",
+          "ref": 3089780840,
+          "role": "via"
+        },
+        {
+          "type": "way",
+          "ref": 504512001,
+          "role": "to"
+        }
+      ],
+      "tags": {
+        "restriction": "no_u_turn",
+        "type": "restriction"
+      }
+    }
+  ]
+}

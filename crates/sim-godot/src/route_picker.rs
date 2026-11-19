@@ -204,6 +204,16 @@ impl SimRoutePicker {
             })
             .collect()
     }
+
+    /// 원본을 보존하면서 보수적으로 차단한 불완전 회전 제한을 UI에 명시한다.
+    #[func]
+    fn block_diagnostics(&self) -> PackedStringArray {
+        self.block_selection
+            .iter()
+            .flat_map(|s| &s.model.diagnostics)
+            .map(|s| GString::from(s.as_str()))
+            .collect()
+    }
     /// 클릭 주변 모든 방향 후보를 반환할 뿐, 가장 가까운 도로를 자동 확정하지 않는다.
     #[func]
     fn block_candidates(&self, view: Vector2, radius: f32) -> Array<VarDictionary> {

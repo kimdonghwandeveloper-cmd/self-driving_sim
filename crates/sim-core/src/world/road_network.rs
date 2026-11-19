@@ -11,7 +11,7 @@ use glam::Vec2;
 use std::collections::{BTreeMap, BTreeSet};
 
 /// 도로망 형상 규칙 판본. 재생에 영향을 주는 생성 규칙을 바꾸면 올린다.
-pub const NETWORK_GEOMETRY_VERSION: &str = "road-network-v2";
+pub const NETWORK_GEOMETRY_VERSION: &str = "road-network-v3";
 
 /// 동일 지도에서 경로 선택과 무관하게 고정하는 생성 설정.
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -44,7 +44,9 @@ pub struct BlockSurface {
 #[derive(Debug, Clone, PartialEq)]
 pub struct NetworkJoint {
     pub node_id: u64,
-    pub area: Area,
+    pub center: Vec2,
+    pub boundary: Vec<Vec2>,
+    pub areas: Vec<Area>,
     pub openings: Vec<[Vec2; 2]>,
 }
 /// 경로 안내선·출발·도착 자세가 없는 고정 도로망 형상.
@@ -153,7 +155,7 @@ pub fn build_road_network(
             continue;
         }
         let center = project(origin, node_positions[node_id]);
-        let arms: Vec<_> = incident
+        let mut arms: Vec<_> = incident
             .iter()
             .map(|end| {
                 let line = &lines[end.index];
@@ -170,7 +172,7 @@ pub fn build_road_network(
                 }
             })
             .collect();
-        let shape = road_join_shape(
+        let mut shape = road_join_shape(
             center,
             &arms,
             settings.corner_radius_m,
@@ -182,17 +184,75 @@ pub fn build_road_network(
             node_id: Some(*node_id),
             message,
         })?;
+        // 첫 표본이 매우 짧은 곡선에서도 실제 절단 위치의 방위와 교차로 절단 길이를 함께 수렴시킨다.
+        for _ in 0..12 {
+            let mut change = 0.0_f32;
+            for (k, end) in incident.iter().enumerate() {
+                let line = &lines[end.index];
+                let points: Vec<_> = if end.end == 0 {
+                    line.clone()
+                } else {
+                    line.iter().copied().rev().collect()
+                };
+                let at = road_geom::point_at_distance(&points, shape.cut_m[k])
+                    .ok_or_else(|| {
+                        NetworkFailure::block(
+                            &ordered[end.index].id,
+                            Some(*node_id),
+                            "block too short for joint cut".into(),
+                        )
+                    })?
+                    .0;
+                let delta = at - center;
+                if delta.length_squared() > 1e-8 {
+                    let direction = delta.normalize();
+                    change = change.max(direction.distance(arms[k].direction));
+                    arms[k].direction = direction;
+                }
+            }
+            if change < 1e-5 {
+                break;
+            }
+            shape = road_join_shape(
+                center,
+                &arms,
+                settings.corner_radius_m,
+                settings.arc_step_deg,
+                settings.min_arm_gap_deg,
+            )
+            .map_err(|message| NetworkFailure {
+                block_id: None,
+                node_id: Some(*node_id),
+                message,
+            })?;
+        }
         let mut openings = Vec::new();
+        let mut replacements = Vec::new();
         for (k, end) in incident.iter().enumerate() {
             let cut = shape.cut_m[k];
             cuts[end.index][end.end] = cut;
-            let outward = arms[k].direction;
-            let normal = road_geom::right_of(outward) * arms[k].half_width_m;
-            let mouth = center + outward * cut;
-            openings.push([mouth - normal, mouth + normal]);
-            check_straight_end(&lines[end.index], end.end, cut).map_err(|message| {
-                NetworkFailure::block(&ordered[end.index].id, Some(*node_id), message)
-            })?;
+            let normal = road_geom::right_of(arms[k].direction) * arms[k].half_width_m;
+            let mouth = center + arms[k].direction * cut;
+            let actual = curved_mouth(&lines[end.index], end.end, cut, arms[k].half_width_m)
+                .map_err(|message| {
+                    NetworkFailure::block(&ordered[end.index].id, Some(*node_id), message)
+                })?;
+            replacements.push((mouth - normal, actual[0]));
+            replacements.push((mouth + normal, actual[1]));
+            openings.push(actual);
+        }
+        // 직선 가정의 입구만 실제 절단면으로 옮긴다. 원본 중심선이나 접속 노드 ID는 바꾸지 않는다.
+        for p in shape
+            .boundary
+            .iter_mut()
+            .chain(shape.corners.iter_mut().flat_map(|c| c.iter_mut()))
+        {
+            if let Some((_, actual)) = replacements
+                .iter()
+                .find(|(old, _)| old.distance(*p) < 0.001)
+            {
+                *p = *actual;
+            }
         }
         for corner in &shape.corners {
             colliders.extend(
@@ -203,10 +263,15 @@ pub fn build_road_network(
         }
         joints.push(NetworkJoint {
             node_id: *node_id,
-            area: Area {
-                center,
-                boundary: shape.boundary,
-            },
+            areas: joint_surface_areas(center, &shape.boundary).map_err(|message| {
+                NetworkFailure {
+                    block_id: None,
+                    node_id: Some(*node_id),
+                    message,
+                }
+            })?,
+            center,
+            boundary: shape.boundary,
             openings,
         });
     }
@@ -332,31 +397,17 @@ fn curb(rect: crate::vehicle::GroundRect) -> Collider {
     }
 }
 
-/// 접속부를 잘라 낼 구간이 초기 접선과 5 cm 이내로 일치하는지 확인한다.
-fn check_straight_end(line: &[Vec2], end: usize, cut: f32) -> Result<(), String> {
+/// 원본 곡선을 호 길이로 잘랐을 때 도로 띠와 동일한 국소 접선의 개구부를 계산한다.
+fn curved_mouth(line: &[Vec2], end: usize, cut: f32, half: f32) -> Result<[Vec2; 2], String> {
     let points: Vec<_> = if end == 0 {
         line.to_vec()
     } else {
         line.iter().copied().rev().collect()
     };
-    let direction = (points[1] - points[0]).normalize();
-    let Some((at, _)) = road_geom::point_at_distance(&points, cut) else {
-        return Err("block too short for joint cut".into());
-    };
-    if at.distance(points[0] + direction * cut) > 0.05 {
-        return Err("block bends inside joint cut".into());
-    }
-    let mut walked = 0.0;
-    for pair in points.windows(2) {
-        walked += pair[0].distance(pair[1]);
-        if walked >= cut {
-            break;
-        }
-        if (pair[1] - points[0]).perp_dot(direction).abs() > 0.05 {
-            return Err("block bends inside joint cut".into());
-        }
-    }
-    Ok(())
+    let trimmed = trim(&points, [cut, 0.0])?;
+    let direction = (trimmed[1] - trimmed[0]).normalize();
+    let normal = road_geom::right_of(direction) * half;
+    Ok([trimmed[0] - normal, trimmed[0] + normal])
 }
 /// 양끝 접속부를 호 길이로 자르고 내부의 원본 꺾임을 보존한다.
 fn trim(line: &[Vec2], cuts: [f32; 2]) -> Result<Vec<Vec2>, String> {
@@ -415,3 +466,89 @@ fn validate_loop(left: &[Vec2], right: &[Vec2]) -> Result<(), String> {
 #[cfg(test)]
 #[path = "road_network_tests.rs"]
 mod tests;
+
+/// 곡선 입구 때문에 원본 노드에서 보이지 않는 오목 면은 동일 외곽의 삼각형들로 나눈다.
+fn joint_surface_areas(center: Vec2, boundary: &[Vec2]) -> Result<Vec<Area>, String> {
+    if boundary.len() < 3 {
+        return Err("joint polygon has fewer than three vertices".into());
+    }
+    for i in 0..boundary.len() {
+        for j in i + 1..boundary.len() {
+            if j == i + 1 || (i == 0 && j == boundary.len() - 1) {
+                continue;
+            }
+            if joint_edges_intersect(
+                boundary[i],
+                boundary[(i + 1) % boundary.len()],
+                boundary[j],
+                boundary[(j + 1) % boundary.len()],
+            ) {
+                return Err("curved joint boundary self-intersects".into());
+            }
+        }
+    }
+    if (0..boundary.len())
+        .all(|i| (boundary[i] - center).perp_dot(boundary[(i + 1) % boundary.len()] - center) > 0.0)
+    {
+        return Ok(vec![Area {
+            center,
+            boundary: boundary.to_vec(),
+        }]);
+    }
+    let triangles = super::building::triangulate_polygon_2d(boundary);
+    if triangles.len() != boundary.len() - 2 {
+        return Err("curved joint triangulation is incomplete".into());
+    }
+    let expected = (0..boundary.len())
+        .map(|i| {
+            boundary[i]
+                .as_dvec2()
+                .perp_dot(boundary[(i + 1) % boundary.len()].as_dvec2())
+                / 2.
+        })
+        .sum::<f64>();
+    let mut total = 0.;
+    let mut areas = Vec::new();
+    for ids in triangles {
+        let [a, b, c] = ids.map(|i| boundary[i]);
+        let signed = (b.as_dvec2() - a.as_dvec2()).perp_dot(c.as_dvec2() - a.as_dvec2()) / 2.;
+        if signed <= 1e-8 {
+            return Err(format!(
+                "curved joint has degenerate or reversed triangle ({signed}): {a:?}, {b:?}, {c:?}"
+            ));
+        }
+        total += signed;
+        areas.push(Area {
+            center: (a + b + c) / 3.,
+            boundary: vec![a, b, c],
+        });
+    }
+    if expected <= 0. || (total - expected).abs() > 1e-4_f64.max(expected * 1e-5) {
+        return Err("curved joint triangulation changes polygon area".into());
+    }
+    Ok(areas)
+}
+
+/// 길이로 환산한 허용오차와 f64 연산으로 비인접 경계의 실제 교차·접촉을 검사한다.
+fn joint_edges_intersect(a: Vec2, b: Vec2, c: Vec2, d: Vec2) -> bool {
+    let [a, b, c, d] = [a, b, c, d].map(|p| p.as_dvec2());
+    let ab = b - a;
+    let cd = d - c;
+    let x = [ab.perp_dot(c - a), ab.perp_dot(d - a)];
+    let y = [cd.perp_dot(a - c), cd.perp_dot(b - c)];
+    let ex = 1e-6 * ab.length();
+    let ey = 1e-6 * cd.length();
+    if ((x[0] > ex && x[1] < -ex) || (x[1] > ex && x[0] < -ex))
+        && ((y[0] > ey && y[1] < -ey) || (y[1] > ey && y[0] < -ey))
+    {
+        return true;
+    }
+    [
+        (c, x[0], a, b, ex),
+        (d, x[1], a, b, ex),
+        (a, y[0], c, d, ey),
+        (b, y[1], c, d, ey),
+    ]
+    .iter()
+    .any(|(p, cross, s, t, e)| cross.abs() <= *e && (*p - *s).dot(*p - *t) <= 1e-12)
+}

@@ -186,6 +186,194 @@ fn rotated_roads_all_generate() {
         build(&model(vec![(10, "service", &[], nodes)])).unwrap();
     }
 }
+
+/// 짧은 원본 표본 뒤에 곡선이 시작돼도 도로 띠와 교차로의 실제 개구부가 맞아야 한다.
+#[test]
+fn curved_joint_mouth_matches_trimmed_strip() {
+    let m = model(vec![
+        (
+            10,
+            "service",
+            &[("width", "6")],
+            vec![
+                (1, 0., 0.),
+                (2, 1., 0.),
+                (3, 4., 0.4),
+                (4, 20., 2.),
+                (5, 60., 2.),
+            ],
+        ),
+        (
+            20,
+            "service",
+            &[("width", "6")],
+            vec![(1, 0., 0.), (6, -60., 0.)],
+        ),
+        (
+            30,
+            "service",
+            &[("width", "6")],
+            vec![(1, 0., 0.), (7, 0., -60.)],
+        ),
+    ]);
+    let g = build(&m).unwrap();
+    for opening in &g.joints[0].openings {
+        assert!(g.blocks.iter().any(|s| {
+            let n = s.strip.left.len() - 1;
+            [
+                (s.strip.left[0], s.strip.right[0]),
+                (s.strip.left[n], s.strip.right[n]),
+            ]
+            .iter()
+            .any(|(l, r)| {
+                (l.distance(opening[0]) < 0.001 && r.distance(opening[1]) < 0.001)
+                    || (r.distance(opening[0]) < 0.001 && l.distance(opening[1]) < 0.001)
+            })
+        }));
+    }
+}
+
+/// 곡선 면을 삼각분할하더라도 실제 자기 교차나 뒤집힌 면은 허용하지 않는다.
+#[test]
+fn curved_joint_does_not_accept_crossed_polygon() {
+    assert!(
+        joint_surface_areas(
+            Vec2::ZERO,
+            &[
+                Vec2::new(-2., -2.),
+                Vec2::new(2., 2.),
+                Vec2::new(-2., 2.),
+                Vec2::new(2., -2.)
+            ]
+        )
+        .is_err()
+    );
+    assert!(
+        joint_surface_areas(
+            Vec2::ZERO,
+            &[Vec2::new(-2., -2.), Vec2::new(0., 2.), Vec2::new(2., -2.)]
+        )
+        .is_err()
+    );
+}
+
+/// 실제 원본 블록/방향을 고정해 선택·저장·동일 재생·공통 목표 도달을 검사하며 다른 경로로 재시도하지 않는다.
+#[test]
+fn real_city_joint_samples_build_routes() {
+    use crate::world::{
+        block_route,
+        road_blocks::{BlockDirection, BlockTraversal},
+        road_snapshot,
+    };
+    for (file, endpoints) in [
+        (
+            "expo-internal.osm.json",
+            [
+                (532526365, 13388325415, 8664556115),
+                (532526365, 13388325415, 8664556115),
+            ],
+        ),
+        (
+            "expo-curved-joint.osm.json",
+            [
+                (1286142779, 772406248, 794175423),
+                (1286142779, 794175423, 12468412566),
+            ],
+        ),
+        (
+            "gangnam-working-area.osm.json",
+            [
+                (129731721, 4944067989, 1906756396),
+                (504227065, 1906756396, 3089780844),
+            ],
+        ),
+    ] {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../testdata/block-real")
+            .join(file);
+        let snapshot = road_snapshot::load_road_snapshot(&path).unwrap();
+        let origin = snapshot.ways[0].nodes[0].pos;
+        let model = build_road_blocks(
+            &snapshot.ways,
+            &snapshot.restrictions,
+            &RoadGraphConfig::default(),
+        )
+        .unwrap();
+        let choose = |(way, entry, exit)| {
+            let b = model
+                .blocks
+                .iter()
+                .find(|b| {
+                    b.source_edges.iter().any(|e| e.way_id == way)
+                        && ((b.nodes[0].id == entry && b.nodes.last().unwrap().id == exit)
+                            || (b.nodes[0].id == exit && b.nodes.last().unwrap().id == entry))
+                })
+                .expect("exact source block exists");
+            BlockTraversal {
+                block_id: b.id.clone(),
+                direction: if b.nodes[0].id == entry {
+                    BlockDirection::Forward
+                } else {
+                    BlockDirection::Backward
+                },
+            }
+        };
+        let mut selected: Vec<_> = endpoints.into_iter().map(choose).collect();
+        if selected[0] == selected[1] {
+            selected.pop();
+        }
+        let result = block_route::build_block_route_course(
+            "real-map-drive",
+            &model,
+            origin,
+            NetworkSettings::default(),
+            &selected,
+            10000.,
+        )
+        .unwrap();
+        assert_eq!(result.network.blocks.len(), model.blocks.len());
+        let dir = std::env::temp_dir().join(format!(
+            "sim-real-replay-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let relative = crate::picker::model::relative_path(&dir, &path).unwrap();
+        let (saved_file, prepared) = crate::world::block_route_file::prepare_block_route_file(
+            &dir,
+            &crate::world::block_route_file::BlockRouteRequest {
+                name: "real-map-drive",
+                snapshot: &relative,
+                origin,
+                graph: &RoadGraphConfig::default(),
+                network: NetworkSettings::default(),
+                selected: &selected,
+            },
+        )
+        .unwrap();
+        let saved = dir.join("real-route.toml");
+        crate::world::block_route_file::save_block_route_file(&saved, &saved_file).unwrap();
+        let replayed = crate::world::block_route_file::load_block_route_file(&saved).unwrap();
+        assert_eq!(prepared, replayed);
+        assert_eq!(result, replayed);
+        for speed in [3.0, 8.0] {
+            let drive = crate::world::test_drive::follow_path_to_goal(
+                &replayed.course,
+                &replayed.guide,
+                speed,
+            );
+            eprintln!(
+                "REAL DRIVE {file}, length {:.1} m, speed {speed}: {drive:?}",
+                replayed.plan.length_m
+            );
+            assert_eq!(drive.impacts, 0, "{file}: {drive:?}");
+            assert!(drive.goal_reached, "{file}: {drive:?}");
+        }
+    }
+}
 /// 입력 블록 순서와 생성 반복 횟수로 결과 순서나 형상이 변하지 않는다.
 #[test]
 fn block_order_is_deterministic() {
@@ -293,7 +481,7 @@ fn drive_network(g: &RoadNetworkGeometry, path: &[Vec2]) {
     course.surfaces.clear();
     course.markings.clear();
     course.strips = g.blocks.iter().map(|b| b.strip.clone()).collect();
-    course.areas = g.joints.iter().map(|j| j.area.clone()).collect();
+    course.areas = g.joints.iter().flat_map(|j| j.areas.clone()).collect();
     course.colliders = g.colliders.clone();
     course.start = crate::world::map::start_pose(path).unwrap();
     course.goal = Some(crate::world::map::goal_pose(path).unwrap());

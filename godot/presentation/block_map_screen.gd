@@ -23,6 +23,8 @@ func _services(canvas: CanvasLayer) -> void:
 	var row := HFlowContainer.new()
 	toolbar.add_child(row)
 	candidate_list.custom_minimum_size.x = 360
+	candidate_list.fit_to_longest_item = false
+	candidate_list.clip_text = true
 	candidate_list.item_selected.connect(_focus_candidate)
 	row.add_child(candidate_list)
 	for role in [["출발로 확정", "start"], ["경유 추가", "via"], ["도착으로 확정", "goal"]]:
@@ -38,6 +40,12 @@ func _services(canvas: CanvasLayer) -> void:
 	span.add_item("지역 10 km", 10000)
 	span.tooltip_text = "선택 전에 열 지역 크기를 고르세요. 경로 길이는 최대 10 km입니다."
 	row.add_child(span)
+	for preset in [["엑스포 내부 실제 표본", "expo-internal"], ["엑스포 곡선 실제 표본", "expo-curved-joint"], ["강남 실제 표본", "gangnam-working-area"]]:
+		var button := Button.new()
+		button.text = preset[0]
+		button.tooltip_text = "오늘 검증용으로 범위를 고정한 실제 OSM 도로 표본입니다. 지역 전체가 아닙니다."
+		button.pressed.connect(_load_snapshot.bind("testdata/block-real/%s.osm.json" % preset[1]))
+		row.add_child(button)
 	selection_list.custom_minimum_size.y = 66
 	selection_list.tooltip_text = "출발·경유·도착 목록. 경유를 고르고 순서 이동 또는 삭제하세요."
 	toolbar.add_child(selection_list)
@@ -49,6 +57,8 @@ func _services(canvas: CanvasLayer) -> void:
 		button.pressed.connect(_edit_via.bind(item[1]))
 		edit.add_child(button)
 	var note := Label.new()
+	note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	note.custom_minimum_size.x = 260
 	note.text = "도로 블록·방향 선택 · 제한 통로 포함(연습용) · 지역 보정은 기존 점 경로 전용"
 	edit.add_child(note)
 	candidate_list.add_item("도로를 클릭해 블록과 방향 후보 보기")
@@ -233,6 +243,10 @@ func _process(delta: float) -> void:
 		drive_button.disabled = not route.ok
 		status.text = ("검증된 경로 %.0f m" % float(route.length_m) if route.ok else "도로 후보·방향 확인 → 역할 확정 → 경로 미리보기") + "\n" + feedback
 		status.tooltip_text = feedback
+		var diagnostics: PackedStringArray = picker.call("block_diagnostics")
+		if not diagnostics.is_empty():
+			status.text += "\n회전 제한 참조 불일치 %d건 · 해당 진입 연결 차단(자세한 내용은 마우스를 올려 확인)" % diagnostics.size()
+			status.tooltip_text += "\n" + "\n".join(diagnostics)
 	if tiles != null: _update_tiles()
 	if camera.zoom.x != overlay_zoom: overlay_layer.queue_redraw()
 	queue_redraw()
@@ -252,3 +266,18 @@ func _draw_overlay() -> void:
 	var side := direction.orthogonal() * 6.0 / scale_m
 	overlay_layer.draw_line(tip, center - direction * 5.0 / scale_m + side, Color.WHITE, 2.0 / scale_m)
 	overlay_layer.draw_line(tip, center - direction * 5.0 / scale_m - side, Color.WHITE, 2.0 / scale_m)
+
+## 실제 도구 줄 아래의 남은 지도 영역에 표본 전체가 보이게 맞춘다.
+func _fit_rect(bounds: Rect2) -> void:
+	if bounds.size.x <= 0.0 or bounds.size.y <= 0.0: return
+	var view := get_viewport_rect().size
+	var top := maxf(180.0, toolbar_panel.get_global_rect().end.y + 20.0)
+	var available := Vector2(view.x - 60.0, view.y - top - 30.0)
+	if available.x <= 0.0 or available.y <= 0.0: return
+	var value := clampf(minf(available.x / bounds.size.x, available.y / bounds.size.y), 0.0005, 8.0)
+	camera.zoom = Vector2.ONE * value
+	camera.position = bounds.get_center() - Vector2(0, top * 0.5 / value)
+	_clamp_camera()
+	last_camera = camera.position
+	last_zoom = camera.zoom.x
+	still_time = AUTO_OPEN_DELAY_S

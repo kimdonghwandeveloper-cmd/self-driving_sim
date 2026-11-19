@@ -26,6 +26,8 @@ $requiredFiles = @(
     'data/korea/manifest.toml', 'data/korea/roads.pack', 'data/korea/places.pack',
     'config/vehicle.toml', 'config/input.toml', 'config/camera.toml', 'config/road_graph.toml',
     'godot/project.godot', 'godot/sim_godot.gdextension',
+    'godot/presentation/block_map_screen.gd', 'godot/tests/block_real_test.gd',
+    'testdata/block-real/expo-internal.osm.json', 'testdata/block-real/expo-curved-joint.osm.json', 'testdata/block-real/gangnam-working-area.osm.json',
     'godot/.godot/extension_list.cfg', 'godot/.godot/global_script_class_cache.cfg',
     'godot/tests/smoke_test.gd', 'godot/tests/map_course_test.gd',
     'godot/tests/yeosu_convention_test.gd', 'godot/assets/maps/yeosu-expo/convention-background.glb',
@@ -159,6 +161,7 @@ if ($Validate) {
         $checks = @(
             @{ Script = 'smoke_test.gd'; Pattern = 'SMOKE OK:' },
             @{ Script = 'map_course_test.gd'; Pattern = 'MAP COURSE OK:' },
+            @{ Script = 'block_real_test.gd'; Pattern = 'REAL BLOCK UI OK' },
             @{ Script = 'yeosu_convention_test.gd'; Pattern = 'CONVENTION ALL SIX OK' },
             @{ Script = 'osm_route_drive_test.gd'; Pattern = 'OSM ROUTE DRIVE OK:' },
             @{ Script = 'scenario_record_test.gd'; Pattern = 'SCENARIO RECORD OK:' }

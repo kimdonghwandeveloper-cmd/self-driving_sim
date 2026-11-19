@@ -22,6 +22,8 @@ fn ready_in(gear: Gear) -> VehicleState {
 /// 경로 추종 주행 결과.
 #[derive(Debug)]
 pub struct FollowResult {
+    /// 실제 공통 경로 평가기가 목표 반경 진입을 확인했는지.
+    pub goal_reached: bool,
     /// 멈춘 곳에서 중심선 끝까지 남은 길이(m).
     pub remaining_m: f32,
     /// 이동이 막힌 충돌 횟수.
@@ -38,6 +40,21 @@ pub struct FollowResult {
 /// 중심선을 따라 4 m 앞의 목표점으로 조향각 `atan(2L·sin α / Ld)`를 정하고, 속도는 비례 제어한다.
 /// 끝 벽 앞 12 m(중심선 길이 기준)에 닿거나 시간이 다하면 멈춘다. 운동 모델·충돌 판정은 실제 것을 쓴다.
 pub fn follow_path(course: &CourseDef, path: &[Vec2], target_speed_mps: f32) -> FollowResult {
+    follow_path_until(course, path, target_speed_mps, false)
+}
+
+/// 기존 끝 12 m 정지 규칙 대신 실제 주행과 같은 목표 도달 판정까지 시험한다.
+pub fn follow_path_to_goal(course: &CourseDef, path: &[Vec2], speed: f32) -> FollowResult {
+    follow_path_until(course, path, speed, true)
+}
+
+/// 실제 운동·충돌 모델과 공통 목표 평가기로 경로를 추종하되 기존 시험의 정지 규칙은 유지한다.
+fn follow_path_until(
+    course: &CourseDef,
+    path: &[Vec2],
+    target_speed_mps: f32,
+    to_goal: bool,
+) -> FollowResult {
     const LOOKAHEAD_M: f32 = 4.0;
     let cumulative: Vec<f32> = std::iter::once(0.0)
         .chain(path.windows(2).scan(0.0, |acc, p| {
@@ -54,6 +71,8 @@ pub fn follow_path(course: &CourseDef, path: &[Vec2], target_speed_mps: f32) -> 
     let mut contact = ContactState::default();
     let (mut impacts, mut segment, mut along, mut max_offset) = (0, 0usize, 0.0f32, 0.0f32);
     let mut first_impact = None;
+    let mut evaluator =
+        super::route_evaluation::RouteDriveEvaluator::from_course(course, path).ok();
     // 장거리 시험은 실제 속도 상한으로 계산한 예상 시간의 두 배를 주되 최대 한 시간으로 제한한다.
     let speed = target_speed_mps.min(params.max_forward_speed_mps).max(1.0);
     let seconds = (total / speed * 2.0 + 60.0).clamp(600.0, 3600.0) as usize;
@@ -72,7 +91,7 @@ pub fn follow_path(course: &CourseDef, path: &[Vec2], target_speed_mps: f32) -> 
             .unwrap();
         (segment, along) = (best, position);
         max_offset = max_offset.max(offset);
-        if total - along < 12.0 {
+        if !to_goal && total - along < 12.0 {
             break;
         }
         let target = road_geom::point_at_distance(path, (along + LOOKAHEAD_M).min(total))
@@ -90,7 +109,7 @@ pub fn follow_path(course: &CourseDef, path: &[Vec2], target_speed_mps: f32) -> 
             brake: ((speed - target_speed_mps) * 2.0).clamp(0.0, 1.0),
             steering: (steer / max_steer).clamp(-1.0, 1.0),
         });
-        if step_with_obstacles(
+        let collided = step_with_obstacles(
             &mut state,
             &mut motion,
             &params,
@@ -99,13 +118,20 @@ pub fn follow_path(course: &CourseDef, path: &[Vec2], target_speed_mps: f32) -> 
             &obstacles,
             &mut contact,
         )
-        .is_some()
-        {
+        .is_some();
+        if collided {
             impacts += 1;
             first_impact.get_or_insert((Vec2::new(motion.x_m, motion.z_m), motion.heading_rad));
         }
+        if let Some(evaluator) = evaluator.as_mut() {
+            evaluator.update(Vec2::new(motion.x_m, motion.z_m), collided);
+            if to_goal && evaluator.is_goal_reached() {
+                break;
+            }
+        }
     }
     FollowResult {
+        goal_reached: evaluator.is_some_and(|e| e.is_goal_reached()),
         remaining_m: total - along,
         impacts,
         max_offset_m: max_offset,

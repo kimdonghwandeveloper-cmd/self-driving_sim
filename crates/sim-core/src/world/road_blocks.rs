@@ -15,7 +15,7 @@ use super::route_plan::{RoadGraphConfig, WidthSource};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// 분할·정렬 규칙 판본. 규칙이 바뀌면 저장 블록의 판본도 구분한다.
-pub const BLOCK_MODEL_VERSION: &str = "osm-road-blocks-v1";
+pub const BLOCK_MODEL_VERSION: &str = "osm-road-blocks-v2";
 
 /// 원본 식별자와 정규화한 구간 순서로 만든 블록 식별자.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
@@ -83,6 +83,8 @@ pub struct RoadBlockModel {
     pub blocks: Vec<RoadBlock>,
     pub connections: Vec<BlockConnection>,
     pub restrictions: Vec<TurnRestriction>,
+    /// 불완전 관계를 삭제하지 않고 격리한 위치를 사용자에게 알린다.
+    pub diagnostics: Vec<String>,
 }
 
 /// 원본 노드·구간·속성을 기준으로 블록을 구성하고 일방통행·회전 제한에 맞는 접속을 만든다.
@@ -153,26 +155,49 @@ pub fn build_road_blocks(
         }
     }
     let mut rules = BTreeMap::new();
+    let mut quarantined = BTreeSet::new();
+    let mut diagnostics = Vec::new();
     for &restriction in restrictions {
         if rules.contains_key(&restriction.id) {
             return Err(format!("duplicate restriction {}", restriction.id));
         }
         let from = ordered.get(&restriction.from_way);
         let to = ordered.get(&restriction.to_way);
-        let (Some(from), Some(to)) = (from, to) else {
+        let Some(from) = from else {
             return Err(format!(
                 "restriction {} refers to a missing way",
                 restriction.id
             ));
         };
-        if ![from, to]
-            .iter()
-            .all(|way| way.nodes.iter().any(|node| node.id == restriction.via_node))
-        {
+        if to.is_none() && from.nodes.iter().any(|n| n.id == restriction.via_node) {
+            quarantined.insert((restriction.via_node, restriction.from_way));
+            diagnostics.push(format!("회전 제한 {}의 진출 way {}가 현재 작업 범위 밖입니다. 원본을 보존하고 진입 way {}의 via {} 연결을 차단했습니다.",restriction.id,restriction.to_way,restriction.from_way,restriction.via_node));
+            rules.insert(restriction.id, restriction);
+            continue;
+        }
+        let Some(to) = to else {
+            return Err(format!(
+                "restriction {} refers to a missing way",
+                restriction.id
+            ));
+        };
+        let from_has = from.nodes.iter().any(|n| n.id == restriction.via_node);
+        let to_has = to.nodes.iter().any(|n| n.id == restriction.via_node);
+        if !from_has && !to_has {
             return Err(format!(
                 "restriction {} has an invalid via node {}",
                 restriction.id, restriction.via_node
             ));
+        }
+        if !from_has || !to_has {
+            if from_has {
+                quarantined.insert((restriction.via_node, restriction.from_way));
+            } else {
+                for node in &from.nodes {
+                    quarantined.insert((node.id, restriction.from_way));
+                }
+            }
+            diagnostics.push(format!("회전 제한 {}의 접속 참조 불일치: 원본을 보존하고 진입 way {}의 불확실한 연결을 차단했습니다(via {}).",restriction.id,restriction.from_way,restriction.via_node));
         }
         // 지정 출구가 허용 목록 밖이어도 관계를 보존해야 다른 출구로 잘못 진입하지 않는다.
         rules.insert(restriction.id, restriction);
@@ -213,12 +238,14 @@ pub fn build_road_blocks(
         }
     }
     blocks.sort_by(|a, b| a.id.cmp(&b.id));
-    let connections = connections(&blocks, &restrictions);
+    let connections = connections(&blocks, &restrictions, &quarantined);
+    diagnostics.sort();
     Ok(RoadBlockModel {
         version: BLOCK_MODEL_VERSION,
         blocks,
         connections,
         restrictions,
+        diagnostics,
     })
 }
 
@@ -467,7 +494,11 @@ fn traversal_ends(block: &RoadBlock) -> Vec<TraversalEnds> {
 }
 
 /// 공유 끝점의 연결만 열거하고 금지·지정 회전과 블록 내 즉시 U턴을 제외한다.
-fn connections(blocks: &[RoadBlock], restrictions: &[TurnRestriction]) -> Vec<BlockConnection> {
+fn connections(
+    blocks: &[RoadBlock],
+    restrictions: &[TurnRestriction],
+    quarantined: &BTreeSet<(u64, u64)>,
+) -> Vec<BlockConnection> {
     let traversals: Vec<_> = blocks.iter().flat_map(traversal_ends).collect();
     let mut entries: BTreeMap<u64, Vec<&TraversalEnds>> = BTreeMap::new();
     let mut rules: BTreeMap<(u64, u64), Vec<&TurnRestriction>> = BTreeMap::new();
@@ -482,6 +513,9 @@ fn connections(blocks: &[RoadBlock], restrictions: &[TurnRestriction]) -> Vec<Bl
     }
     let mut result = BTreeSet::new();
     for from in &traversals {
+        if quarantined.contains(&(from.exit, from.last_way)) {
+            continue;
+        }
         for &to in entries.get(&from.exit).into_iter().flatten() {
             if from.traversal.block_id == to.traversal.block_id
                 && !(from.closed && from.traversal.direction == to.traversal.direction)
