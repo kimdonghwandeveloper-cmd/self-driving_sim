@@ -7,10 +7,11 @@
     [ValidatePattern('^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$')][string]$Repository = 'kimdonghwandeveloper-cmd/self-driving_sim',
     [switch]$Publish,
     [switch]$PrepareOnly,
-    [string]$EnvFile = (Join-Path (Split-Path $PSScriptRoot -Parent) '.env')
+    [string]$EnvFile = ''
 )
 $ErrorActionPreference = 'Stop'
 . "$PSScriptRoot/release-env.ps1"
+if (-not $EnvFile) { $EnvFile = Join-Path (Split-Path $PSScriptRoot -Parent) '.env' }
 $localSettings = Read-ReleaseEnv $EnvFile
 if ([string]::IsNullOrWhiteSpace($env:GITHUB_TOKEN) -and $localSettings.GITHUB_TOKEN) { $env:GITHUB_TOKEN = $localSettings.GITHUB_TOKEN }
 if (-not $PrivateKeyFile) { $PrivateKeyFile = $localSettings.SIMULATOR_SIGNING_KEY_FILE }
