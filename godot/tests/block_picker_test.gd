@@ -107,6 +107,8 @@ func _check_selection_feedback(screen: Node, blocks: Array, start: Dictionary, g
 	_check(str(screen.feedback).contains("방향"), "direction error not translated")
 	var lines = screen.get("failure_lines")
 	_check(lines != null and lines.size() == 2, "failed pair not highlighted")
+	_check(screen.failure_blocks.size() == 2 and screen.failure_blocks[0].id == start.id and screen.failure_blocks[1].id == goal.id, "highlighted blocks do not match failed pair")
+	_check(screen.selection_list.get_item_custom_fg_color(0) == Color("ff7474"), "failed source list item not highlighted")
 	var parallel: Dictionary = blocks.filter(func(b): return b.name == "parallel")[0]
 	_choose(screen, parallel, "forward", "goal")
 	_check(screen.picker.call("block_selections") == before, "disconnected block was committed")
