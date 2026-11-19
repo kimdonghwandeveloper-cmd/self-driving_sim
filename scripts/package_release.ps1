@@ -1,7 +1,8 @@
-# Autonomous Driving Shuttle Simulation - Standalone Release Packager
+﻿# Autonomous Driving Shuttle Simulation - Standalone Release Packager
 param(
     [string]$OutputDir = "dist/self-driving-sim-release",
     [string]$GodotPath = "",
+    [ValidateRange(0,2147483647)][int]$ReleaseVersion = 0,
     [switch]$SkipBuild = $false,
     [switch]$Validate = $true
 )
@@ -20,6 +21,7 @@ Write-Host "==========================================================" -Foregro
 $outFull = Get-ReleaseOutputPath $repoRoot $OutputDir
 Assert-ReleaseOwnership $outFull $repoRoot
 $runtime = Get-ReleaseGodot $GodotPath
+Assert-ReleaseFiles $repoRoot @('scripts/build-launcher.ps1', 'scripts/run-simulator.ps1', 'scripts/updater-support.ps1')
 $requiredFiles = @(
     'data/korea/manifest.toml', 'data/korea/roads.pack', 'data/korea/places.pack',
     'config/vehicle.toml', 'config/input.toml', 'config/camera.toml', 'config/road_graph.toml',
@@ -70,7 +72,7 @@ if (Test-Path -LiteralPath $outFull) {
     Remove-Item -LiteralPath $outFull -Recurse -Force
 }
 New-Item -ItemType Directory -Path $outFull -Force | Out-Null
-$packageMarker = @{ format = 'simulator-release-bundle-v1'; repository = $repoRoot; validated = $false }
+$packageMarker = @{ format = 'simulator-release-bundle-v1'; repository = $repoRoot; validated = $false; release_version = $ReleaseVersion }
 $packageMarker | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $outFull '.simulator-release.json') -Encoding UTF8
 New-Item -ItemType Directory -Path (Join-Path $outFull "bin") -Force | Out-Null
 New-Item -ItemType Directory -Path (Join-Path $outFull "godot") -Force | Out-Null
@@ -109,10 +111,16 @@ Assert-ReleaseFiles $outFull ($requiredFiles + @('godot.exe', 'godot_console.exe
 
 # 4. Launcher script and documentation
 Write-Host "`n[4/5] Creating launcher scripts and distribution notes..." -ForegroundColor Yellow
+
+# 서명 키와 게시 주소는 배포 담당자가 설정한다. 초기 번들은 오프라인 EXE 실행을 지원한다.
+New-Item -ItemType Directory -Path (Join-Path $outFull 'updater') | Out-Null
+Copy-Item -LiteralPath (Join-Path $repoRoot 'scripts/run-simulator.ps1'), (Join-Path $repoRoot 'scripts/updater-support.ps1') -Destination (Join-Path $outFull 'updater')
+& (Join-Path $repoRoot 'scripts/build-launcher.ps1') -OutputPath (Join-Path $outFull 'Simulator.exe')
+@{enabled=$false; url=''; public_key=''} | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $outFull 'update.json') -Encoding UTF8
 $batText = "@echo off`r`nchcp 65001 > nul`r`ntitle Self-Driving Simulator`r`necho ==========================================================`r`necho   Self-Driving Shuttle Simulator (Standalone Bundle)`r`necho ==========================================================`r`necho.`r`nif exist `"%~dp0godot.exe`" (`r`n    `"%~dp0godot.exe`" --path `"%~dp0godot`"`r`n) else (`r`n    echo [Info] godot.exe not found in bundle root.`r`n    echo        Place Godot 4.x executable as 'godot.exe' in this folder to launch.`r`n    pause`r`n)"
 [System.IO.File]::WriteAllText((Join-Path $outFull "START_SIMULATOR.bat"), $batText, (New-Object System.Text.UTF8Encoding($false)))
 
-$readmeText = "# Self-Driving Shuttle Simulator - Standalone Release Bundle`r`n`r`n### System Requirements`r`n- OS: Windows 10/11 (64-bit)`r`n- Graphics: Vulkan 1.2+ (Forward+) or OpenGL 3.3+ (Compatibility)`r`n- Runtime: Godot 4.7.2+ executable (godot.exe included or placed in root)`r`n`r`n### How to Run`r`n1. Double-click START_SIMULATOR.bat (or run `godot.exe --path godot`).`r`n2. Select a course (e.g., Yeosu Expo OSM, Nationwide OSM, or Training) from the main menu.`r`n3. Click '▶ Start Simulation' to begin driving.`r`n`r`n### Vehicle Controls`r`n- W / S (or Up / Down): Throttle / Brake`r`n- A / D (or Left / Right): Steering`r`n- I / K / J / L: Gear P / N / D / R`r`n- Enter: Engine ON / OFF`r`n- Space / Backspace: Emergency Stop / Release`r`n- R: Reset vehicle position`r`n- C: Switch between 1st-person interior and 3rd-person top-down overhead view`r`n- Esc: Return to Main Menu`r`n`r`n### Map Data & Attribution`r`n- Nationwide Road Map: OpenStreetMap (c) OpenStreetMap contributors (ODbL 1.0)"
+$readmeText = "# Self-Driving Shuttle Simulator - Standalone Release Bundle`r`n`r`n### System Requirements`r`n- OS: Windows 10/11 (64-bit)`r`n- Graphics: Vulkan 1.2+ (Forward+) or OpenGL 3.3+ (Compatibility)`r`n- Runtime: Godot 4.7.2+ executable (godot.exe included or placed in root)`r`n`r`n### How to Run`r`n1. Double-click Simulator.exe (START_SIMULATOR.bat remains available; or run `godot.exe --path godot`).`r`n2. Select a course (e.g., Yeosu Expo OSM, Nationwide OSM, or Training) from the main menu.`r`n3. Click '▶ Start Simulation' to begin driving.`r`n`r`n### Vehicle Controls`r`n- W / S (or Up / Down): Throttle / Brake`r`n- A / D (or Left / Right): Steering`r`n- I / K / J / L: Gear P / N / D / R`r`n- Enter: Engine ON / OFF`r`n- Space / Backspace: Emergency Stop / Release`r`n- R: Reset vehicle position`r`n- C: Switch between 1st-person interior and 3rd-person top-down overhead view`r`n- Esc: Return to Main Menu`r`n`r`n### Map Data & Attribution`r`n- Nationwide Road Map: OpenStreetMap (c) OpenStreetMap contributors (ODbL 1.0)"
 [System.IO.File]::WriteAllText((Join-Path $outFull "README.txt"), $readmeText, (New-Object System.Text.UTF8Encoding($false)))
 
 # Godot 프로세스를 헤드리스로 실행하고 표준 출력과 에러를 포착하여 성공 여부를 반환하는 헬퍼 함수

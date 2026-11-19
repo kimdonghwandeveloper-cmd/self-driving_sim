@@ -54,6 +54,7 @@ $ast = [Management.Automation.Language.Parser]::ParseFile($script, [ref]$tokens,
 if ($parseErrors.Count) { throw $parseErrors[0] }
 $assignment = $ast.Find({ param($node) $node -is [Management.Automation.Language.AssignmentStatementAst] -and $node.Left.Extent.Text -eq '$requiredFiles' }, $true)
 $required = @($assignment.Right.FindAll({ param($node) $node -is [Management.Automation.Language.StringConstantExpressionAst] }, $true) | ForEach-Object { $_.Value })
+$required += @('scripts/build-launcher.ps1', 'scripts/run-simulator.ps1', 'scripts/updater-support.ps1')
 foreach ($file in $required) { Write-FixtureFile $file }
 New-Item -ItemType Directory -Path (Join-Path $fixture 'godot/.godot/imported') -Force | Out-Null
 foreach ($file in $required) {

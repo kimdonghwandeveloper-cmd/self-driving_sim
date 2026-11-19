@@ -464,3 +464,6 @@ powershell.exe -NoProfile -File tools/test-godot-cold-import.ps1 -Godot '<Godot 
 경로 탐색은 `motor_vehicle`를 `access`보다 우선하며 명시된 값 중 `yes`, `permissive`, `designated`만 허용합니다. 기본 모드는 `private`, `no`, `customers`, `destination` 등 접근 제한 도로를 제외합니다. **제한 도로 포함 · 연습용**을 켜면 이 도로도 포함하지만 실제 출입 허가를 뜻하지 않습니다. 일방통행·회전 제한·물리적 차량 한계는 유지합니다. 옵션은 `include_restricted`로 저장·재생되고 주행 안내에도 표시됩니다. 차단기·시간대 제한·현장 출입 가능 여부를 완전히 판단하는 기능은 아직 없습니다.
 
 엑스포 내부 도로 보완 검증은 [자료·시험 기록](docs/osm-10km-and-expo-validation.md)을 참고하세요. `--full-data` 시험에는 새 생성기로 재생성한 전국 팩이 필요합니다. 기존 팩을 쓰면 코드만 갱신해도 내부 도로가 복구되지 않습니다.
+# Windows 실행 파일과 업데이트
+
+독립 번들의 `Simulator.exe`로 실행한다. 최초 번들의 자동 업데이트는 꺼져 있으며 서버 주소·공개 키를 설정하면 다음 실행 때 서명과 파일 해시를 검증해 새 세대를 적용한다. 실패하면 기존 세대로 실행한다. 실행 EXE와 함께 번들 전체가 필요하다. 게시 방법·보존 정책·현재 한계는 [Windows 업데이트 가이드](docs/windows-updates.md)를 참고한다.
