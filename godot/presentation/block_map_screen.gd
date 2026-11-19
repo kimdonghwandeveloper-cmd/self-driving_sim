@@ -147,7 +147,7 @@ func _show_candidates(at: Vector2) -> void:
 	candidate_list.clear()
 	for item in candidate_items:
 		var direction := "정방향 →" if item.direction == "forward" else "역방향 ←"
-		candidate_list.add_item("%s · %s · %.0f m" % [item.name, direction, item.length_m])
+		candidate_list.add_item("%s · %s · %.0f m" % [_road_title(item), direction, item.length_m])
 		candidate_list.set_item_tooltip(candidate_list.item_count - 1, "폭 %.1f m · %s→%s · way %s" % [item.width_m, item.from_node, item.to_node, item.way_id])
 	candidate_list.disabled = candidate_items.is_empty()
 	if candidate_items.is_empty():
@@ -158,6 +158,13 @@ func _show_candidates(at: Vector2) -> void:
 		_focus_candidate(0)
 	feedback = "후보를 골라 화살표를 확인한 뒤 출발·경유·도착으로 확정하세요."
 	overlay_layer.queue_redraw()
+
+## 도로명이 없는 경우 OSM 내부 분류 대신 이해하기 쉬운 도로 이름을 표시한다.
+func _road_title(item: Dictionary) -> String:
+	var title := str(item.name)
+	if title == "service": return "시설 내부 도로"
+	if title in ["residential", "tertiary", "secondary", "primary", "unclassified", "living_street", "road", "track"]: return "이름 없는 도로"
+	return title
 
 ## 후보를 바꿔도 확정 슬롯은 유지하고 도로 강조·방향 화살표만 갱신한다.
 func _focus_candidate(index: int) -> void:
@@ -329,7 +336,7 @@ func _refresh_route() -> void:
 	var selected_points := PackedVector2Array()
 	for item in selected_blocks:
 		var role := "출발" if item.role == "start" else ("도착" if item.role == "goal" else "경유 %d" % (int(item.index)+1))
-		selection_list.add_item("%s · %s · %s" % [role, item.name, "→" if item.direction == "forward" else "←"])
+		selection_list.add_item("%s · %s · %s" % [role, _road_title(item), "→" if item.direction == "forward" else "←"])
 		selection_list.set_item_tooltip(selection_list.item_count - 1, "%s→%s · way %s" % [item.from_node, item.to_node, item.way_id])
 		if failure_blocks.any(func(b): return b.id == item.id):
 			selection_list.set_item_custom_fg_color(selection_list.item_count - 1, Color("ff7474"))
