@@ -52,10 +52,14 @@ foreach ($name in $required) {
     $records += @{path=$name; size=(Get-Item -LiteralPath $file).Length; sha256=(Get-FileHash -LiteralPath $file).Hash.ToLowerInvariant()}
 }
 $manifest = @{format='simulator-update-v1';version=1;files=$records}
+$records += @{path='godot/.gdignore';size=0;sha256='e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'}
+$manifest.files=$records
 $script:downloads = 0
 $fetch = { param($path, $destination) $script:downloads++; Copy-Item -LiteralPath (Join-Path $payload $path) -Destination $destination }
 $current = Install-UpdateGeneration $install @{version=0;path=$install} $manifest $fetch
 if ($current.version -ne 1 -or $downloads -ne ($required.Count - 1)) { throw 'Commit/reuse failed' }
+if (-not (Test-Path -LiteralPath (Join-Path $current.path 'godot/.gdignore'))) { throw 'Empty file was not generated' }
+$checks++
 if ([IO.File]::ReadAllText((Join-Path $current.path 'config/vehicle.toml')) -ne 'user-setting' -or [IO.File]::ReadAllText((Join-Path $current.path 'cache/routes/saved.toml')) -ne 'user-route') { throw 'User data lost' }
 $checks += 3
 $manifest.version = 2

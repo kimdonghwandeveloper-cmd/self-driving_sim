@@ -32,6 +32,7 @@ if ($GitHubAssets) {
 }
 New-Item -ItemType Directory -Path (Join-Path $output 'files') | Out-Null
 foreach ($file in $files) {
+    if ($GitHubAssets -and $file.size -eq 0) { continue }
     $target = Join-Path (Join-Path $output 'files') $file.path
     if ($GitHubAssets) { $target = Join-Path $output ($file.sha256 + '.blob') }
     New-Item -ItemType Directory -Path (Split-Path $target -Parent) -Force | Out-Null

@@ -89,7 +89,8 @@ foreach ($file in $manifest.files) {
     New-Item -ItemType Directory -Path (Split-Path $destination -Parent) -Force | Out-Null
     $old = Join-Path $current.path $file.path
     # 전국 지도 등 내용이 같은 파일은 다운로드하지 않고 기존 세대에서 복사한다.
-    if (Test-UpdateFile $old $file) { Copy-Item -LiteralPath $old -Destination $destination } else {
+    if ($file.size -eq 0) { [IO.File]::WriteAllBytes($destination, [byte[]]@()) }
+    elseif (Test-UpdateFile $old $file) { Copy-Item -LiteralPath $old -Destination $destination } else {
         $escaped = ($file.path.Split('/') | ForEach-Object { [uri]::EscapeDataString($_) }) -join '/'
         & $Download $escaped $destination $file.sha256
     }

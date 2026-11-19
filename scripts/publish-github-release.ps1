@@ -7,6 +7,7 @@
     [ValidatePattern('^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$')][string]$Repository = 'kimdonghwandeveloper-cmd/self-driving_sim',
     [switch]$Publish,
     [switch]$PrepareOnly,
+    [switch]$ResumeDraft,
     [string]$EnvFile = ''
 )
 $ErrorActionPreference = 'Stop'
@@ -48,10 +49,26 @@ try { $null = Invoke-RestMethod -Uri "$api/commits/$Commit" -Headers $headers } 
 $tag = "sim-v$Version"
 # 업로드가 중단되면 draft를 그대로 남긴다. 모든 자산 업로드 성공 전에는 latest가 바뀌지 않는다.
 $body = @{tag_name=$tag;target_commitish=$Commit;name="Simulator v$Version";draft=$true;prerelease=$false;body='Windows simulator. Download Simulator-Windows ZIP, extract the whole folder, and run Simulator.exe.'} | ConvertTo-Json
-$release = Invoke-RestMethod -Method Post -Uri "$api/releases" -Headers $headers -ContentType 'application/json' -Body $body
+if ($ResumeDraft) {
+    $release = Invoke-RestMethod -Uri "$api/releases/tags/$tag" -Headers $headers
+    if (-not $release.draft) { throw 'Only an unpublished draft may be resumed' }
+    $release = Invoke-RestMethod -Method Patch -Uri "$api/releases/$($release.id)" -Headers $headers -ContentType 'application/json' -Body $body
+} else {
+    $release = Invoke-RestMethod -Method Post -Uri "$api/releases" -Headers $headers -ContentType 'application/json' -Body $body
+}
 $upload = $release.upload_url -replace '\{.*$', ''
+$existing = @(Invoke-RestMethod -Uri "$api/releases/$($release.id)/assets?per_page=100" -Headers $headers)
+if ($existing.Count -eq 100) { $existing += @(Invoke-RestMethod -Uri "$api/releases/$($release.id)/assets?per_page=100&page=2" -Headers $headers) }
+$done=0
 foreach ($file in @(Get-ChildItem -LiteralPath $output -File | Sort-Object Name)) {
+    if ($file.Length -eq 0) { throw 'GitHub does not accept empty assets' }
+    $old=@($existing | Where-Object { $_.name -eq $file.Name })
+    $digest='sha256:'+(Get-FileHash -LiteralPath $file.FullName).Hash.ToLowerInvariant()
+    if ($old.Count -eq 1 -and $old[0].digest -eq $digest -and $old[0].size -eq $file.Length -and $old[0].state -eq 'uploaded') { $done++; continue }
+    foreach ($asset in $old) { Invoke-RestMethod -Method Delete -Uri "$api/releases/assets/$($asset.id)" -Headers $headers | Out-Null }
     Invoke-RestMethod -Method Post -Uri ($upload + '?name=' + [uri]::EscapeDataString($file.Name)) -Headers $headers -ContentType 'application/octet-stream' -InFile $file.FullName | Out-Null
+    $done++
+    if ($done % 10 -eq 0) { Write-Output "Release assets completed: $done" }
 }
 if ($Publish) {
     Invoke-RestMethod -Method Patch -Uri "$api/releases/$($release.id)" -Headers $headers -ContentType 'application/json' -Body '{"draft":false,"make_latest":"true"}' | Out-Null
