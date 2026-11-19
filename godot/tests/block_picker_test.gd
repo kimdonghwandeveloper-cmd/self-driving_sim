@@ -19,6 +19,7 @@ func _run() -> void:
 		_check(blocks.size() >= 3, "blocks missing")
 		var start: Dictionary = blocks.filter(func(b): return b.name == "start")[0]
 		var goal: Dictionary = blocks.filter(func(b): return b.name == "goal")[0]
+		_check_selection_feedback(screen, blocks, start, goal)
 		var start_direction: String = start.directions[0]
 		var goal_direction: String = goal.directions[0]
 		screen._show_candidates(start.line[0].lerp(start.line[-1], 0.5))
@@ -59,10 +60,14 @@ func _run() -> void:
 		_check(screen.picker.call("block_selections") == before, "failed load discarded selection")
 		_check(not screen.picker.call("choose_block", start.id, "invalid", "start").ok, "invalid direction accepted")
 		_check(not screen.picker.call("edit_block_via", 0, -9223372036854775808).ok, "invalid edit accepted")
-		screen.picker.call("choose_block", start.id, start_direction, "via")
-		_check(not screen.picker.call("block_route").ok, "edit kept previous successful preview")
+		_choose(screen, start, start_direction, "via")
+		_check(screen.picker.call("block_selections") == before, "duplicate edit changed selection")
+		_check(screen.picker.call("block_route").ok, "rejected edit destroyed existing valid preview")
+		screen._process(0.0)
+		_check(screen.drive_button.disabled, "drive enabled while failed edit highlighted")
 		screen._preview_blocks()
-		_check(not screen.picker.call("block_route").ok, "duplicate selection silently rerouted")
+		_check(screen.picker.call("block_route").ok, "preserved selection failed preview")
+		_check(screen.failure_lines.is_empty(), "preview did not clear failure highlights")
 	screen.free()
 	var main: Node = load("res://main.tscn").instantiate()
 	root.add_child(main)
@@ -92,3 +97,21 @@ func _choose(screen: Node, block: Dictionary, direction: String, role: String) -
 ## 실패한 기대 동작을 모아 마지막에 함께 출력한다.
 func _check(ok: bool, message: String) -> void:
 	if not ok: failures.append(message)
+
+## 실패한 확정은 이전 목록을 유지하고 두 도로 강조와 방향·연결별 안내를 즉시 반환한다.
+func _check_selection_feedback(screen: Node, blocks: Array, start: Dictionary, goal: Dictionary) -> void:
+	_choose(screen, start, "forward", "start")
+	var before: Array = screen.picker.call("block_selections")
+	_choose(screen, goal, "backward", "goal")
+	_check(screen.picker.call("block_selections") == before, "unreachable direction was committed")
+	_check(str(screen.feedback).contains("방향"), "direction error not translated")
+	var lines = screen.get("failure_lines")
+	_check(lines != null and lines.size() == 2, "failed pair not highlighted")
+	var parallel: Dictionary = blocks.filter(func(b): return b.name == "parallel")[0]
+	_choose(screen, parallel, "forward", "goal")
+	_check(screen.picker.call("block_selections") == before, "disconnected block was committed")
+	_check(str(screen.feedback).contains("연결"), "connection error not distinguished")
+	_choose(screen, goal, "forward", "goal")
+	lines = screen.get("failure_lines")
+	_check(lines != null and lines.is_empty(), "successful edit kept stale failure highlight")
+	screen._clear_points()

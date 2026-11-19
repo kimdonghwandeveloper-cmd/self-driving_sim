@@ -8,6 +8,8 @@ var selected_blocks: Array = []
 var focus_line := PackedVector2Array()
 var preview_button := Button.new()
 var span := OptionButton.new()
+var failure_lines: Array = []
+var failure_blocks: Array = []
 
 ## 기존 지도 서비스 위에 블록 후보·확정·경유 편집 제어를 붙인다.
 func _services(canvas: CanvasLayer) -> void:
@@ -98,7 +100,7 @@ func _confirm_block(role: String) -> void:
 		return
 	var item: Dictionary = candidate_items[index]
 	var result: Dictionary = picker.call("choose_block", item.id, item.direction, role)
-	feedback = "선택을 반영했습니다. 미리보기로 경로와 도로 형상을 확인하세요." if result.ok else str(result.error)
+	_apply_selection_result(result, "연결 확인 완료 · 미리보기로 도로 형상을 확인하세요.")
 	_refresh_route()
 
 ## 확정된 경유만 한 칸 옮기거나 삭제하고 화면을 다시 만든다.
@@ -108,14 +110,23 @@ func _edit_via(offset: int) -> void:
 		feedback = "목록에서 경유 항목을 고르세요."
 		return
 	var result: Dictionary = picker.call("edit_block_via", selected_blocks[selected[0]].index, offset)
-	feedback = "경유를 편집했습니다. 미리보기를 다시 실행하세요." if result.ok else str(result.error)
+	_apply_selection_result(result, "경유 연결 확인 완료 · 미리보기를 다시 실행하세요.")
 	_refresh_route()
 
 ## 계산 실패를 그대로 표시하고 자동 우회나 기존 성공 결과 사용을 하지 않는다.
 func _preview_blocks() -> void:
 	var result: Dictionary = picker.call("preview_blocks")
-	feedback = "경로 검증 완료 · 저장하거나 주행할 수 있습니다." if result.ok else str(result.error)
+	_apply_selection_result(result, "경로 검증 완료 · 저장하거나 주행할 수 있습니다.")
 	_refresh_route()
+
+## 실패한 확정은 반영하지 않고 문제의 두 블록을 붉게 표시하며 성공 시 강조를 지운다.
+func _apply_selection_result(result: Dictionary, success_message: String) -> void:
+	failure_lines.clear()
+	failure_blocks = result.get("highlights", [])
+	for item in failure_blocks:
+		failure_lines.append(item.line)
+	feedback = success_message if result.ok else str(result.error)
+	overlay_layer.queue_redraw()
 
 ## 새 지역을 열면 선택을 지우므로 기존 선택이 있는 동안에는 지역 교체를 명시적으로 막는다.
 func _ensure_region(at: Vector2) -> bool:
@@ -193,15 +204,21 @@ func _clear_candidates() -> void:
 	candidate_list.add_item("도로를 클릭해 블록과 방향 후보 보기")
 	candidate_list.disabled = true
 	focus_line.clear()
+	failure_lines.clear()
+	failure_blocks.clear()
+	feedback = ""
 
 ## 미리보기한 블록 경로를 새 파일로 저장한다. 덮어쓰기는 지원하지 않는다.
 func _save_route() -> void:
+	if not failure_lines.is_empty():
+		feedback = "실패한 선택을 올바른 도로·방향으로 다시 확정한 뒤 저장하세요."
+		return
 	var result: Dictionary = picker.call("save_blocks", route_name.text)
 	feedback = "저장: " + str(result.path) if result.ok else str(result.error)
 
 ## 검증한 결과를 고유 이름으로 저장해 기존 공통 지도 주행 화면으로 넘긴다.
 func _drive_route() -> void:
-	if not picker.call("block_route").ok:
+	if not failure_lines.is_empty() or not picker.call("block_route").ok:
 		feedback = "먼저 경로 미리보기를 통과해야 합니다."
 		return
 	var name := "block-drive-%d-%d" % [OS.get_process_id(), Time.get_ticks_usec()]
@@ -228,6 +245,8 @@ func _refresh_route() -> void:
 	for item in selected_blocks:
 		var role := "출발" if item.role == "start" else ("도착" if item.role == "goal" else "경유 %d" % (int(item.index)+1))
 		selection_list.add_item("%s · %s · %s→%s · way %s" % [role, item.name, item.from_node, item.to_node, item.way_id])
+		if failure_blocks.any(func(b): return b.id == item.id):
+			selection_list.set_item_custom_fg_color(selection_list.item_count - 1, Color("ff7474"))
 		selected_points.append(item.line[0])
 	var route: Dictionary = picker.call("block_route")
 	display_geometry(road_points, flags, selected_points, route.line)
@@ -239,8 +258,8 @@ func _process(delta: float) -> void:
 			if event.type == "search_results" and search_request != 0 and int(event.request_id) == search_request: _show_area_results(event)
 		_auto_open(delta)
 		var route: Dictionary = picker.call("block_route")
-		save_button.disabled = not route.ok
-		drive_button.disabled = not route.ok
+		save_button.disabled = not route.ok or not failure_lines.is_empty()
+		drive_button.disabled = not route.ok or not failure_lines.is_empty()
 		status.text = ("검증된 경로 %.0f m" % float(route.length_m) if route.ok else "도로 후보·방향 확인 → 역할 확정 → 경로 미리보기") + "\n" + feedback
 		status.tooltip_text = feedback
 		var diagnostics: PackedStringArray = picker.call("block_diagnostics")
@@ -257,6 +276,7 @@ func _draw_overlay() -> void:
 	var scale_m := maxf(camera.zoom.x, 0.0005)
 	for item in selected_blocks:
 		overlay_layer.draw_polyline(item.line, Color("e9b95f"), 5.0 / scale_m, true)
+	_draw_failure_lines(scale_m)
 	if focus_line.size() < 2: return
 	overlay_layer.draw_polyline(focus_line, Color("58e9cb"), 7.0 / scale_m, true)
 	var i := maxi(0, (focus_line.size() - 2) / 2)
@@ -266,6 +286,12 @@ func _draw_overlay() -> void:
 	var side := direction.orthogonal() * 6.0 / scale_m
 	overlay_layer.draw_line(tip, center - direction * 5.0 / scale_m + side, Color.WHITE, 2.0 / scale_m)
 	overlay_layer.draw_line(tip, center - direction * 5.0 / scale_m - side, Color.WHITE, 2.0 / scale_m)
+	_draw_failure_lines(scale_m)
+
+## 후보 강조 위에 실패한 연결 양끝을 붉게 덧그려 다른 도로와 구분한다.
+func _draw_failure_lines(scale_m: float) -> void:
+	for line in failure_lines:
+		if line.size() >= 2: overlay_layer.draw_polyline(line, Color("ff5252"), 9.0 / scale_m, true)
 
 ## 실제 도구 줄 아래의 남은 지도 영역에 표본 전체가 보이게 맞춘다.
 func _fit_rect(bounds: Rect2) -> void:

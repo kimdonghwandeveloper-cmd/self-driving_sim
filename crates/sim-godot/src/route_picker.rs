@@ -45,6 +45,26 @@ fn result(ok: bool, error: &str) -> VarDictionary {
     vdict! { "ok" => ok, "error" => error }
 }
 
+/// 선택 실패의 사용자 설명·원인 코드와 지도 강조용 두 블록 형상을 전달한다.
+fn selection_failure(
+    s: &sim_core::picker::block_selection::BlockSelection,
+    e: &sim_core::picker::block_selection::SelectionFailure,
+) -> VarDictionary {
+    let highlights: Array<VarDictionary> = e
+        .from
+        .iter()
+        .chain(e.to.iter())
+        .filter_map(|t| {
+            s.model
+                .blocks
+                .iter()
+                .find(|b| b.id == t.block_id)
+                .map(|b| block_item(b, t.direction))
+        })
+        .collect();
+    vdict! {"ok"=>false,"error"=>e.message.as_str(),"code"=>e.code,"selection_index"=>e.index as i64,"highlights"=>highlights}
+}
+
 /// 진행 이벤트 사전(`{type, message, request_id}`)을 만든다.
 fn event(kind: &str, message: &str, request_id: i64) -> VarDictionary {
     vdict! { "type" => kind, "message" => message, "request_id" => request_id }
@@ -248,19 +268,20 @@ impl SimRoutePicker {
         let Some(s) = self.block_selection.as_mut() else {
             return result(false, "지역을 먼저 여세요");
         };
-        match s.select(
+        match s.select_checked(
             &role.to_string(),
             BlockTraversal {
                 block_id: BlockId(id.to_string()),
                 direction: dir,
             },
+            sim_core::world::route_plan::ROUTE_LENGTH_CAP_M,
         ) {
             Ok(()) => {
                 self.block_preview = None;
                 self.block_error = "선택이 바뀌었습니다. 미리보기를 눌러 검증하세요".into();
                 result(true, "")
             }
-            Err(e) => result(false, &e),
+            Err(e) => selection_failure(s, &e),
         }
     }
     /// 선택 목록을 역할/경유 번호와 함께 반환한다.
@@ -297,20 +318,21 @@ impl SimRoutePicker {
         let Ok(index) = usize::try_from(index) else {
             return result(false, "잘못된 경유 번호입니다");
         };
-        let edited = if offset == 0 {
-            s.remove_via(index)
-        } else if matches!(offset, -1 | 1) {
-            s.move_via(index, offset as isize)
-        } else {
-            Err("경유 이동은 한 칸씩 가능합니다".into())
-        };
+        if !matches!(offset, -1..=1) {
+            return result(false, "경유 이동은 한 칸씩 가능합니다");
+        }
+        let edited = s.edit_checked(
+            index,
+            offset as isize,
+            sim_core::world::route_plan::ROUTE_LENGTH_CAP_M,
+        );
         match edited {
             Ok(()) => {
                 self.block_preview = None;
                 self.block_error = "경유가 바뀌었습니다. 다시 미리보기를 실행하세요".into();
                 result(true, "")
             }
-            Err(e) => result(false, &e),
+            Err(e) => selection_failure(s, &e),
         }
     }
     /// 선택 전체를 지우며 마지막 주행 결과도 함께 무효화한다.
@@ -327,6 +349,12 @@ impl SimRoutePicker {
     fn preview_blocks(&mut self) -> VarDictionary {
         use sim_core::world::block_route_file::{BlockRouteRequest, prepare_block_route_file};
         self.block_preview = None;
+        if let Some(s) = &self.block_selection {
+            if let Err(e) = s.check(sim_core::world::route_plan::ROUTE_LENGTH_CAP_M) {
+                self.block_error = e.message.clone();
+                return selection_failure(s, &e);
+            }
+        }
         let prepared = (|| {
             let s = self.block_selection.as_ref().ok_or("지역을 먼저 여세요")?;
             let model = self.model.as_ref().ok_or("지역을 먼저 여세요")?;
