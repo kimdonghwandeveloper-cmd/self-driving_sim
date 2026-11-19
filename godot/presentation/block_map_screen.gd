@@ -276,8 +276,9 @@ func _draw_overlay() -> void:
 	var scale_m := maxf(camera.zoom.x, 0.0005)
 	for item in selected_blocks:
 		overlay_layer.draw_polyline(item.line, Color("e9b95f"), 5.0 / scale_m, true)
-	_draw_failure_lines(scale_m)
-	if focus_line.size() < 2: return
+	if focus_line.size() < 2:
+		_draw_failure_lines(scale_m)
+		return
 	overlay_layer.draw_polyline(focus_line, Color("58e9cb"), 7.0 / scale_m, true)
 	var i := maxi(0, (focus_line.size() - 2) / 2)
 	var direction := (focus_line[i+1] - focus_line[i]).normalized()

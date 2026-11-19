@@ -62,7 +62,7 @@ fn selection_failure(
                 .map(|b| block_item(b, t.direction))
         })
         .collect();
-    vdict! {"ok"=>false,"error"=>e.message.as_str(),"code"=>e.code,"selection_index"=>e.index as i64,"highlights"=>highlights}
+    vdict! {"ok"=>false,"error"=>e.message.as_str(),"code"=>e.code,"selection_index"=>e.index as i64,"highlights"=>&highlights}
 }
 
 /// 진행 이벤트 사전(`{type, message, request_id}`)을 만든다.
