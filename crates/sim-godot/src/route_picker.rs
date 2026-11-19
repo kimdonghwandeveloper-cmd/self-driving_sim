@@ -349,11 +349,11 @@ impl SimRoutePicker {
     fn preview_blocks(&mut self) -> VarDictionary {
         use sim_core::world::block_route_file::{BlockRouteRequest, prepare_block_route_file};
         self.block_preview = None;
-        if let Some(s) = &self.block_selection {
-            if let Err(e) = s.check(sim_core::world::route_plan::ROUTE_LENGTH_CAP_M) {
-                self.block_error = e.message.clone();
-                return selection_failure(s, &e);
-            }
+        if let Some(s) = &self.block_selection
+            && let Err(e) = s.check(sim_core::world::route_plan::ROUTE_LENGTH_CAP_M)
+        {
+            self.block_error = e.message.clone();
+            return selection_failure(s, &e);
         }
         let prepared = (|| {
             let s = self.block_selection.as_ref().ok_or("지역을 먼저 여세요")?;
