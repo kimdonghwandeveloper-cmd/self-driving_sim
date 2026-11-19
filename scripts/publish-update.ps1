@@ -17,6 +17,7 @@ if (Test-Path -LiteralPath $OutputDir) { throw 'Output directory must be new; ex
 $output = [IO.Path]::GetFullPath($OutputDir)
 if ($output.StartsWith($Bundle + '\', [StringComparison]::OrdinalIgnoreCase)) { throw 'Output must be outside bundle' }
 Assert-NoUpdateLinks $Bundle
+if (@(Get-ChildItem -LiteralPath $Bundle -Recurse -Force -File | Where-Object { $_.Name -eq '.env' -or ($_.Name.StartsWith('.env.') -and $_.Name -ne '.env.example') }).Count) { throw 'Local environment files must not be in a release bundle' }
 $files = @()
 # 사용자의 기록과 런처 자체는 원격 프로그램 업데이트 대상에서 제외한다.
 foreach ($item in @(Get-ChildItem -LiteralPath $Bundle -File -Recurse -Force | Sort-Object FullName)) {

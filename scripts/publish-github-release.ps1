@@ -1,14 +1,22 @@
 ﻿param(
     [Parameter(Mandatory=$true)][string]$Bundle,
     [Parameter(Mandatory=$true)][string]$OutputDir,
-    [Parameter(Mandatory=$true)][string]$PrivateKeyFile,
+    [string]$PrivateKeyFile = '',
     [Parameter(Mandatory=$true)][int]$Version,
     [Parameter(Mandatory=$true)][ValidatePattern('^[a-f0-9]{40}$')][string]$Commit,
     [ValidatePattern('^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$')][string]$Repository = 'kimdonghwandeveloper-cmd/self-driving_sim',
     [switch]$Publish,
-    [switch]$PrepareOnly
+    [switch]$PrepareOnly,
+    [string]$EnvFile = (Join-Path (Split-Path $PSScriptRoot -Parent) '.env')
 )
 $ErrorActionPreference = 'Stop'
+. "$PSScriptRoot/release-env.ps1"
+$localSettings = Read-ReleaseEnv $EnvFile
+if ([string]::IsNullOrWhiteSpace($env:GITHUB_TOKEN) -and $localSettings.GITHUB_TOKEN) { $env:GITHUB_TOKEN = $localSettings.GITHUB_TOKEN }
+if (-not $PrivateKeyFile) { $PrivateKeyFile = $localSettings.SIMULATOR_SIGNING_KEY_FILE }
+if (-not $PrivateKeyFile) { throw 'Signing key path is required in .env or -PrivateKeyFile' }
+if (-not $PSBoundParameters.ContainsKey('Repository') -and $localSettings.SIMULATOR_GITHUB_REPOSITORY) { $Repository = $localSettings.SIMULATOR_GITHUB_REPOSITORY }
+if ($Repository -notmatch '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$') { throw 'Invalid release repository' }
 if (-not $PrepareOnly -and [string]::IsNullOrWhiteSpace($env:GITHUB_TOKEN)) { throw 'GITHUB_TOKEN is required for upload; it is never embedded in the simulator' }
 & "$PSScriptRoot/publish-update.ps1" -Bundle $Bundle -OutputDir $OutputDir -PrivateKeyFile $PrivateKeyFile -Version $Version -GitHubAssets
 $output = (Resolve-Path -LiteralPath $OutputDir).Path
@@ -34,6 +42,8 @@ $headers = @{Authorization="Bearer $env:GITHUB_TOKEN"; 'User-Agent'='self-drivin
 $api = "https://api.github.com/repos/$Repository"
 $repo = Invoke-RestMethod -Uri $api -Headers $headers
 if ($repo.private) { throw 'Public updater requires a public release repository; tokens must not be shipped to users' }
+# 아직 올라가지 않은 커밋을 릴리스 태그가 가리키지 않도록 원격 커밋 존재를 확인한다.
+try { $null = Invoke-RestMethod -Uri "$api/commits/$Commit" -Headers $headers } catch { throw 'Release commit must already be available on GitHub' }
 $tag = "sim-v$Version"
 # 업로드가 중단되면 draft를 그대로 남긴다. 모든 자산 업로드 성공 전에는 latest가 바뀌지 않는다.
 $body = @{tag_name=$tag;target_commitish=$Commit;name="Simulator v$Version";draft=$true;prerelease=$false;body='Windows simulator. Download Simulator-Windows ZIP, extract the whole folder, and run Simulator.exe.'} | ConvertTo-Json
