@@ -28,9 +28,25 @@ public sealed class SimulatorUpdateClient : WebClient {
         request.AllowAutoRedirect = false;
         return request;
     }
+    // GitHub 자산 리다이렉트는 최대 다섯 번, 인증 정보 없는 HTTPS만 따라간다.
+    protected override WebResponse GetWebResponse(WebRequest request) {
+        for (int hop = 0; hop <= 5; hop++) {
+            var response = (HttpWebResponse)request.GetResponse();
+            int code = (int)response.StatusCode;
+            if (code < 300 || code >= 400) return response;
+            string location = response.Headers["Location"];
+            Uri next;
+            bool valid = Uri.TryCreate(request.RequestUri, location, out next);
+            response.Dispose();
+            if (!valid || next.Scheme != "https" || next.UserInfo.Length != 0) throw new WebException("Unsafe update redirect");
+            request = GetWebRequest(next);
+        }
+        throw new WebException("Too many update redirects");
+    }
 }
 '@
                 $client = New-Object SimulatorUpdateClient
+                $client.Headers.Add('User-Agent', 'SelfDrivingSimulator/1')
                 try {
                     # 원문 서명 확인 전에는 JSON의 경로·세대·파일 목록을 신뢰하지 않는다.
                     $bytes = $client.DownloadData([uri]::new($base, 'manifest.json'))
@@ -39,7 +55,12 @@ public sealed class SimulatorUpdateClient : WebClient {
                     $manifest = [Text.Encoding]::UTF8.GetString($bytes) | ConvertFrom-Json
                     if ([long]$manifest.version -ne $current.version) {
                         Assert-UpdateManifest $manifest $current.version
-                        $current = Install-UpdateGeneration $Root $current $manifest { param($path, $destination) $client.DownloadFile([uri]::new($base, ('files/' + $path)), $destination) }
+                        $current = Install-UpdateGeneration $Root $current $manifest {
+                            param($path, $destination, $hash)
+                            $asset = 'files/' + $path
+                            if ($settings.layout -eq 'github-assets') { $asset = $hash + '.blob' }
+                            $client.DownloadFile([uri]::new($base, $asset), $destination)
+                        }
                     }
                 } finally { $client.Dispose() }
             }

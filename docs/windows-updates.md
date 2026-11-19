@@ -16,8 +16,22 @@
 
 1. 기존 `scripts/package_release.ps1 -ReleaseVersion 1`로 독립 번들을 만들고 검증한다. 배포 세대는 매번 증가시키며 신규 설치도 이 번호에서 시작하므로 이전 서버 버전으로 내려가지 않는다. 기본값 0은 로컬 검토용이며 게시할 수 없다.
 2. `scripts/publish-update.ps1 -Bundle dist/검증번들 -OutputDir dist/새게시폴더 -PrivateKeyFile D:/보안위치/private.xml -Version 1`을 실행한다. 세대 번호는 매번 증가시킨다. 기존 출력 폴더는 덮어쓰지 않는다.
-3. 새 게시 폴더를 HTTPS 서버에 올린다. `files/`의 모든 파일을 먼저 올리고 `manifest.json`과 `manifest.sig`를 마지막에 함께 전환한다. 가장 안전한 방법은 서버의 게시 폴더를 원자 교체하는 것이다. 리다이렉트 URL은 지원하지 않는다.
+3. 일반 HTTPS 서버라면 `files/`의 모든 파일을 먼저 올리고 `manifest.json`과 `manifest.sig`를 마지막에 함께 전환한다. HTTPS 리다이렉트는 최대 다섯 번 허용한다.
 4. 시험 설치에서 업데이트·기존 저장 경로 재진입을 확인한 뒤 배포한다. Git push 자체는 공개 업데이트 게시를 뜻하지 않는다.
+
+## GitHub Releases 채널 (사용자 선택)
+
+2026-11-19 GitHub 공개 API에서 `kimdonghwandeveloper-cmd/self-driving_sim`이 공개 저장소임을 확인했다. 사용자는 토큰 없이 자산을 받는다. 게시자만 환경 변수 `GITHUB_TOKEN`으로 해당 저장소의 Contents 쓰기 권한을 제공한다. 토큰은 EXE/설정/ZIP에 포함하지 않는다.
+
+```powershell
+./scripts/publish-github-release.ps1 -Bundle dist/검증번들 -OutputDir dist/github-v1 -PrivateKeyFile D:/보안위치/private.xml -Version 1 -Commit <검증한40자리커밋> -PrepareOnly
+```
+
+이 명령은 해시 이름의 `.blob` 파일·서명 manifest·공개 키와 채널이 설정된 최초 설치 ZIP을 로컬에서 준비한다. 아직 GitHub를 바꾸지 않는다. `-PrepareOnly`를 빼면 새 draft release를 생성하고 파일을 올린다. `-Publish`까지 명시해야 전체 업로드 성공 후 공개하며 latest를 변경한다. 실패한 draft는 남기며 기존 release를 덮어쓰지 않는다. 업로드 제한에 맞춰 고유 자산 1,000개 및 개별 2 GiB 미만을 검사한다.
+
+기본 채널은 `https://github.com/kimdonghwandeveloper-cmd/self-driving_sim/releases/latest/download/`이다. `layout="github-assets"`이면 각 파일을 서명 manifest의 SHA-256 이름으로 받는다. GitHub Actions 자동 빌드/태그 게시와 실제 운영 서명 키 생성·공개 release 게시·인터넷 업데이트 왕복은 아직 실행하지 않았다. 전국 지도 원본은 Git에 없으므로 기존 검증 Windows PC의 번들을 게시하는 수동 파이프라인부터 사용한다.
+
+GitHub 제한과 다운로드 형식: https://docs.github.com/en/repositories/releasing-projects-on-github/about-releases 및 https://docs.github.com/en/rest/releases/assets
 
 ## 적용 계약
 

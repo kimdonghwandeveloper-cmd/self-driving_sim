@@ -91,7 +91,7 @@ foreach ($file in $manifest.files) {
     # 전국 지도 등 내용이 같은 파일은 다운로드하지 않고 기존 세대에서 복사한다.
     if (Test-UpdateFile $old $file) { Copy-Item -LiteralPath $old -Destination $destination } else {
         $escaped = ($file.path.Split('/') | ForEach-Object { [uri]::EscapeDataString($_) }) -join '/'
-        & $Download $escaped $destination
+        & $Download $escaped $destination $file.sha256
     }
     if (-not (Test-UpdateFile $destination $file)) { throw "Downloaded file mismatch: $($file.path)" }
 }

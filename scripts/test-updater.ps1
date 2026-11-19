@@ -106,7 +106,30 @@ try {
     & "$PSScriptRoot/publish-update.ps1" -Bundle $payload -OutputDir $published -PrivateKeyFile $key -Version 4
     Assert-UpdateSignature ([IO.File]::ReadAllBytes((Join-Path $published 'manifest.json'))) ([IO.File]::ReadAllText((Join-Path $published 'manifest.sig'))) $signer.ToXmlString($false)
     $checks++
+    $github = Join-Path $fixture 'github-assets'
+    & "$PSScriptRoot/publish-update.ps1" -Bundle $payload -OutputDir $github -PrivateKeyFile $key -Version 4 -GitHubAssets
+    $githubManifest = Get-Content -Raw -LiteralPath (Join-Path $github 'manifest.json') | ConvertFrom-Json
+    foreach ($record in $githubManifest.files) {
+        if (-not (Test-UpdateFile (Join-Path $github ($record.sha256 + '.blob')) $record)) { throw 'GitHub asset layout mismatch' }
+    }
+    $checks++
+    Copy-Item -LiteralPath $launcher -Destination (Join-Path $payload 'Simulator.exe')
+    Copy-Item -LiteralPath (Join-Path $fixture 'updater') -Destination (Join-Path $payload 'updater') -Recurse
+    $prepared = Join-Path $fixture 'github-prepared'
+    & "$PSScriptRoot/publish-github-release.ps1" -Bundle $payload -OutputDir $prepared -PrivateKeyFile $key -Version 4 -Commit ('a' * 40) -PrepareOnly
+    $settings=Get-Content -Raw -LiteralPath (Join-Path $prepared 'bootstrap/update.json') | ConvertFrom-Json
+    if ($settings.layout -ne 'github-assets' -or -not $settings.enabled -or $settings.public_key -ne $signer.ToXmlString($false) -or -not (Test-Path -LiteralPath (Join-Path $prepared 'Simulator-Windows-v4.zip'))) { throw 'GitHub bootstrap mismatch' }
+    $checks++
     [IO.File]::WriteAllText((Join-Path $payload '.simulator-release.json'), '{"format":"simulator-release-bundle-v1","validated":false}')
     Reject { & "$PSScriptRoot/publish-update.ps1" -Bundle $payload -OutputDir (Join-Path $fixture 'not-published') -PrivateKeyFile $key -Version 5 }
 } finally { $signer.Dispose() }
+# 네트워크 경로의 실제 C# 다운로드 클라이언트도 컴파일되는지 검사한다.
+$tokens=$null; $errors=$null
+$ast=[Management.Automation.Language.Parser]::ParseFile("$PSScriptRoot/run-simulator.ps1",[ref]$tokens,[ref]$errors)
+if ($errors.Count) { throw $errors[0] }
+$source=$ast.Find({param($node) $node -is [Management.Automation.Language.StringConstantExpressionAst] -and $node.Value.Contains('sealed class SimulatorUpdateClient')},$true)
+Add-Type -TypeDefinition $source.Value
+$client=New-Object SimulatorUpdateClient
+$client.Dispose()
+$checks++
 Write-Output "UPDATER TEST OK: $checks; fixture=$fixture"
