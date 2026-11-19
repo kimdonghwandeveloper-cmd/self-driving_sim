@@ -194,7 +194,8 @@ func _remove_last() -> void:
 	if vias.is_empty():
 		feedback = "출발·도착은 다른 후보로 교체하거나 '새 경로'로 초기화하세요."
 	else:
-		picker.call("edit_block_via", vias[-1].index, 0)
+		var result: Dictionary = picker.call("edit_block_via", vias[-1].index, 0)
+		_apply_selection_result(result, "마지막 경유를 삭제했습니다. 미리보기를 다시 실행하세요.")
 		_refresh_route()
 
 ## 후보 선택 상태만 지우고 확정 목록은 손대지 않는다.
@@ -260,7 +261,8 @@ func _process(delta: float) -> void:
 		var route: Dictionary = picker.call("block_route")
 		save_button.disabled = not route.ok or not failure_lines.is_empty()
 		drive_button.disabled = not route.ok or not failure_lines.is_empty()
-		status.text = ("검증된 경로 %.0f m" % float(route.length_m) if route.ok else "도로 후보·방향 확인 → 역할 확정 → 경로 미리보기") + "\n" + feedback
+		var summary := "선택 연결 검사 실패 · 기존 선택 유지" if not failure_lines.is_empty() else ("검증된 경로 %.0f m" % float(route.length_m) if route.ok else "도로 후보·방향 확인 → 역할 확정 → 경로 미리보기")
+		status.text = summary + "\n" + feedback
 		status.tooltip_text = feedback
 		var diagnostics: PackedStringArray = picker.call("block_diagnostics")
 		if not diagnostics.is_empty():
