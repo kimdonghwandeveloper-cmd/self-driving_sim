@@ -637,3 +637,117 @@ fn expo_parking_aisle_snapshot_generates_and_drives() {
     );
     drive_network(&g, &g.blocks[0].centerline);
 }
+
+/// 양 끝의 폭 전환 접속부가 4 m 블록을 모두 소비하지 않고 원본 블록을 보존해야 한다.
+#[test]
+fn short_junctions_allocate_cuts_between_neighbors() {
+    let m = model(vec![
+        (
+            10,
+            "service",
+            &[("width", "8")],
+            vec![(1, -60., 0.), (2, 0., 0.)],
+        ),
+        (
+            20,
+            "service",
+            &[("width", "6")],
+            vec![(2, 0., 0.), (3, 4., 0.)],
+        ),
+        (
+            30,
+            "service",
+            &[("width", "8")],
+            vec![(3, 4., 0.), (4, 64., 0.)],
+        ),
+    ]);
+    let g = build(&m).expect("short connector must share its cut budget");
+    assert_eq!(g.blocks.len(), m.blocks.len());
+    assert_eq!(g.joints.len(), 2);
+    let short = m
+        .blocks
+        .iter()
+        .find(|b| b.source_edges[0].way_id == 20)
+        .unwrap();
+    let s = g.blocks.iter().find(|b| b.block_id == short.id).unwrap();
+    assert!(road_geom::polyline_length(&s.centerline) >= 0.05);
+    assert!(
+        s.strip
+            .left
+            .iter()
+            .zip(&s.strip.right)
+            .all(|(l, r)| (l.distance(*r) - 6.).abs() < 0.001)
+    );
+    drive_network(&g, &[Vec2::new(-60., 0.), Vec2::new(64., 0.)]);
+    let mut reversed = m.clone();
+    reversed.blocks.reverse();
+    assert_eq!(g, build(&reversed).unwrap());
+}
+/// 실제 폭 전환/곡선 교차로를 원본 좌표·폭·모든 입구 그대로 생성해야 한다.
+#[test]
+fn short_junctions_real_expo_and_gangnam_regressions() {
+    let mut failures = Vec::new();
+    for (name, node) in [("expo", 806285558_u64), ("gangnam", 414684605)] {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(format!(
+            "../../testdata/junction-regressions/{name}-joint.osm.json"
+        ));
+        let snapshot = crate::world::road_snapshot::load_road_snapshot(&path).unwrap();
+        let m = build_road_blocks(
+            &snapshot.ways,
+            &snapshot.restrictions,
+            &RoadGraphConfig::default(),
+        )
+        .unwrap();
+        let origin = snapshot
+            .ways
+            .iter()
+            .flat_map(|w| &w.nodes)
+            .find(|n| n.id == node)
+            .unwrap()
+            .pos;
+        let g = match build_road_network(&m, origin, NetworkSettings::default()) {
+            Ok(g) => g,
+            Err(e) => {
+                failures.push(format!("{name}: {e:?}"));
+                continue;
+            }
+        };
+        assert_eq!(g.blocks.len(), m.blocks.len());
+        assert!(g.joints.iter().any(|j| j.node_id == node));
+        let mut course = crate::world::course::training_course();
+        course.strips = g.blocks.iter().map(|b| b.strip.clone()).collect();
+        course.areas = g.joints.iter().flat_map(|j| j.areas.clone()).collect();
+        course.colliders = g.colliders.clone();
+        course.validate().unwrap();
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+/// 전체 고정 지역을 생성해 특정 실패 way만 지우거나 경로 밖 도로를 생략하지 않아야 한다.
+#[test]
+fn short_junctions_complete_real_regions_preserve_all_blocks() {
+    for name in ["expo", "gangnam"] {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(format!(
+            "../../testdata/junction-regressions/{name}-region.osm.json"
+        ));
+        let snapshot = crate::world::road_snapshot::load_road_snapshot(&path).unwrap();
+        let m = build_road_blocks(
+            &snapshot.ways,
+            &snapshot.restrictions,
+            &RoadGraphConfig::default(),
+        )
+        .unwrap();
+        let origin = if name == "expo" {
+            LatLon {
+                lat: 34.7526,
+                lon: 127.7471,
+            }
+        } else {
+            LatLon {
+                lat: 37.4979,
+                lon: 127.0276,
+            }
+        };
+        let g = build_road_network(&m, origin, NetworkSettings::default()).expect(name);
+        assert_eq!(g.blocks.len(), m.blocks.len());
+    }
+}
