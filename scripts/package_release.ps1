@@ -20,8 +20,8 @@ Write-Host "==========================================================" -Foregro
 $outFull = Get-ReleaseOutputPath $repoRoot $OutputDir
 Assert-ReleaseOwnership $outFull $repoRoot
 $runtime = Get-ReleaseGodot $GodotPath
+Assert-ReleaseFiles $repoRoot @('scripts/build-launcher.ps1', 'scripts/run-simulator.ps1', 'scripts/updater-support.ps1')
 $requiredFiles = @(
-    'scripts/build-launcher.ps1', 'scripts/run-simulator.ps1', 'scripts/updater-support.ps1',
     'data/korea/manifest.toml', 'data/korea/roads.pack', 'data/korea/places.pack',
     'config/vehicle.toml', 'config/input.toml', 'config/camera.toml', 'config/road_graph.toml',
     'godot/project.godot', 'godot/sim_godot.gdextension',

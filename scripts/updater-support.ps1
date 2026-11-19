@@ -10,6 +10,7 @@ function Assert-UpdateSignature([byte[]]$Bytes, [string]$Signature, [string]$Pub
     $rsa = New-Object Security.Cryptography.RSACryptoServiceProvider
     try {
         $rsa.FromXmlString($PublicKey)
+        if ($rsa.KeySize -lt 2048) { throw 'Update signing key must be at least 2048 bits' }
         if (-not $rsa.VerifyData($Bytes, 'SHA256', [Convert]::FromBase64String($Signature.Trim()))) { throw 'Update signature mismatch' }
     } finally { $rsa.Dispose() }
 }
