@@ -42,6 +42,11 @@ func _run() -> void:
 		root.size = Vector2i(1280, 720)
 		screen._clear_points()
 		screen._load_snapshot("testdata/block-real/expo-internal.osm.json")
+		var first: Dictionary = screen.picker.call("block_items")[0]
+		screen._show_candidates(first.line[0].lerp(first.line[1], 0.5))
+		screen._confirm_block("start")
+		screen._confirm_block("goal")
+		screen._preview_blocks()
 		for frame in 6: await process_frame
 		await RenderingServer.frame_post_draw
 		_check(root.get_texture().get_image().save_png(capture) == OK, "capture failed")
