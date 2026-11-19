@@ -1,5 +1,5 @@
 extends SceneTree
-## OSM 지역 이동·실제 클릭·저장·주행을 검사한다. --full-data는 준비된 전국 자료의 8개 도시도 확인한다.
+## 기존 route-v1 점 경로의 호환성을 검사한다. 기본 블록 UI는 block_picker_test.gd가 별도로 검사한다.
 
 var failures := PackedStringArray()
 var capture_dir := ""
@@ -20,6 +20,8 @@ func _run() -> void:
 	for frame in 4:
 		await process_frame
 	await _click(main.screen.map_button.get_global_rect().get_center())
+	_check(main.screen.has_method("_preview_blocks"), "기본 지도는 블록 UI여야 함")
+	_show_legacy_map()
 	var map: Node2D = main.screen
 	_check(map.has_method("_drive_route"), "OSM 지도 진입 실패")
 	if not map.has_method("_drive_route"):
@@ -73,7 +75,7 @@ func _run() -> void:
 ## 준비된 전국 자료에서 도시별 실제 지역을 열고 주행 가능한 짧은 경로를 찾아 같은 주행 화면으로 연다.
 func _check_nationwide() -> void:
 	for title in ["여수 엑스포", "서울 강남", "부산 시청", "대구 시청", "인천 시청", "광주 시청", "대전 시청", "제주 시청"]:
-		main._show_map()
+		_show_legacy_map()
 		var map: Node2D = main.screen
 		_check(map.data_ok, "전국 자료 없음: " + map.data_error)
 		if not map.data_ok:
@@ -89,6 +91,14 @@ func _check_nationwide() -> void:
 		print("NATIONWIDE SAMPLE: %s · %d road segments · %.1f m" % [title, map.roads.size() / 2, map.picker.call("route").length_m])
 		map._drive_route()
 		await _check_drive_and_return()
+
+## route-v1 엔진·화면의 호환성 시험에만 기존 점 화면을 명시적으로 연결한다.
+func _show_legacy_map() -> void:
+	main._clear_screen()
+	main.back_button.show()
+	main.screen = load("res://presentation/map_screen.gd").new()
+	main.add_child(main.screen)
+	main.screen.drive_requested.connect(main._show_drive)
 
 ## 도로 선분 내부의 두 점을 양방향으로 시험해 유효한 짧은 코스 하나를 고른다.
 func _find_short_route(map: Node2D) -> bool:

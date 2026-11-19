@@ -441,6 +441,136 @@ fn rejects_invalid_turn_reference() {
     assert!(error.contains("restriction"), "{error}");
 }
 
+/// via가 진입 way에만 있는 불완전 관계는 원본을 보존하고 해당 진입 연결만 닫는다.
+#[test]
+fn partial_turn_reference_quarantines_incoming_without_dropping_rule() {
+    let ways = parse(vec![
+        (
+            10,
+            "service",
+            &[("oneway", "yes")],
+            vec![(1, -40., 0.), (2, 0., 0.)],
+        ),
+        (20, "service", &[], vec![(3, 40., 0.), (4, 80., 0.)]),
+        (30, "service", &[], vec![(2, 0., 0.), (5, 0., 40.)]),
+    ]);
+    let rule = TurnRestriction {
+        id: 7365613,
+        from_way: 10,
+        via_node: 2,
+        to_way: 20,
+        only: false,
+    };
+    let m = build_road_blocks(&ways, &[rule], &RoadGraphConfig::default()).unwrap();
+    assert_eq!(m.restrictions, vec![rule]);
+    let from = &m
+        .blocks
+        .iter()
+        .find(|b| b.source_edges[0].way_id == 10)
+        .unwrap()
+        .id;
+    assert!(
+        !m.connections
+            .iter()
+            .any(|c| &c.from.block_id == from && c.via_node == 2)
+    );
+    assert_eq!(m.blocks.len(), 3);
+}
+
+/// 실제 강남 원본의 도로·관계를 모두 유지하고 잘못된 회전 방향만 격리한다.
+#[test]
+fn gangnam_original_restrictions_are_preserved_and_quarantined() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../testdata/block-real/gangnam-turn-reference.osm.json");
+    let snapshot = crate::world::road_snapshot::load_road_snapshot(&path).unwrap();
+    let m = build_road_blocks(
+        &snapshot.ways,
+        &snapshot.restrictions,
+        &RoadGraphConfig::default(),
+    )
+    .unwrap();
+    assert_eq!(m.restrictions.len(), snapshot.restrictions.len());
+    assert_eq!(
+        m.blocks.iter().map(|b| b.source_edges.len()).sum::<usize>(),
+        snapshot
+            .ways
+            .iter()
+            .map(|w| w.nodes.len() - 1)
+            .sum::<usize>()
+    );
+    assert!(m.diagnostics.iter().any(|s| s.contains("7365613")));
+    assert!(!m.connections.iter().any(|c| {
+        c.via_node == 1906756396
+            && m.blocks
+                .iter()
+                .find(|b| b.id == c.from.block_id)
+                .unwrap()
+                .source_edges
+                .iter()
+                .any(|e| e.way_id == 504512001)
+    }));
+}
+
+/// 범위 밖 진출 way의 관계도 삭제하지 않고 해당 진입을 차단한다.
+#[test]
+fn out_of_scope_turn_target_is_fail_closed_and_deterministic() {
+    let ways = chain();
+    let rules = [
+        TurnRestriction {
+            id: 1,
+            from_way: 10,
+            via_node: 2,
+            to_way: 999,
+            only: true,
+        },
+        TurnRestriction {
+            id: 2,
+            from_way: 20,
+            via_node: 2,
+            to_way: 998,
+            only: false,
+        },
+    ];
+    let a = build_road_blocks(&ways, &rules, &RoadGraphConfig::default()).unwrap();
+    let b = build_road_blocks(&ways, &[rules[1], rules[0]], &RoadGraphConfig::default()).unwrap();
+    assert_eq!(a, b);
+    assert_eq!(a.restrictions.len(), 2);
+    assert_eq!(a.diagnostics.len(), 2);
+    assert!(!a.connections.iter().any(|c| c.via_node == 2));
+}
+
+/// via 위치까지 불명확하면 진입 way를 인접 way와 합쳐 차단을 우회하지 않도록 양 끝을 보존한다.
+#[test]
+fn unknown_via_quarantine_cannot_be_bypassed_by_merging() {
+    let ways = parse(vec![
+        (10, "service", &[], vec![(1, 0., 0.), (2, 50., 0.)]),
+        (20, "service", &[], vec![(2, 50., 0.), (3, 100., 0.)]),
+    ]);
+    let rule = TurnRestriction {
+        id: 7383523,
+        from_way: 10,
+        via_node: 999,
+        to_way: 20,
+        only: false,
+    };
+    let model = build_road_blocks(&ways, &[rule], &RoadGraphConfig::default()).unwrap();
+    assert_eq!(model.blocks.len(), 2);
+    assert_eq!(model.restrictions, vec![rule]);
+    assert!(model.diagnostics[0].contains("모든 출구"));
+    assert!(!model.connections.iter().any(|c| {
+        model
+            .blocks
+            .iter()
+            .find(|b| b.id == c.from.block_id)
+            .unwrap()
+            .source_edges
+            .last()
+            .unwrap()
+            .way_id
+            == 10
+    }));
+}
+
 /// 빈 입력은 빈 모델로 처리할 수 있다.
 #[test]
 fn empty_input_has_no_blocks_or_connections() {

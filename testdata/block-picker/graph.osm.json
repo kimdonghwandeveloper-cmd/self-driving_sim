@@ -1,0 +1,96 @@
+{
+  "elements": [
+    {
+      "type": "way",
+      "id": 10,
+      "nodes": [
+        1,
+        2
+      ],
+      "geometry": [
+        {
+          "lat": 34.75,
+          "lon": 127.74934327970651
+        },
+        {
+          "lat": 34.75,
+          "lon": 127.75
+        }
+      ],
+      "tags": {
+        "highway": "service",
+        "width": "6",
+        "name": "start"
+      }
+    },
+    {
+      "type": "way",
+      "id": 20,
+      "nodes": [
+        2,
+        3
+      ],
+      "geometry": [
+        {
+          "lat": 34.75,
+          "lon": 127.75
+        },
+        {
+          "lat": 34.75,
+          "lon": 127.75065672029349
+        }
+      ],
+      "tags": {
+        "highway": "service",
+        "width": "6",
+        "name": "goal"
+      }
+    },
+    {
+      "type": "way",
+      "id": 30,
+      "nodes": [
+        2,
+        4
+      ],
+      "geometry": [
+        {
+          "lat": 34.75,
+          "lon": 127.75
+        },
+        {
+          "lat": 34.75053959221823,
+          "lon": 127.75
+        }
+      ],
+      "tags": {
+        "highway": "service",
+        "width": "6",
+        "name": "north"
+      }
+    },
+    {
+      "type": "way",
+      "id": 40,
+      "nodes": [
+        11,
+        12
+      ],
+      "geometry": [
+        {
+          "lat": 34.750089932036374,
+          "lon": 127.74934327970651
+        },
+        {
+          "lat": 34.750089932036374,
+          "lon": 127.75065672029349
+        }
+      ],
+      "tags": {
+        "highway": "service",
+        "width": "6",
+        "name": "parallel"
+      }
+    }
+  ]
+}

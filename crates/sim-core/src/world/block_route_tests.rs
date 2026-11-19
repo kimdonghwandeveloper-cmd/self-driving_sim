@@ -362,7 +362,7 @@ fn network_failure_preserves_source_diagnostics() {
             20,
             "service",
             &[("name", "short")],
-            vec![(2, 0.0, 0.0), (3, 1.0, 0.0)],
+            vec![(2, 0.0, 0.0), (3, 0.001, 0.0)],
         ),
         (30, "service", &[], vec![(2, 0.0, 0.0), (4, 0.0, 60.0)]),
     ]);
@@ -503,4 +503,66 @@ fn rotated_junction_guides_remain_valid() {
             }
         }
     }
+}
+
+/// 곡선 도로의 입구 접선이 원본 노드를 지나지 않아도 접선 원호가 연속이어야 한다.
+#[test]
+fn curved_joint_guides_use_actual_endpoint_tangents() {
+    let from = Vec2::new(-6., 1.);
+    let before = Vec2::new(-16., 1.);
+    let next = [Vec2::new(1., 7.), Vec2::new(1., 17.)];
+    let mut line = vec![before, from];
+    line.extend(join_guide(from, before, Vec2::ZERO, &next).unwrap());
+    line.push(next[1]);
+    let tagged: Vec<_> = line
+        .into_iter()
+        .map(|point| GuidePoint {
+            point,
+            block_id: BlockId("curve-test".into()),
+            node_id: Some(1),
+        })
+        .collect();
+    validate_curvature(&tagged)
+        .expect("original node must not force an artificial kink in the guide");
+}
+
+/// 원호 끝 접점은 원점 이동·회전 후에도 다음 도로의 시작점과 정확히 하나로 결합한다.
+#[test]
+fn guide_arc_endpoint_is_exact_after_projection_rounding() {
+    for angle in 0..90 {
+        let r = Vec2::from_angle((angle as f32).to_radians());
+        for offset in [Vec2::new(-800., 100.), Vec2::new(8000., -8000.)] {
+            let from = offset + r.rotate(Vec2::new(-6., 1.));
+            let before = offset + r.rotate(Vec2::new(-16., 1.));
+            let next = [
+                offset + r.rotate(Vec2::new(1., 7.)),
+                offset + r.rotate(Vec2::new(1., 17.)),
+            ];
+            let joined = join_guide(from, before, offset, &next).unwrap();
+            assert_eq!(joined.last(), Some(&next[0]));
+        }
+    }
+}
+/// 렌더링 가능한 짧은 도로라도 목표 자세가 블록 밖이면 배치 단계에서 정확한 원본을 반환한다.
+#[test]
+fn short_endpoint_reports_placement_without_hiding_road() {
+    let m = model(vec![
+        (
+            10,
+            "service",
+            &[("name", "entry")],
+            vec![(1, -60., 0.), (2, 0., 0.)],
+        ),
+        (
+            20,
+            "service",
+            &[("name", "short")],
+            vec![(2, 0., 0.), (3, 1., 0.)],
+        ),
+        (30, "service", &[], vec![(2, 0., 0.), (4, 0., 60.)]),
+    ]);
+    let selected = [choose(&m, 10, 1), choose(&m, 20, 2)];
+    let e = course(&m, &selected).unwrap_err();
+    assert_eq!(e.stage, FailureStage::Placement);
+    assert_eq!(e.block_id, Some(selected[1].block_id.clone()));
 }

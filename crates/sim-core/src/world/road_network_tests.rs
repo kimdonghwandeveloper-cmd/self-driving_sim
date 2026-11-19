@@ -93,9 +93,9 @@ fn joint_openings_match_strips_and_remain_passable() {
         assert!(
             g.blocks
                 .iter()
-                .any(|b| [0, b.strip.left.len() - 1].iter().any(|&i| {
-                    let a = b.strip.left[i];
-                    let z = b.strip.right[i];
+                .any(|b| [0, b.strips[0].left.len() - 1].iter().any(|&i| {
+                    let a = b.strips[0].left[i];
+                    let z = b.strips[0].right[i];
                     (a.distance(opening[0]) < 0.001 && z.distance(opening[1]) < 0.001)
                         || (a.distance(opening[1]) < 0.001 && z.distance(opening[0]) < 0.001)
                 }))
@@ -153,7 +153,7 @@ fn width_transition_keeps_each_block_width() {
             .unwrap()
             .attributes
             .width_m;
-        assert!((block.strip.left[0].distance(block.strip.right[0]) - w).abs() < 0.001);
+        assert!((block.strips[0].left[0].distance(block.strips[0].right[0]) - w).abs() < 0.001);
     }
     // 도로 폭 전환의 접속부도 실제 화면 형상 검사와 차량 주행을 통과해야 한다.
     drive_network(
@@ -172,7 +172,10 @@ fn narrow_private_road_is_preserved() {
     )]))
     .unwrap();
     assert_eq!(g.blocks.len(), 1);
-    assert!((g.blocks[0].strip.left[0].distance(g.blocks[0].strip.right[0]) - 0.8).abs() < 0.001);
+    assert!(
+        (g.blocks[0].strips[0].left[0].distance(g.blocks[0].strips[0].right[0]) - 0.8).abs()
+            < 0.001
+    );
 }
 /// 축에 비스듬한 직선은 부동소수점 잡음으로 거부하지 않는다.
 #[test]
@@ -186,6 +189,224 @@ fn rotated_roads_all_generate() {
         build(&model(vec![(10, "service", &[], nodes)])).unwrap();
     }
 }
+
+/// 짧은 원본 표본 뒤에 곡선이 시작돼도 도로 띠와 교차로의 실제 개구부가 맞아야 한다.
+#[test]
+fn curved_joint_mouth_matches_trimmed_strip() {
+    let m = model(vec![
+        (
+            10,
+            "service",
+            &[("width", "6")],
+            vec![
+                (1, 0., 0.),
+                (2, 1., 0.),
+                (3, 4., 0.4),
+                (4, 20., 2.),
+                (5, 60., 2.),
+            ],
+        ),
+        (
+            20,
+            "service",
+            &[("width", "6")],
+            vec![(1, 0., 0.), (6, -60., 0.)],
+        ),
+        (
+            30,
+            "service",
+            &[("width", "6")],
+            vec![(1, 0., 0.), (7, 0., -60.)],
+        ),
+    ]);
+    let g = build(&m).unwrap();
+    for opening in &g.joints[0].openings {
+        assert!(g.blocks.iter().any(|s| {
+            let n = s.strips[0].left.len() - 1;
+            [
+                (s.strips[0].left[0], s.strips[0].right[0]),
+                (s.strips[0].left[n], s.strips[0].right[n]),
+            ]
+            .iter()
+            .any(|(l, r)| {
+                (l.distance(opening[0]) < 0.001 && r.distance(opening[1]) < 0.001)
+                    || (r.distance(opening[0]) < 0.001 && l.distance(opening[1]) < 0.001)
+            })
+        }));
+    }
+}
+
+/// 곡선 면을 삼각분할하더라도 실제 자기 교차나 뒤집힌 면은 허용하지 않는다.
+#[test]
+fn curved_joint_does_not_accept_crossed_polygon() {
+    assert!(
+        joint_surface_areas(
+            Vec2::ZERO,
+            &[
+                Vec2::new(-2., -2.),
+                Vec2::new(2., 2.),
+                Vec2::new(-2., 2.),
+                Vec2::new(2., -2.)
+            ]
+        )
+        .is_err()
+    );
+    assert!(
+        joint_surface_areas(
+            Vec2::ZERO,
+            &[Vec2::new(-2., -2.), Vec2::new(0., 2.), Vec2::new(2., -2.)]
+        )
+        .is_err()
+    );
+}
+
+/// 실제 곡선 접속은 지도 원점을 옮겨도 삼각분할/면 검증을 통과해야 한다.
+#[test]
+fn real_curved_joint_survives_shifted_origins() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../testdata/block-real/expo-curved-joint.osm.json");
+    let snapshot = crate::world::road_snapshot::load_road_snapshot(&path).unwrap();
+    let model = build_road_blocks(&snapshot.ways, &[], &RoadGraphConfig::default()).unwrap();
+    let base = snapshot.ways[0].nodes[0].pos;
+    for north in [-800., 0., 800.] {
+        let origin = LatLon {
+            lat: base.lat + (north / 6_371_008.8_f64).to_degrees(),
+            lon: base.lon,
+        };
+        let network = build_road_network(&model, origin, NetworkSettings::default()).unwrap();
+        let mut course = crate::world::course::training_course();
+        course.strips = network
+            .blocks
+            .iter()
+            .flat_map(|b| b.strips.clone())
+            .collect();
+        course.areas = network
+            .joints
+            .iter()
+            .flat_map(|j| j.areas.clone())
+            .chain(network.blocks.iter().flat_map(|b| b.areas.clone()))
+            .collect();
+        course.validate().unwrap();
+    }
+}
+
+/// 실제 원본 블록/방향을 고정해 선택·저장·동일 재생·공통 목표 도달을 검사하며 다른 경로로 재시도하지 않는다.
+#[test]
+fn real_city_joint_samples_build_routes() {
+    use crate::world::{
+        block_route,
+        road_blocks::{BlockDirection, BlockTraversal},
+        road_snapshot,
+    };
+    for (file, endpoints) in [
+        (
+            "expo-internal.osm.json",
+            [
+                (532526365, 13388325415, 8664556115),
+                (532526365, 13388325415, 8664556115),
+            ],
+        ),
+        (
+            "expo-curved-joint.osm.json",
+            [
+                (1286142779, 772406248, 794175423),
+                (1286142779, 794175423, 12468412566),
+            ],
+        ),
+        (
+            "gangnam-working-area.osm.json",
+            [
+                (129731721, 4944067989, 1906756396),
+                (504227065, 1906756396, 3089780844),
+            ],
+        ),
+    ] {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../testdata/block-real")
+            .join(file);
+        let snapshot = road_snapshot::load_road_snapshot(&path).unwrap();
+        let origin = snapshot.ways[0].nodes[0].pos;
+        let model = build_road_blocks(
+            &snapshot.ways,
+            &snapshot.restrictions,
+            &RoadGraphConfig::default(),
+        )
+        .unwrap();
+        let choose = |(way, entry, exit)| {
+            let b = model
+                .blocks
+                .iter()
+                .find(|b| {
+                    b.source_edges.iter().any(|e| e.way_id == way)
+                        && ((b.nodes[0].id == entry && b.nodes.last().unwrap().id == exit)
+                            || (b.nodes[0].id == exit && b.nodes.last().unwrap().id == entry))
+                })
+                .expect("exact source block exists");
+            BlockTraversal {
+                block_id: b.id.clone(),
+                direction: if b.nodes[0].id == entry {
+                    BlockDirection::Forward
+                } else {
+                    BlockDirection::Backward
+                },
+            }
+        };
+        let mut selected: Vec<_> = endpoints.into_iter().map(choose).collect();
+        if selected[0] == selected[1] {
+            selected.pop();
+        }
+        let result = block_route::build_block_route_course(
+            "real-map-drive",
+            &model,
+            origin,
+            NetworkSettings::default(),
+            &selected,
+            10000.,
+        )
+        .unwrap();
+        assert_eq!(result.network.blocks.len(), model.blocks.len());
+        let dir = std::env::temp_dir().join(format!(
+            "sim-real-replay-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let relative = crate::picker::model::relative_path(&dir, &path).unwrap();
+        let (saved_file, prepared) = crate::world::block_route_file::prepare_block_route_file(
+            &dir,
+            &crate::world::block_route_file::BlockRouteRequest {
+                name: "real-map-drive",
+                snapshot: &relative,
+                origin,
+                graph: &RoadGraphConfig::default(),
+                network: NetworkSettings::default(),
+                selected: &selected,
+            },
+        )
+        .unwrap();
+        let saved = dir.join("real-route.toml");
+        crate::world::block_route_file::save_block_route_file(&saved, &saved_file).unwrap();
+        let replayed = crate::world::block_route_file::load_block_route_file(&saved).unwrap();
+        assert_eq!(prepared, replayed);
+        assert_eq!(result, replayed);
+        for speed in [3.0, 8.0] {
+            let drive = crate::world::test_drive::follow_path_to_goal(
+                &replayed.course,
+                &replayed.guide,
+                speed,
+            );
+            eprintln!(
+                "REAL DRIVE {file}, length {:.1} m, speed {speed}: {drive:?}",
+                replayed.plan.length_m
+            );
+            assert_eq!(drive.impacts, 0, "{file}: {drive:?}");
+            assert!(drive.goal_reached, "{file}: {drive:?}");
+        }
+    }
+}
 /// 입력 블록 순서와 생성 반복 횟수로 결과 순서나 형상이 변하지 않는다.
 #[test]
 fn block_order_is_deterministic() {
@@ -197,13 +418,13 @@ fn block_order_is_deterministic() {
 }
 /// 접속부 절단 거리를 확보할 수 없으면 실패 블록과 노드를 명시하고 일부 도로를 제외하지 않는다.
 #[test]
-fn short_block_reports_source_without_detour() {
+fn unresolved_tiny_block_reports_source_without_detour() {
     let m = model(vec![
         (
             10,
             "service",
             &[],
-            vec![(1, -50.0, 0.0), (2, 0.0, 0.0), (3, 1.0, 0.0)],
+            vec![(1, -50.0, 0.0), (2, 0.0, 0.0), (3, 0.001, 0.0)],
         ),
         (20, "service", &[], vec![(2, 0.0, 0.0), (4, 0.0, 50.0)]),
     ]);
@@ -229,7 +450,7 @@ fn closed_loop_has_seamless_offsets() {
     )]);
     let g = build(&m).unwrap();
     assert!(g.joints.is_empty());
-    let s = &g.blocks[0].strip;
+    let s = &g.blocks[0].strips[0];
     assert_eq!(s.left.first(), s.left.last());
     assert_eq!(s.right.first(), s.right.last());
     assert!(s.left.iter().chain(&s.right).all(|p| p.is_finite()));
@@ -292,8 +513,13 @@ fn drive_network(g: &RoadNetworkGeometry, path: &[Vec2]) {
     let mut course = crate::world::course::training_course();
     course.surfaces.clear();
     course.markings.clear();
-    course.strips = g.blocks.iter().map(|b| b.strip.clone()).collect();
-    course.areas = g.joints.iter().map(|j| j.area.clone()).collect();
+    course.strips = g.blocks.iter().flat_map(|b| b.strips.clone()).collect();
+    course.areas = g
+        .joints
+        .iter()
+        .flat_map(|j| j.areas.clone())
+        .chain(g.blocks.iter().flat_map(|b| b.areas.clone()))
+        .collect();
     course.colliders = g.colliders.clone();
     course.start = crate::world::map::start_pose(path).unwrap();
     course.goal = Some(crate::world::map::goal_pose(path).unwrap());
@@ -360,7 +586,11 @@ fn strip_mesh_winding_remains_valid() {
         )]),
     ] {
         for b in build(&m).unwrap().blocks {
-            for (l, r) in b.strip.left.windows(2).zip(b.strip.right.windows(2)) {
+            for (l, r) in b.strips[0]
+                .left
+                .windows(2)
+                .zip(b.strips[0].right.windows(2))
+            {
                 for (a, b, c) in [(l[0], r[0], l[1]), (r[0], r[1], l[1])] {
                     assert!((b - a).perp_dot(c - a) < -1.0e-6, "inverted road triangle");
                 }
@@ -423,4 +653,242 @@ fn expo_parking_aisle_snapshot_generates_and_drives() {
         Some("parking_aisle")
     );
     drive_network(&g, &g.blocks[0].centerline);
+}
+
+/// 양 끝의 폭 전환 접속부가 4 m 블록을 모두 소비하지 않고 원본 블록을 보존해야 한다.
+#[test]
+fn short_junctions_allocate_cuts_between_neighbors() {
+    let m = model(vec![
+        (
+            10,
+            "service",
+            &[("width", "8")],
+            vec![(1, -60., 0.), (2, 0., 0.)],
+        ),
+        (
+            20,
+            "service",
+            &[("width", "6")],
+            vec![(2, 0., 0.), (3, 4., 0.)],
+        ),
+        (
+            30,
+            "service",
+            &[("width", "8")],
+            vec![(3, 4., 0.), (4, 64., 0.)],
+        ),
+    ]);
+    let g = build(&m).expect("short connector must share its cut budget");
+    assert_eq!(g.blocks.len(), m.blocks.len());
+    assert_eq!(g.joints.len(), 2);
+    let short = m
+        .blocks
+        .iter()
+        .find(|b| b.source_edges[0].way_id == 20)
+        .unwrap();
+    let s = g.blocks.iter().find(|b| b.block_id == short.id).unwrap();
+    assert!(road_geom::polyline_length(&s.centerline) >= 0.05);
+    assert!(
+        s.strips[0]
+            .left
+            .iter()
+            .zip(&s.strips[0].right)
+            .all(|(l, r)| (l.distance(*r) - 6.).abs() < 0.001)
+    );
+    drive_network(&g, &[Vec2::new(-60., 0.), Vec2::new(64., 0.)]);
+    let mut reversed = m.clone();
+    reversed.blocks.reverse();
+    assert_eq!(g, build(&reversed).unwrap());
+}
+/// 실제 폭 전환/곡선 교차로를 원본 좌표·폭·모든 입구 그대로 생성해야 한다.
+#[test]
+fn short_junctions_real_expo_and_gangnam_regressions() {
+    let mut failures = Vec::new();
+    for (name, node) in [("expo", 806285558_u64), ("gangnam", 414684605)] {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(format!(
+            "../../testdata/junction-regressions/{name}-joint.osm.json"
+        ));
+        let snapshot = crate::world::road_snapshot::load_road_snapshot(&path).unwrap();
+        let m = build_road_blocks(
+            &snapshot.ways,
+            &snapshot.restrictions,
+            &RoadGraphConfig::default(),
+        )
+        .unwrap();
+        let origin = snapshot
+            .ways
+            .iter()
+            .flat_map(|w| &w.nodes)
+            .find(|n| n.id == node)
+            .unwrap()
+            .pos;
+        let g = match build_road_network(&m, origin, NetworkSettings::default()) {
+            Ok(g) => g,
+            Err(e) => {
+                failures.push(format!("{name}: {e:?}"));
+                continue;
+            }
+        };
+        assert_eq!(g.blocks.len(), m.blocks.len());
+        assert!(g.joints.iter().any(|j| j.node_id == node));
+        let mut course = crate::world::course::training_course();
+        course.strips = g.blocks.iter().flat_map(|b| b.strips.clone()).collect();
+        course.areas = g
+            .joints
+            .iter()
+            .flat_map(|j| j.areas.clone())
+            .chain(g.blocks.iter().flat_map(|b| b.areas.clone()))
+            .collect();
+        course.colliders = g.colliders.clone();
+        course.validate().unwrap();
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+/// 전체 고정 지역을 생성해 특정 실패 way만 지우거나 경로 밖 도로를 생략하지 않아야 한다.
+#[test]
+fn short_junctions_complete_real_regions_preserve_all_blocks() {
+    let mut failures = Vec::new();
+    for name in ["expo", "gangnam"] {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(format!(
+            "../../testdata/junction-regressions/{name}-region.osm.json"
+        ));
+        let snapshot = crate::world::road_snapshot::load_road_snapshot(&path).unwrap();
+        let m = build_road_blocks(
+            &snapshot.ways,
+            &snapshot.restrictions,
+            &RoadGraphConfig::default(),
+        )
+        .unwrap();
+        let origin = if name == "expo" {
+            LatLon {
+                lat: 34.7526,
+                lon: 127.7471,
+            }
+        } else {
+            LatLon {
+                lat: 37.4979,
+                lon: 127.0276,
+            }
+        };
+        let g = match build_road_network(&m, origin, NetworkSettings::default()) {
+            Ok(g) => g,
+            Err(e) => {
+                failures.push(format!("{name}: {e:?}"));
+                continue;
+            }
+        };
+        assert_eq!(g.blocks.len(), m.blocks.len());
+        let mut course = crate::world::course::training_course();
+        course.strips = g.blocks.iter().flat_map(|b| b.strips.clone()).collect();
+        course.areas = g
+            .joints
+            .iter()
+            .flat_map(|j| j.areas.clone())
+            .chain(g.blocks.iter().flat_map(|b| b.areas.clone()))
+            .collect();
+        course.colliders = g.colliders.clone();
+        course.validate().unwrap();
+        let mut reverse = m.clone();
+        reverse.blocks.reverse();
+        reverse.connections.reverse();
+        assert_eq!(
+            g,
+            build_road_network(&reverse, origin, NetworkSettings::default()).unwrap()
+        );
+        eprintln!(
+            "FULL NETWORK {name}: blocks={}, joints={}, colliders={}",
+            g.blocks.len(),
+            g.joints.len(),
+            g.colliders.len()
+        );
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// 가까운 T자 교차로 사이 블록도 전부 남기고 공용 노면 내부 연석은 주행을 막지 않아야 한다.
+#[test]
+fn short_junctions_adjacent_tees_and_shallow_forks_have_no_internal_walls() {
+    for m in [
+        model(vec![
+            (
+                10,
+                "service",
+                &[],
+                vec![(1, -60., 0.), (2, 0., 0.), (3, 4., 0.), (4, 64., 0.)],
+            ),
+            (20, "service", &[], vec![(2, 0., 0.), (5, 0., 50.)]),
+            (30, "service", &[], vec![(3, 4., 0.), (6, 4., -50.)]),
+        ]),
+        model(vec![
+            (
+                10,
+                "service",
+                &[],
+                vec![(1, -60., 0.), (2, 0., 0.), (3, 80., 0.)],
+            ),
+            (20, "service", &[], vec![(2, 0., 0.), (4, 80., 4.2)]),
+        ]),
+    ] {
+        let g = build(&m).expect("overlapping junction footprints must remain passable");
+        assert_eq!(g.blocks.len(), m.blocks.len());
+        drive_network(&g, &[Vec2::new(-60., 0.), Vec2::new(60., 0.)]);
+    }
+}
+/// 노드가 연결되지 않은 입체·평면 교차는 다른 도로가 겹쳐 보여도 연석을 제거하면 안 된다.
+#[test]
+fn short_junctions_do_not_erase_curbs_at_unconnected_crossings() {
+    let m = model(vec![
+        (
+            10,
+            "service",
+            &[("width", "6")],
+            vec![(1, -60., 0.), (2, 60., 0.)],
+        ),
+        (
+            20,
+            "service",
+            &[("width", "6"), ("bridge", "yes"), ("layer", "1")],
+            vec![(3, 0., -60.), (4, 0., 60.)],
+        ),
+    ]);
+    let g = build(&m).unwrap();
+    assert!(g.joints.is_empty());
+    assert!(
+        g.colliders
+            .iter()
+            .any(|c| inside(c.rect, Vec2::new(3.15, 0.)))
+    );
+}
+
+/// 짧은 S자 표본의 마이터가 교차해도 원본 중심선·폭을 가진 유효 노면 조각은 보존한다.
+#[test]
+fn short_junctions_buffered_bends_preserve_source_width_and_mesh() {
+    let m = model(vec![(
+        10,
+        "service",
+        &[("width", "6")],
+        vec![
+            (1, -60., 0.),
+            (2, 0., 0.),
+            (3, 0.1, 0.2),
+            (4, 0.2, -0.2),
+            (5, 60., 0.),
+        ],
+    )]);
+    let g = build(&m).expect("offset overlap must not discard the entire source block");
+    assert_eq!(g.blocks.len(), 1);
+    let source: Vec<_> = m.blocks[0]
+        .nodes
+        .iter()
+        .map(|n| project(fixtures::offset(0., 0.), n.pos))
+        .collect();
+    let expected = road_geom::drop_collinear(&source);
+    assert_eq!(g.blocks[0].centerline.len(), expected.len());
+    assert!(
+        g.blocks[0]
+            .centerline
+            .iter()
+            .zip(expected)
+            .all(|(a, b)| a.distance(b) < 1e-4)
+    );
 }

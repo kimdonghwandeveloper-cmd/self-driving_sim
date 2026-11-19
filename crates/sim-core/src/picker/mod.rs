@@ -2,6 +2,7 @@
 //!
 //! 화면·조작은 Godot 쪽(`SimRoutePicker`·`SimTiles`)에 있다.
 
+pub mod block_selection;
 pub mod geocode;
 pub mod model;
 pub mod region;

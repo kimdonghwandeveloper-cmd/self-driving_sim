@@ -45,6 +45,26 @@ fn result(ok: bool, error: &str) -> VarDictionary {
     vdict! { "ok" => ok, "error" => error }
 }
 
+/// 선택 실패의 사용자 설명·원인 코드와 지도 강조용 두 블록 형상을 전달한다.
+fn selection_failure(
+    s: &sim_core::picker::block_selection::BlockSelection,
+    e: &sim_core::picker::block_selection::SelectionFailure,
+) -> VarDictionary {
+    let highlights: Array<VarDictionary> = e
+        .from
+        .iter()
+        .chain(e.to.iter())
+        .filter_map(|t| {
+            s.model
+                .blocks
+                .iter()
+                .find(|b| b.id == t.block_id)
+                .map(|b| block_item(b, t.direction))
+        })
+        .collect();
+    vdict! {"ok"=>false,"error"=>e.message.as_str(),"code"=>e.code,"selection_index"=>e.index as i64,"highlights"=>&highlights}
+}
+
 /// 진행 이벤트 사전(`{type, message, request_id}`)을 만든다.
 fn event(kind: &str, message: &str, request_id: i64) -> VarDictionary {
     vdict! { "type" => kind, "message" => message, "request_id" => request_id }
@@ -86,6 +106,14 @@ pub struct SimRoutePicker {
     /// 열어 둔 전국 자료(처음 지역을 열 때 연다).
     korea: Option<KoreaData>,
     model: Option<PickerModel>,
+    /// 블록 UI의 확정 선택과 마지막 검증된 저장·주행 결과.
+    block_selection: Option<sim_core::picker::block_selection::BlockSelection>,
+    block_preview: Option<(
+        sim_core::world::block_route_file::BlockRouteFile,
+        sim_core::world::block_route::BlockRouteCourse,
+    )>,
+    block_source_hash: String,
+    block_error: String,
     /// 접근 제한 도로를 포함하는 연습 모드. 실제 통행 허가와 무관하다.
     include_restricted: bool,
     /// 지금 열린 지역 범위(전국 자료에서 연 경우).
@@ -114,6 +142,291 @@ impl SimRoutePicker {
                 result(true, "")
             }
             Err(error) => result(false, &error),
+        }
+    }
+
+    /// 고정 OSM 스냅샷을 블록 UI용으로 연다. 지역 보정은 기존 점 경로에서만 지원한다.
+    #[func]
+    fn load_block_snapshot(&mut self, path: GString) -> VarDictionary {
+        let path = snapshot_graph_path(&resolve_user_path(&path.to_string()));
+        match self.initialize_blocks(&path) {
+            Ok(()) => {
+                self.loaded = None;
+                result(true, "")
+            }
+            Err(error) => result(false, &error),
+        }
+    }
+    /// 출발/도착 선택 전에 1.5~10 km 사각형 지역을 명시적으로 연다. 실패하면 기존 지역을 유지한다.
+    #[func]
+    fn open_block_region(&mut self, center: PackedFloat64Array, span_m: f64) -> VarDictionary {
+        let [lat, lon] = center.as_slice() else {
+            return result(false, "위도·경도 두 값이 필요합니다");
+        };
+        if !(span_m.is_finite()
+            && (1500.0..=10000.0).contains(&span_m)
+            && lat.is_finite()
+            && lat.abs() < 85.0
+            && lon.is_finite()
+            && lon.abs() <= 180.0)
+        {
+            return result(false, "지역 범위는 1.5~10 km입니다");
+        }
+        let half = span_m / 2.0;
+        let dy = (half / 6_371_008.8_f64).to_degrees();
+        let dx = dy / lat.to_radians().cos();
+        let bbox = Bbox {
+            south: lat - dy,
+            west: lon - dx,
+            north: lat + dy,
+            east: lon + dx,
+        };
+        let opened = (|| {
+            bbox.validate_local_route()?;
+            let (path, list) = self
+                .korea_data()?
+                .region_snapshot_local_route(&bbox, &repo_path(REGION_CACHE_DIR))?;
+            self.initialize_blocks(&path)?;
+            if let Some(model) = self.model.as_mut() {
+                model.set_places(list);
+            }
+            Ok::<(), String>(())
+        })();
+        match opened {
+            Ok(()) => {
+                self.loaded = Some(bbox);
+                result(true, "")
+            }
+            Err(error) => result(false, &error),
+        }
+    }
+    /// 전체 블록의 중심선·허용 방향·원본·폭을 반환한다. 경로 선택과 도로 목록은 독립적이다.
+    #[func]
+    fn block_items(&self) -> Array<VarDictionary> {
+        self.block_selection
+            .iter()
+            .flat_map(|s| &s.model.blocks)
+            .map(|b| {
+                let mut item = block_item(
+                    b,
+                    b.directions
+                        .first()
+                        .copied()
+                        .unwrap_or(sim_core::world::road_blocks::BlockDirection::Forward),
+                );
+                let directions: PackedStringArray = b
+                    .directions
+                    .iter()
+                    .map(|&d| GString::from(direction_name(d)))
+                    .collect();
+                item.set("directions", &directions);
+                item
+            })
+            .collect()
+    }
+
+    /// 원본을 보존하면서 보수적으로 차단한 불완전 회전 제한을 UI에 명시한다.
+    #[func]
+    fn block_diagnostics(&self) -> PackedStringArray {
+        self.block_selection
+            .iter()
+            .flat_map(|s| &s.model.diagnostics)
+            .map(|s| GString::from(s.as_str()))
+            .collect()
+    }
+    /// 클릭 주변 모든 방향 후보를 반환할 뿐, 가장 가까운 도로를 자동 확정하지 않는다.
+    #[func]
+    fn block_candidates(&self, view: Vector2, radius: f32) -> Array<VarDictionary> {
+        let Some(selection) = &self.block_selection else {
+            return Array::new();
+        };
+        selection
+            .candidates(glam::Vec2::new(view.x, view.y), radius)
+            .into_iter()
+            .map(|c| {
+                let b = selection
+                    .model
+                    .blocks
+                    .iter()
+                    .find(|b| b.id == c.traversal.block_id)
+                    .expect("candidate belongs to model");
+                let mut item = block_item(b, c.traversal.direction);
+                item.set("distance", c.distance);
+                item
+            })
+            .collect()
+    }
+    /// 사용자가 확인한 블록과 방향을 역할 슬롯에 넣고 이전 미리보기를 무효화한다.
+    #[func]
+    fn choose_block(&mut self, id: GString, direction: GString, role: GString) -> VarDictionary {
+        use sim_core::world::road_blocks::{BlockDirection, BlockId, BlockTraversal};
+        let dir = match direction.to_string().as_str() {
+            "forward" => BlockDirection::Forward,
+            "backward" => BlockDirection::Backward,
+            _ => return result(false, "올바른 진행 방향을 고르세요"),
+        };
+        let Some(s) = self.block_selection.as_mut() else {
+            return result(false, "지역을 먼저 여세요");
+        };
+        match s.select_checked(
+            &role.to_string(),
+            BlockTraversal {
+                block_id: BlockId(id.to_string()),
+                direction: dir,
+            },
+            sim_core::world::route_plan::ROUTE_LENGTH_CAP_M,
+        ) {
+            Ok(()) => {
+                self.block_preview = None;
+                self.block_error = "선택이 바뀌었습니다. 미리보기를 눌러 검증하세요".into();
+                result(true, "")
+            }
+            Err(e) => selection_failure(s, &e),
+        }
+    }
+    /// 선택 목록을 역할/경유 번호와 함께 반환한다.
+    #[func]
+    fn block_selections(&self) -> Array<VarDictionary> {
+        let Some(s) = &self.block_selection else {
+            return Array::new();
+        };
+        s.start
+            .iter()
+            .map(|t| ("start", 0, t))
+            .chain(s.vias.iter().enumerate().map(|(i, t)| ("via", i, t)))
+            .chain(s.goal.iter().map(|t| ("goal", 0, t)))
+            .map(|(role, index, t)| {
+                let b = s
+                    .model
+                    .blocks
+                    .iter()
+                    .find(|b| b.id == t.block_id)
+                    .expect("validated selection");
+                let mut item = block_item(b, t.direction);
+                item.set("role", role);
+                item.set("index", index as i64);
+                item
+            })
+            .collect()
+    }
+    /// 경유 항목 이동/삭제를 처리하고 미리보기를 비운다. offset=0은 삭제다.
+    #[func]
+    fn edit_block_via(&mut self, index: i64, offset: i64) -> VarDictionary {
+        let Some(s) = self.block_selection.as_mut() else {
+            return result(false, "지역을 먼저 여세요");
+        };
+        let Ok(index) = usize::try_from(index) else {
+            return result(false, "잘못된 경유 번호입니다");
+        };
+        if !matches!(offset, -1..=1) {
+            return result(false, "경유 이동은 한 칸씩 가능합니다");
+        }
+        let edited = s.edit_checked(
+            index,
+            offset as isize,
+            sim_core::world::route_plan::ROUTE_LENGTH_CAP_M,
+        );
+        match edited {
+            Ok(()) => {
+                self.block_preview = None;
+                self.block_error = "경유가 바뀌었습니다. 다시 미리보기를 실행하세요".into();
+                result(true, "")
+            }
+            Err(e) => selection_failure(s, &e),
+        }
+    }
+    /// 선택 전체를 지우며 마지막 주행 결과도 함께 무효화한다.
+    #[func]
+    fn clear_blocks(&mut self) {
+        if let Some(s) = self.block_selection.as_mut() {
+            s.clear();
+        }
+        self.block_preview = None;
+        self.block_error.clear();
+    }
+    /// 확정 선택만 기존 블록 경로 엔진으로 계획·기하·차체·저장 재생 검증한다. 실패 시 자동 우회하지 않는다.
+    #[func]
+    fn preview_blocks(&mut self) -> VarDictionary {
+        use sim_core::world::block_route_file::{BlockRouteRequest, prepare_block_route_file};
+        self.block_preview = None;
+        if let Some(s) = &self.block_selection
+            && let Err(e) = s.check(sim_core::world::route_plan::ROUTE_LENGTH_CAP_M)
+        {
+            self.block_error = e.message.clone();
+            return selection_failure(s, &e);
+        }
+        let prepared = (|| {
+            let s = self.block_selection.as_ref().ok_or("지역을 먼저 여세요")?;
+            let model = self.model.as_ref().ok_or("지역을 먼저 여세요")?;
+            let bytes = std::fs::read(&model.snapshot_path).map_err(|e| e.to_string())?;
+            if sim_core::world::road_snapshot::sha256_hex(&bytes) != self.block_source_hash {
+                return Err("열었던 원본 자료가 바뀌었습니다. 명시적으로 다시 여세요".into());
+            }
+            let dir = repo_path(ROUTE_DIR);
+            std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+            let relative = sim_core::picker::model::relative_path(&dir, &model.snapshot_path)?;
+            prepare_block_route_file(
+                &dir,
+                &BlockRouteRequest {
+                    name: "선택한 블록 경로",
+                    snapshot: &relative,
+                    origin: model.origin,
+                    graph: &model.config,
+                    network: sim_core::world::road_network::NetworkSettings::default(),
+                    selected: &s.ordered()?,
+                },
+            )
+        })();
+        match prepared {
+            Ok(value) => {
+                self.block_preview = Some(value);
+                self.block_error.clear();
+                result(true, "")
+            }
+            Err(e) => {
+                self.block_error = e.clone();
+                result(false, &e)
+            }
+        }
+    }
+    /// 계산한 안내선과 오류를 반환한다. 편집 뒤 옛 미리보기가 주행 가능한 상태로 남지 않는다.
+    #[func]
+    fn block_route(&self) -> VarDictionary {
+        let Some((file, route)) = &self.block_preview else {
+            return vdict! {"ok"=>false,"error"=>self.block_error.as_str(),"line"=>&PackedVector2Array::new(),"length_m"=>0.0_f64};
+        };
+        let origin = sim_core::world::map::LatLon {
+            lat: file.origin[0],
+            lon: file.origin[1],
+        };
+        let line: PackedVector2Array = route
+            .guide
+            .iter()
+            .map(|p| {
+                let lat = origin.lat - (p.y as f64 / 6_371_008.8_f64).to_degrees();
+                let lon = origin.lon
+                    + (p.x as f64 / (6_371_008.8_f64 * origin.lat.to_radians().cos())).to_degrees();
+                let v = tiles::to_view(sim_core::world::map::LatLon { lat, lon });
+                Vector2::new(v.x, v.y)
+            })
+            .collect();
+        vdict! {"ok"=>true,"error"=>"","line"=>&line,"length_m"=>route.plan.length_m}
+    }
+    /// 검증된 미리보기 파일만 새 이름으로 저장한다. 기존 경로와 변경된 원본을 덮어쓰지 않는다.
+    #[func]
+    fn save_blocks(&self, name: GString) -> VarDictionary {
+        let failure = |e: &str| vdict! {"ok"=>false,"error"=>e,"path"=>""};
+        let name = name.to_string();
+        if !valid_route_name(&name) {
+            return failure("저장 이름은 영문·숫자·_- 1~64자입니다");
+        }
+        let Some((file, _)) = &self.block_preview else {
+            return failure("먼저 미리보기를 실행하세요");
+        };
+        let path = repo_path(ROUTE_DIR).join(format!("{name}.toml"));
+        match sim_core::world::block_route_file::save_block_route_file(&path, file) {
+            Ok(()) => vdict! {"ok"=>true,"error"=>"","path"=>path.to_string_lossy().as_ref()},
+            Err(e) => failure(&e),
         }
     }
 
@@ -628,6 +941,26 @@ impl SimRoutePicker {
 }
 
 impl SimRoutePicker {
+    /// 점 선택/지역 보정을 끼워 넣지 않고 원본 스냅샷과 블록 모델을 함께 교체한다.
+    fn initialize_blocks(&mut self, path: &Path) -> Result<(), String> {
+        let (model, _) = load_model(path, &repo_path(ROAD_GRAPH_CONFIG_PATH))?;
+        let blocks = sim_core::world::road_blocks::build_road_blocks(
+            &model.ways,
+            &model.restrictions,
+            &model.config,
+        )?;
+        let hash = sim_core::world::road_snapshot::sha256_hex(
+            &std::fs::read(path).map_err(|e| e.to_string())?,
+        );
+        self.model = Some(model);
+        self.block_selection = Some(sim_core::picker::block_selection::BlockSelection::new(
+            blocks,
+        ));
+        self.block_preview = None;
+        self.block_error.clear();
+        self.block_source_hash = hash;
+        Ok(())
+    }
     /// 전국 자료를 연다(처음 한 번). 폴더는 `data_dir`, 비어 있으면 [`KOREA_DATA_DIR`].
     fn korea_data(&mut self) -> Result<&KoreaData, String> {
         if self.korea.is_none() {
@@ -672,6 +1005,35 @@ impl SimRoutePicker {
             self.message.clear();
         }
         self.model = Some(model);
+        self.block_selection = None;
+        self.block_preview = None;
+        self.block_error.clear();
         Ok(())
     }
+}
+
+/// 정규화한 블록 방향의 외부 이름을 반환한다.
+fn direction_name(direction: sim_core::world::road_blocks::BlockDirection) -> &'static str {
+    match direction {
+        sim_core::world::road_blocks::BlockDirection::Forward => "forward",
+        sim_core::world::road_blocks::BlockDirection::Backward => "backward",
+    }
+}
+/// 한 블록을 방향대로 그릴 수 있는 원본 설명 사전으로 만든다.
+fn block_item(
+    b: &sim_core::world::road_blocks::RoadBlock,
+    direction: sim_core::world::road_blocks::BlockDirection,
+) -> VarDictionary {
+    let mut nodes: Vec<_> = b.nodes.iter().collect();
+    if direction == sim_core::world::road_blocks::BlockDirection::Backward {
+        nodes.reverse();
+    }
+    let line: PackedVector2Array = nodes
+        .iter()
+        .map(|n| {
+            let v = tiles::to_view(n.pos);
+            Vector2::new(v.x, v.y)
+        })
+        .collect();
+    vdict! {"id"=>b.id.0.as_str(),"direction"=>direction_name(direction),"name"=>b.attributes.tags.get("name").map(String::as_str).unwrap_or(b.attributes.highway.as_str()),"line"=>&line,"length_m"=>b.length_m,"width_m"=>b.attributes.width_m,"from_node"=>nodes[0].id as i64,"to_node"=>nodes[nodes.len()-1].id as i64,"access"=>b.attributes.tags.get("access").map(String::as_str).unwrap_or(""),"way_id"=>b.source_edges[0].way_id as i64}
 }
