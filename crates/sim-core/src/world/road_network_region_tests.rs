@@ -55,11 +55,19 @@ fn source_way_route(
 #[test]
 fn complete_regions_save_replay_and_drive_fixed_source_roads() {
     for (name, ways) in [
-        ("expo", vec![(1286142779, false)]),
-        ("gangnam", vec![(129731721, true), (504227065, false)]),
+        ("expo-region", vec![(1286142779, false)]),
+        (
+            "gangnam-region",
+            vec![(129731721, true), (504227065, false)],
+        ),
+        ("expo-joint", vec![(66645676, false), (66645668, false)]),
+        (
+            "gangnam-joint",
+            vec![(215040147, false), (219837933, false)],
+        ),
     ] {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(format!(
-            "../../testdata/junction-regressions/{name}-region.osm.json"
+            "../../testdata/junction-regressions/{name}.osm.json"
         ));
         let snapshot = road_snapshot::load_road_snapshot(&path).unwrap();
         let config = RoadGraphConfig::default();
@@ -68,7 +76,7 @@ fn complete_regions_save_replay_and_drive_fixed_source_roads() {
             .into_iter()
             .flat_map(|(id, rev)| source_way_route(&model, &snapshot, id, rev))
             .collect();
-        let origin = if name == "expo" {
+        let origin = if name.starts_with("expo") {
             LatLon {
                 lat: 34.7526,
                 lon: 127.7471,
@@ -113,7 +121,7 @@ fn complete_regions_save_replay_and_drive_fixed_source_roads() {
             let drive =
                 crate::world::test_drive::follow_path_to_goal(&replay.course, &replay.guide, speed);
             eprintln!(
-                "FULL REGION DRIVE {name}: {:.1} m, {speed} m/s, {drive:?}",
+                "FIXED OSM DRIVE {name}: {:.1} m, {speed} m/s, {drive:?}",
                 replay.plan.length_m
             );
             assert!(drive.goal_reached, "{name}: {drive:?}");
