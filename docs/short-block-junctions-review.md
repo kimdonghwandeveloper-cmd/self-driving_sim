@@ -27,7 +27,7 @@
 - Rust 484개: sim-core 465, 통합 4, sim-godot 12, sim-tools 3.
 - Godot 28종(전국 자료 포함). 전체 엑스포 350블록/200접속부, 강남 973블록/571접속부를 유지한 선택·저장·재생·메시·차량 이동.
 - 패키징 경로/필수 파일 안전성 110개 통과.
-- 검토용 독립 실행본 제작·검사는 마지막 단계에서 확인한다.
+- 검토용 독립 실행본 `self-driving_sim-test/dist/short-junction-review-20261120/Simulator.exe` 제작 및 독립 검사 9개 통과. 원본 소스 없이 전체 지역 시험도 통과했다. 판본은 로컬 검토용 0, 자동 업데이트 비활성이다.
 
 | 고정 원본 경로 | 길이 | 3 / 8 m/s | 최대 중심선 이탈 |
 | --- | ---: | --- | ---: |
@@ -43,7 +43,7 @@ Godot 차량 시험은 시작 준비와 128틱 이동까지, 완주·충돌 0은
 1. 새 검토용 실행본 또는 test 워크트리 Godot 프로젝트를 실행한다.
 2. 경로 지도 → 새 경로 → 더 보기 → ‘엑스포 주변 지역 표본 · 350블록’ 또는 ‘강남 지역 표본 · 973블록’을 연다.
 3. 긴 도로 두 개를 출발·도착으로 지정하고 경로 확인 → 주행 시작을 누른다.
-4. 저장 후 메뉴에서 재진입하고 교차로 면·연석·주행 감각을 확인한다. 이전 v3/v1 블록 파일은 새 판본에서 경로 확인·저장으로 다시 만든다.
+4. 저장 후 메뉴에서 재진입하고 교차로 면·연석·주행 감각을 확인한다. 이전 `road-network-v3`/`block-guide-v1` 블록 파일은 경로 확인·저장으로 다시 만든다. 기존 `route-v1` 파일은 유지된다.
 5. 극히 짧은 도로에 차량 시작/목표 자세를 놓을 수 없는 경우와 좁은 도로·실제 최소 반경 미달은 계속 거부한다. 특정 전국 임의 구간과 성능/입체 도로 수동 검수는 별도다.
 
 ## 변경 파일과 주요 위치
@@ -52,8 +52,8 @@ Godot 차량 시험은 시작 준비와 128틱 이동까지, 완주·충돌 0은
 | --- | --- | --- |
 | crates/sim-core/src/world/road_network.rs | 18, 42, 79, 371, 462, 534 | 판본, 노면 조각, 절단 예산, 테이퍼/접속 외곽 |
 | crates/sim-core/src/world/road_network_surface.rs | 1 | 방사 합집합과 연결된 노면 내부 연석 절단·검증 |
-| crates/sim-core/src/world/block_route.rs | 23, 233, 336, 556 | 노면 조각 연결, 실제 접선 안내선·끝점 결합 |
-| crates/sim-core/src/world/block_route_file.rs | 473 | 새 결과 지문·전체 노면 결속 |
+| crates/sim-core/src/world/block_route.rs | 21, 233, 336, 562, 579 | 노면 조각 연결, 실제 접선 안내선·끝점 결합 |
+| crates/sim-core/src/world/block_route_file.rs | 471, 478 | 새 결과 지문·전체 노면 결속 |
 | crates/sim-core/src/world/test_drive.rs | 9, 68 | 실제 세션과 같은 격자 충돌 검색 |
 | crates/sim-core/src/world/road_network_tests.rs | 413, 647 | 퇴화 입력 진단·짧은 블록/실제 전체 지역 회귀 |
 | crates/sim-core/src/world/road_network_region_tests.rs | 1 | 원본 way 고정 저장·재생·목표 도달 4사례 |
@@ -67,3 +67,5 @@ Godot 차량 시험은 시작 준비와 128틱 이동까지, 완주·충돌 0은
 | testdata/junction-regressions/expo-region.osm.json, gangnam-region.osm.json | 1 | 기존 지역 스냅샷 전체 보존 |
 | PLAN.md | 683 | 이력/현행 판본, 자동 검증과 수동 검수 분리 |
 | docs/short-block-junctions-review.md | 1 | 검토 범위·결과·잔여 검수 |
+
+검토용 실행본의 런타임 코드는 `03557e0` 기준으로 검증했다. 이후 검토 문서 갱신은 런타임에 영향을 주지 않는다. 사용자 확인 전까지 정식 v2·main/develop은 그대로 유지한다.
