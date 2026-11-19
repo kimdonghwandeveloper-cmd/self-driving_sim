@@ -539,6 +539,38 @@ fn out_of_scope_turn_target_is_fail_closed_and_deterministic() {
     assert!(!a.connections.iter().any(|c| c.via_node == 2));
 }
 
+/// via 위치까지 불명확하면 진입 way를 인접 way와 합쳐 차단을 우회하지 않도록 양 끝을 보존한다.
+#[test]
+fn unknown_via_quarantine_cannot_be_bypassed_by_merging() {
+    let ways = parse(vec![
+        (10, "service", &[], vec![(1, 0., 0.), (2, 50., 0.)]),
+        (20, "service", &[], vec![(2, 50., 0.), (3, 100., 0.)]),
+    ]);
+    let rule = TurnRestriction {
+        id: 7383523,
+        from_way: 10,
+        via_node: 999,
+        to_way: 20,
+        only: false,
+    };
+    let model = build_road_blocks(&ways, &[rule], &RoadGraphConfig::default()).unwrap();
+    assert_eq!(model.blocks.len(), 2);
+    assert_eq!(model.restrictions, vec![rule]);
+    assert!(model.diagnostics[0].contains("모든 출구"));
+    assert!(!model.connections.iter().any(|c| {
+        model
+            .blocks
+            .iter()
+            .find(|b| b.id == c.from.block_id)
+            .unwrap()
+            .source_edges
+            .last()
+            .unwrap()
+            .way_id
+            == 10
+    }));
+}
+
 /// 빈 입력은 빈 모델로 처리할 수 있다.
 #[test]
 fn empty_input_has_no_blocks_or_connections() {

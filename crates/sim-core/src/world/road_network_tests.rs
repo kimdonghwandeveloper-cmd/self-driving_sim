@@ -257,6 +257,31 @@ fn curved_joint_does_not_accept_crossed_polygon() {
     );
 }
 
+/// 실제 곡선 접속은 지도 원점을 옮겨도 삼각분할/면 검증을 통과해야 한다.
+#[test]
+fn real_curved_joint_survives_shifted_origins() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../testdata/block-real/expo-curved-joint.osm.json");
+    let snapshot = crate::world::road_snapshot::load_road_snapshot(&path).unwrap();
+    let model = build_road_blocks(&snapshot.ways, &[], &RoadGraphConfig::default()).unwrap();
+    let base = snapshot.ways[0].nodes[0].pos;
+    for north in [-800., 0., 800.] {
+        let origin = LatLon {
+            lat: base.lat + (north / 6_371_008.8_f64).to_degrees(),
+            lon: base.lon,
+        };
+        let network = build_road_network(&model, origin, NetworkSettings::default()).unwrap();
+        let mut course = crate::world::course::training_course();
+        course.strips = network.blocks.iter().map(|b| b.strip.clone()).collect();
+        course.areas = network
+            .joints
+            .iter()
+            .flat_map(|j| j.areas.clone())
+            .collect();
+        course.validate().unwrap();
+    }
+}
+
 /// 실제 원본 블록/방향을 고정해 선택·저장·동일 재생·공통 목표 도달을 검사하며 다른 경로로 재시도하지 않는다.
 #[test]
 fn real_city_joint_samples_build_routes() {

@@ -174,7 +174,7 @@ pub fn build_road_network(
             })
             .collect();
         let mut shape = road_join_shape(
-            center,
+            Vec2::ZERO,
             &arms,
             settings.corner_radius_m,
             settings.arc_step_deg,
@@ -215,7 +215,7 @@ pub fn build_road_network(
                 break;
             }
             shape = road_join_shape(
-                center,
+                Vec2::ZERO,
                 &arms,
                 settings.corner_radius_m,
                 settings.arc_step_deg,
@@ -226,6 +226,14 @@ pub fn build_road_network(
                 node_id: Some(*node_id),
                 message,
             })?;
+        }
+        // 절대 좌표에서 작은 원호를 만들면 f32 상쇄로 부채꼴 부호가 바뀌므로 노드 원점에서 생성한 뒤 이동한다.
+        for point in shape
+            .boundary
+            .iter_mut()
+            .chain(shape.corners.iter_mut().flat_map(|c| c.iter_mut()))
+        {
+            *point += center;
         }
         let mut openings = Vec::new();
         let mut replacements = Vec::new();

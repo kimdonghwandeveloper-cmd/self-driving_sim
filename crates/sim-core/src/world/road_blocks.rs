@@ -158,6 +158,7 @@ pub fn build_road_blocks(
     let mut rules = BTreeMap::new();
     let mut quarantined = BTreeSet::new();
     let mut diagnostics = Vec::new();
+    let mut forced_boundaries = BTreeSet::new();
     for &restriction in restrictions {
         if rules.contains_key(&restriction.id) {
             return Err(format!("duplicate restriction {}", restriction.id));
@@ -170,26 +171,8 @@ pub fn build_road_blocks(
                 restriction.id
             ));
         };
-        if to.is_none() && from.nodes.iter().any(|n| n.id == restriction.via_node) {
-            quarantined.insert((restriction.via_node, restriction.from_way));
-            diagnostics.push(format!("회전 제한 {}의 진출 way {}가 현재 작업 범위 밖입니다. 원본을 보존하고 진입 way {}의 via {} 연결을 차단했습니다.",restriction.id,restriction.to_way,restriction.from_way,restriction.via_node));
-            rules.insert(restriction.id, restriction);
-            continue;
-        }
-        let Some(to) = to else {
-            return Err(format!(
-                "restriction {} refers to a missing way",
-                restriction.id
-            ));
-        };
         let from_has = from.nodes.iter().any(|n| n.id == restriction.via_node);
-        let to_has = to.nodes.iter().any(|n| n.id == restriction.via_node);
-        if !from_has && !to_has {
-            return Err(format!(
-                "restriction {} has an invalid via node {}",
-                restriction.id, restriction.via_node
-            ));
-        }
+        let to_has = to.is_some_and(|to| to.nodes.iter().any(|n| n.id == restriction.via_node));
         if !from_has || !to_has {
             if from_has {
                 quarantined.insert((restriction.via_node, restriction.from_way));
@@ -197,8 +180,10 @@ pub fn build_road_blocks(
                 for node in &from.nodes {
                     quarantined.insert((node.id, restriction.from_way));
                 }
+                forced_boundaries.insert(from.nodes[0].id);
+                forced_boundaries.insert(from.nodes.last().unwrap().id);
             }
-            diagnostics.push(format!("회전 제한 {}의 접속 참조 불일치: 원본을 보존하고 진입 way {}의 불확실한 연결을 차단했습니다(via {}).",restriction.id,restriction.from_way,restriction.via_node));
+            diagnostics.push(format!("회전 제한 {}의 접속 참조 불일치(진출 way {}, via {}): 원본을 보존하고 진입 way {}의 불확실한 연결을 차단했습니다{}.",restriction.id,restriction.to_way,restriction.via_node,restriction.from_way,if from_has{""}else{"(via 불명: 해당 way의 모든 출구)"}));
         }
         // 지정 출구가 허용 목록 밖이어도 관계를 보존해야 다른 출구로 잘못 진입하지 않는다.
         rules.insert(restriction.id, restriction);
@@ -210,6 +195,7 @@ pub fn build_road_blocks(
         .filter_map(|(&node, incident)| {
             let boundary = incident.len() != 2
                 || via.contains(&node)
+                || forced_boundaries.contains(&node)
                 || !compatible_at(node, &edges[incident[0]], &edges[incident[1]]);
             boundary.then_some(node)
         })
