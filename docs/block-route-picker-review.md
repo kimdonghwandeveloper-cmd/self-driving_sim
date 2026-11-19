@@ -54,3 +54,5 @@
 | testdata/block-picker/graph.osm.json | 1줄부터 신규 | 교차로/평행 도로 합성 스냅샷 |
 | PLAN.md | 691줄 이후 | 구현/자동 검증과 실제 지도 미해결 상태 구분 |
 | docs/block-route-picker-review.md | 1줄부터 신규 | 검토/검증/한계/수정 위치 |
+
+새 화면과 시험의 .gd.uid 두 파일도 각각 1줄부터 추가해 Godot 리소스 식별자를 고정했다.
