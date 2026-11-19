@@ -467,20 +467,27 @@ fn strip(s: &super::course::Strip) -> serde_json::Value {
         s.right.iter().copied().map(point).collect::<Vec<_>>()
     ])
 }
+/// 교차로와 블록의 둥근 이음 면도 같은 비트 단위 지문 형식으로 기록한다.
+fn area(a: &super::course::Area) -> serde_json::Value {
+    serde_json::json!([
+        point(a.center),
+        a.boundary.iter().copied().map(point).collect::<Vec<_>>()
+    ])
+}
 /// 디버그 출력이나 파일 경로 없이 확정 경로·형상·안내선·차체 자세·건물을 정규 직렬화해 결속한다.
 fn result_fingerprint(result: &BlockRouteCourse) -> String {
     use super::course::{ColliderKind, MarkingKind};
     let c = &result.course;
     let value = serde_json::json!({
-        "fingerprint_version":1,
+        "fingerprint_version":2,
         "plan":[result.plan.selected,result.plan.traversals,result.plan.length_m.to_bits()],
         "guide":result.guide.iter().copied().map(point).collect::<Vec<_>>(),
-        "network_blocks":result.network.blocks.iter().map(|b|serde_json::json!([b.block_id,b.centerline.iter().copied().map(point).collect::<Vec<_>>(),strip(&b.strip)])).collect::<Vec<_>>(),
-        "network_joints":result.network.joints.iter().map(|j|serde_json::json!([j.node_id,j.openings.iter().map(|p|p.map(point)).collect::<Vec<_>>()])).collect::<Vec<_>>(),
+        "network_blocks":result.network.blocks.iter().map(|b|serde_json::json!([b.block_id,b.centerline.iter().copied().map(point).collect::<Vec<_>>(),b.strips.iter().map(strip).collect::<Vec<_>>(),b.areas.iter().map(area).collect::<Vec<_>>()])).collect::<Vec<_>>(),
+        "network_joints":result.network.joints.iter().map(|j|serde_json::json!([j.node_id,point(j.center),j.boundary.iter().copied().map(point).collect::<Vec<_>>(),j.openings.iter().map(|p|p.map(point)).collect::<Vec<_>>(),j.areas.iter().map(area).collect::<Vec<_>>() ])).collect::<Vec<_>>(),
         "name":c.name,"notices":c.notices,"start":motion(c.start),"goal":c.goal.map(motion),
         "surfaces":c.surfaces.iter().copied().map(rect).collect::<Vec<_>>(),
         "strips":c.strips.iter().map(strip).collect::<Vec<_>>(),
-        "areas":c.areas.iter().map(|a|serde_json::json!([point(a.center),a.boundary.iter().copied().map(point).collect::<Vec<_>>()])).collect::<Vec<_>>(),
+        "areas":c.areas.iter().map(area).collect::<Vec<_>>(),
         "colliders":c.colliders.iter().map(|b|serde_json::json!([rect(b.rect),b.height_m.to_bits(),match b.kind{ColliderKind::Curb=>0,ColliderKind::LowCurb=>1,ColliderKind::Wall=>2,ColliderKind::Barrier=>3,ColliderKind::Obstacle=>4}])).collect::<Vec<_>>(),
         "markings":c.markings.iter().map(|m|serde_json::json!([rect(m.rect),match m.kind{MarkingKind::EdgeLine=>0,MarkingKind::StopLine=>1}])).collect::<Vec<_>>(),
         "buildings":c.buildings.iter().map(|b|serde_json::json!([b.id,b.name,b.kind,b.height_m.to_bits(),b.is_estimated,b.footprint.iter().copied().map(point).collect::<Vec<_>>()])).collect::<Vec<_>>()

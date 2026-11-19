@@ -6,7 +6,7 @@ use glam::Vec2;
 
 use super::course::CourseDef;
 use super::road_geom;
-use crate::vehicle::collision::{ContactState, step_with_obstacles};
+use crate::vehicle::collision::{ContactState, ObstacleGrid, step_with_grid};
 use crate::vehicle::{
     DynamicsParams, Gear, VEHICLE_FOOTPRINT, VehicleCommand, VehicleInput, VehicleState,
 };
@@ -65,7 +65,8 @@ fn follow_path_until(
     let total = *cumulative.last().unwrap();
     let params = DynamicsParams::default();
     let max_steer = params.max_steer_angle_deg.to_radians();
-    let obstacles = course.collision_rects();
+    // 실제 세션과 같은 격자 검색을 쓰며 시험의 모든 연석은 기존처럼 충돌 대상으로 유지한다.
+    let obstacles = ObstacleGrid::new(course.collision_rects());
     let mut state = ready_in(Gear::Drive);
     let mut motion = course.start;
     let mut contact = ContactState::default();
@@ -109,7 +110,7 @@ fn follow_path_until(
             brake: ((speed - target_speed_mps) * 2.0).clamp(0.0, 1.0),
             steering: (steer / max_steer).clamp(-1.0, 1.0),
         });
-        let collided = step_with_obstacles(
+        let collided = step_with_grid(
             &mut state,
             &mut motion,
             &params,

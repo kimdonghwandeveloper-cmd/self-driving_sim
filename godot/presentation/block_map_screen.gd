@@ -90,11 +90,11 @@ func _services(canvas: CanvasLayer) -> void:
 	span.add_item("지역 10 km", 10000)
 	span.tooltip_text = "새 경로를 만들기 전에 열 지역의 크기를 선택합니다."
 	advanced.add_child(span)
-	for preset in [["엑스포 내부 예제 · 98 m", "expo-internal"], ["엑스포 주변 곡선 예제 · 1 km", "expo-curved-joint"], ["강남 예제 · 253 m", "gangnam-working-area"]]:
-		var button := _add_button(advanced, preset[0], _load_snapshot.bind("testdata/block-real/%s.osm.json" % preset[1]))
+	for preset in [["엑스포 내부 예제 · 98 m", "testdata/block-real/expo-internal.osm.json"], ["엑스포 주변 곡선 예제 · 1 km", "testdata/block-real/expo-curved-joint.osm.json"], ["강남 예제 · 253 m", "testdata/block-real/gangnam-working-area.osm.json"], ["엑스포 주변 지역 표본 · 350블록", "testdata/junction-regressions/expo-region.osm.json"], ["강남 지역 표본 · 973블록", "testdata/junction-regressions/gangnam-region.osm.json"]]:
+		var button := _add_button(advanced, preset[0], _load_snapshot.bind(preset[1]))
 		button.tooltip_text = "검증한 실제 OSM 표본입니다. 해당 지역 전체가 아닙니다."
 	var note := Label.new()
-	note.text = "연습용 · 경로 최대 10 km\n일부 교차로는 도로 생성이 제한됩니다."
+	note.text = "연습용 · 경로 최대 10 km\n좁은 도로·급회전은 주행이 제한될 수 있습니다."
 	note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	note.add_theme_font_size_override("font_size", 12)
 	advanced.add_child(note)

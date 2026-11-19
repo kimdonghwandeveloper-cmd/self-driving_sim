@@ -26,7 +26,8 @@ $requiredFiles = @(
     'data/korea/manifest.toml', 'data/korea/roads.pack', 'data/korea/places.pack',
     'config/vehicle.toml', 'config/input.toml', 'config/camera.toml', 'config/road_graph.toml',
     'godot/project.godot', 'godot/sim_godot.gdextension',
-    'godot/presentation/block_map_screen.gd', 'godot/tests/block_real_test.gd', 'godot/tests/block_map_ui_test.gd',
+    'godot/presentation/block_map_screen.gd', 'godot/tests/block_real_test.gd', 'godot/tests/block_map_ui_test.gd', 'godot/tests/junction_region_test.gd',
+    'testdata/junction-regressions/expo-region.osm.json', 'testdata/junction-regressions/gangnam-region.osm.json',
     'testdata/block-real/expo-internal.osm.json', 'testdata/block-real/expo-curved-joint.osm.json', 'testdata/block-real/gangnam-working-area.osm.json',
     'godot/.godot/extension_list.cfg', 'godot/.godot/global_script_class_cache.cfg',
     'godot/tests/smoke_test.gd', 'godot/tests/map_course_test.gd',
@@ -124,7 +125,7 @@ $batText = "@echo off`r`nchcp 65001 > nul`r`ntitle Self-Driving Simulator`r`nech
 
 $readmeText = "# Self-Driving Shuttle Simulator - Standalone Release Bundle`r`n`r`n### System Requirements`r`n- OS: Windows 10/11 (64-bit)`r`n- Graphics: Vulkan 1.2+ (Forward+) or OpenGL 3.3+ (Compatibility)`r`n- Runtime: Godot 4.7.2+ executable (godot.exe included or placed in root)`r`n`r`n### How to Run`r`n1. Double-click Simulator.exe (START_SIMULATOR.bat remains available; or run `godot.exe --path godot`).`r`n2. Select a course (e.g., Yeosu Expo OSM, Nationwide OSM, or Training) from the main menu.`r`n3. Click '▶ Start Simulation' to begin driving.`r`n`r`n### Vehicle Controls`r`n- W / S (or Up / Down): Throttle / Brake`r`n- A / D (or Left / Right): Steering`r`n- I / K / J / L: Gear P / N / D / R`r`n- Enter: Engine ON / OFF`r`n- Space / Backspace: Emergency Stop / Release`r`n- R: Reset vehicle position`r`n- C: Switch between 1st-person interior and 3rd-person top-down overhead view`r`n- Esc: Return to Main Menu`r`n`r`n### Map Data & Attribution`r`n- Nationwide Road Map: OpenStreetMap (c) OpenStreetMap contributors (ODbL 1.0)"
 # 지도 UI 배포 범위와 알려진 도로 생성 한계를 실행 안내에도 포함한다.
-$readmeText += "`r`n`r`n### Map Route Selection`r`n- Open the route map, click a road, check its direction, and assign Start / Goal.`r`n- Click Check Route, then Start Driving after validation succeeds.`r`n- Via points, saved routes, region size, and verified examples are under More Tools.`r`n- Known limitation: some short road blocks or junctions cannot generate a driving course yet.`r`n- For a verified sample, open More Tools and select Expo Interior (98 m).`r`n- One-click automatic forward routes are planned for a later update.`r`n"
+$readmeText += "`r`n`r`n### Map Route Selection`r`n- Open the route map, click a road, check its direction, and assign Start / Goal.`r`n- Click Check Route, then Start Driving after validation succeeds.`r`n- Via points, saved routes, region size, and verified examples are under More Tools.`r`n- Known limitation: very short endpoint roads, narrow roads, or sharp turns may not fit the vehicle.`r`n- For a verified sample, open More Tools and select Expo Interior (98 m).`r`n- One-click automatic forward routes are planned for a later update.`r`n"
 [System.IO.File]::WriteAllText((Join-Path $outFull "README.txt"), $readmeText, (New-Object System.Text.UTF8Encoding($false)))
 
 # Godot 프로세스를 헤드리스로 실행하고 표준 출력과 에러를 포착하여 성공 여부를 반환하는 헬퍼 함수
@@ -165,6 +166,7 @@ if ($Validate) {
             @{ Script = 'map_course_test.gd'; Pattern = 'MAP COURSE OK:' },
             @{ Script = 'block_real_test.gd'; Pattern = 'REAL BLOCK UI OK' },
             @{ Script = 'block_map_ui_test.gd'; Pattern = 'BLOCK MAP UI OK' },
+            @{ Script = 'junction_region_test.gd'; Pattern = 'JUNCTION REGION OK' },
             @{ Script = 'yeosu_convention_test.gd'; Pattern = 'CONVENTION ALL SIX OK' },
             @{ Script = 'osm_route_drive_test.gd'; Pattern = 'OSM ROUTE DRIVE OK:' },
             @{ Script = 'scenario_record_test.gd'; Pattern = 'SCENARIO RECORD OK:' }

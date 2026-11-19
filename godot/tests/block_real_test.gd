@@ -34,7 +34,7 @@ func _run() -> void:
 			_check(saved.ok, str(saved.get("error", "")))
 			if saved.ok:
 				var text := FileAccess.get_file_as_string(saved.path)
-				_check(text.contains('block-route-v1') and text.contains('osm-road-blocks-v2') and text.contains('road-network-v3'), "saved version contract missing")
+				_check(text.contains('block-route-v1') and text.contains('osm-road-blocks-v2') and text.contains('road-network-v4'), "saved version contract missing")
 				var course: Dictionary = ClassDB.class_call_static("SimCourse", "build", "map:" + str(saved.path))
 				_check(course.ok, "saved real map replay failed")
 				if sample[0] == "gangnam-working-area" and course.ok:

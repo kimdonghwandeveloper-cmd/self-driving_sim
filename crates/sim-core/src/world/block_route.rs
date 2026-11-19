@@ -18,7 +18,7 @@ use std::{
 };
 
 /// 차량 기본 치수·운동 모델·안내선 생성/검증 규칙의 재생 판본. 관련 동작 변경 시 올린다.
-pub const BLOCK_GUIDE_VERSION: &str = "block-guide-v1";
+pub const BLOCK_GUIDE_VERSION: &str = "block-guide-v2";
 
 /// 선택 순서를 보존해 확정한 전체 블록 통과 경로. 길이는 원본 중심선의 미터 합이다.
 #[derive(Debug, Clone, PartialEq)]
@@ -256,6 +256,9 @@ pub(crate) fn build_resolved_block_route_course(
                 .find(|j| j.node_id == connection.via_node);
             // 순수 고리의 반복은 같은 방향으로 닫힌 중심선을 다시 따라간다.
             let center = joint.map(|j| j.center).unwrap_or(line[0]);
+            let n = tagged.len();
+            let center =
+                guide_joint_center(tagged[n - 1].point, tagged[n - 2].point, center, &line);
             extend_turn_entry(&mut tagged, center, &mut line);
             let n = tagged.len();
             let from = tagged[n - 1].point;
@@ -333,11 +336,16 @@ pub(crate) fn build_resolved_block_route_course(
             "Road widths may use simulator defaults; block routes are for simulation.".into(),
         ],
         start,
-        network.blocks.iter().map(|b| b.strip.clone()).collect(),
+        network
+            .blocks
+            .iter()
+            .flat_map(|b| b.strips.clone())
+            .collect(),
         network
             .joints
             .iter()
             .flat_map(|j| j.areas.clone())
+            .chain(network.blocks.iter().flat_map(|b| b.areas.clone()))
             .collect(),
         network.colliders.clone(),
         (12_100.0, 12_100.0),
@@ -549,8 +557,27 @@ fn extend_turn_entry(points: &mut [GuidePoint], center: Vec2, next: &mut [Vec2])
     next[0] += exit * extra;
 }
 
+/// 곡선 입구의 실제 접선 교점을 사용한다. 원본 OSM 노드는 그래프와 진단에 그대로 남긴다.
+/// 거의 평행하거나 전진 접선이 만나지 않는 경우는 원본 접속점으로 반환해 기존 곡률 검사가 판정한다.
+fn guide_joint_center(from: Vec2, before: Vec2, source: Vec2, next: &[Vec2]) -> Vec2 {
+    let entry = (from - before).as_dvec2().normalize();
+    let exit = (next[1] - next[0]).as_dvec2().normalize();
+    let den = entry.perp_dot(exit);
+    if den.abs() < 1e-5 {
+        return source;
+    }
+    let delta = (next[0] - from).as_dvec2();
+    let t = delta.perp_dot(exit) / den;
+    let u = delta.perp_dot(entry) / den;
+    if t >= -1e-4 && u <= 1e-4 {
+        (from.as_dvec2() + entry * t).as_vec2()
+    } else {
+        source
+    }
+}
 /// 고정된 교차로 절단 거리 안에서 차량 최소 반경을 만족하는 접선 원호를 만든다.
 fn join_guide(from: Vec2, before: Vec2, center: Vec2, next: &[Vec2]) -> Result<Vec<Vec2>, String> {
+    let center = guide_joint_center(from, before, center, next);
     let entry = (from - before).normalize();
     let exit = (next[1] - next[0]).normalize();
     let turn = entry.angle_to(exit).abs();
@@ -566,7 +593,16 @@ fn join_guide(from: Vec2, before: Vec2, center: Vec2, next: &[Vec2]) -> Result<V
             ));
         }
     }
-    Ok(super::route::crossing_guide(from, before, center, next))
+    let mut joined = super::route::crossing_guide(from, before, center, next);
+    // 원호 끝과 다음 도로 시작은 같은 접점이다. f32 반올림 잔차를 별도 역방향 조각으로 남기지 않는다.
+    let tolerance = 0.001_f32.max(from.abs().max(next[0].abs()).max_element() * f32::EPSILON * 4.0);
+    if let Some(last) = joined
+        .last_mut()
+        .filter(|p| p.distance(next[0]) <= tolerance)
+    {
+        *last = next[0];
+    }
+    Ok(joined)
 }
 /// 세 점의 외접원으로 곡률을 검사하고 차량 최소 반경 미달 위치를 원본 블록과 반환한다.
 fn validate_curvature(points: &[GuidePoint]) -> Result<(), BlockRouteFailure> {
@@ -583,7 +619,11 @@ fn validate_curvature(points: &[GuidePoint]) -> Result<(), BlockRouteFailure> {
                 Some(p.block_id.clone()),
                 p.node_id,
                 None,
-                "guide exceeds vehicle curvature limit".into(),
+                format!(
+                    "guide exceeds vehicle curvature limit (radius {:.4} m, points {:?})",
+                    product / twice,
+                    triple.iter().map(|p| p.point).collect::<Vec<_>>()
+                ),
             ));
         }
     }
