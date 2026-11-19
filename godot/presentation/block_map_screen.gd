@@ -232,6 +232,7 @@ func _process(delta: float) -> void:
 		save_button.disabled = not route.ok
 		drive_button.disabled = not route.ok
 		status.text = ("검증된 경로 %.0f m" % float(route.length_m) if route.ok else "도로 후보·방향 확인 → 역할 확정 → 경로 미리보기") + "\n" + feedback
+		status.tooltip_text = feedback
 	if tiles != null: _update_tiles()
 	if camera.zoom.x != overlay_zoom: overlay_layer.queue_redraw()
 	queue_redraw()
