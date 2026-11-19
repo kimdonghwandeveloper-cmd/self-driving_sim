@@ -50,7 +50,9 @@ $tag = "sim-v$Version"
 # 업로드가 중단되면 draft를 그대로 남긴다. 모든 자산 업로드 성공 전에는 latest가 바뀌지 않는다.
 $body = @{tag_name=$tag;target_commitish=$Commit;name="Simulator v$Version";draft=$true;prerelease=$false;body='Windows simulator. Download Simulator-Windows ZIP, extract the whole folder, and run Simulator.exe.'} | ConvertTo-Json
 if ($ResumeDraft) {
-    $release = Invoke-RestMethod -Uri "$api/releases/tags/$tag" -Headers $headers
+    $drafts = @(Invoke-RestMethod -Uri "$api/releases?per_page=100" -Headers $headers | Where-Object { $_.tag_name -eq $tag -and $_.draft })
+    if ($drafts.Count -ne 1) { throw 'Exactly one matching draft is required for resume' }
+    $release = $drafts[0]
     if (-not $release.draft) { throw 'Only an unpublished draft may be resumed' }
     $release = Invoke-RestMethod -Method Patch -Uri "$api/releases/$($release.id)" -Headers $headers -ContentType 'application/json' -Body $body
 } else {
