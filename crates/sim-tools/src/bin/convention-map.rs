@@ -1,4 +1,6 @@
-//! 컨벤션 통로의 좌표 변환과 코스 생성.
+#[path = "convention-map/glb.rs"]
+mod glb;
+// 컨벤션 통로의 좌표 변환과 코스 생성.
 use serde_json::{Value, json};
 use std::{fs, path::Path, process::ExitCode};
 
@@ -105,11 +107,25 @@ fn main() -> ExitCode {
         )
         .map_err(|e| e.to_string())?;
         let files = generate(&trace)?;
+        let snapshot: Value = serde_json::from_str(&files.last().ok_or("도로 출력 누락")?.1)
+            .map_err(|e| e.to_string())?;
+        let origin = [
+            trace["origin"][0].as_f64().ok_or("원점 오류")?,
+            trace["origin"][1].as_f64().ok_or("원점 오류")?,
+        ];
+        let widths: Vec<f64> = trace["roads"]
+            .as_array()
+            .ok_or("도로 누락")?
+            .iter()
+            .map(|r| r["width_m"].as_f64().unwrap_or(0.0))
+            .collect();
+        let mesh = glb::build(&snapshot, origin, &widths)?;
         let output = Path::new(&args[2]);
         fs::create_dir(output).map_err(|e| e.to_string())?;
         for (name, contents) in files {
             fs::write(output.join(name), contents).map_err(|e| e.to_string())?;
         }
+        fs::write(output.join("convention-roads.glb"), mesh).map_err(|e| e.to_string())?;
         Ok(())
     })();
     match result {

@@ -2,6 +2,7 @@
 param(
     [string]$OutputDir = "dist/self-driving-sim-release",
     [string]$GodotPath = "",
+    [string]$DistributionRoot = $env:SIMULATOR_DISTRIBUTION_ROOT,
     [ValidateRange(0,2147483647)][int]$ReleaseVersion = 0,
     [switch]$SkipBuild = $false,
     [switch]$Validate = $true
@@ -18,7 +19,7 @@ Write-Host "  Output Dir: $OutputDir" -ForegroundColor Gray
 Write-Host "==========================================================" -ForegroundColor Cyan
 
 # 빌드·출력 교체 전에 경로와 입력을 검사한다. 검증 생략 시에도 필수 파일 누락은 허용하지 않는다.
-$outFull = Get-ReleaseOutputPath $repoRoot $OutputDir
+$outFull = Get-ReleaseOutputPath $repoRoot $OutputDir $DistributionRoot
 Assert-ReleaseOwnership $outFull $repoRoot
 $runtime = Get-ReleaseGodot $GodotPath
 Assert-ReleaseFiles $repoRoot @('scripts/build-launcher.ps1', 'scripts/run-simulator.ps1', 'scripts/updater-support.ps1')
@@ -68,7 +69,7 @@ Assert-ReleaseFiles $repoRoot @('target/release/sim_godot.dll', 'target/release/
 
 # 2. Prepare output directory safely
 Write-Host "`n[2/5] Preparing distribution directory structure safely..." -ForegroundColor Yellow
-$outFull = Get-ReleaseOutputPath $repoRoot $OutputDir
+$outFull = Get-ReleaseOutputPath $repoRoot $OutputDir $DistributionRoot
 Assert-ReleaseOwnership $outFull $repoRoot
 if (Test-Path -LiteralPath $outFull) {
     Write-Host "  - Cleaning existing target folder: $outFull" -ForegroundColor DarkGray
