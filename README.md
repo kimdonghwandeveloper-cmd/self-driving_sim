@@ -7,7 +7,7 @@ Godot 4로 주행 화면을 그리고 Rust로 차량 운동·충돌·도로망·
 
 [**다운로드**](https://github.com/kimdonghwandeveloper-cmd/self-driving_sim/releases/latest) ·
 [첫 주행](#첫-주행) · [지도에서 경로 만들기](#지도에서-경로-만들기) ·
-[개발 환경](#소스에서-실행하기) · [개발 계획](PLAN.md) ·
+[코스와 교육 시나리오](#코스와-교육-시나리오) ·
 [문제 제보](https://github.com/kimdonghwandeveloper-cmd/self-driving_sim/issues)
 
 > 현재는 시연·개발 단계입니다. 차량 수치와 평가 기준에는 임시값이 포함되어 있으며, 실제 차량 검증이나 인증 교육을 대체하지 않습니다.
@@ -102,82 +102,3 @@ EXE만 다른 폴더로 옮기면 실행되지 않습니다. Windows 10/11을 �
 교육 시나리오는 화면 안내에 따라 진행하며 결과를 `logs/scenarios/`에 JSON으로 저장합니다.
 점수는 임시 기준입니다. 일반 지도 자유 주행에 시나리오 점수가 자동 적용되지는 않습니다.
 시나리오 구성은 [시나리오 안내](docs/scenarios.md), 수동 검수는 [시연 검수 가이드](docs/demonstration-inspection-guide.md)를 참고하세요.
-
-## 소스에서 실행하기
-
-Windows 개발 환경에 다음을 준비합니다.
-
-- **Rust 1.99.1** 및 rustfmt·Clippy — [rust-toolchain.toml](rust-toolchain.toml)로 고정
-- **Visual Studio Build Tools**의 C++ 데스크톱 개발 도구와 Windows SDK
-- **Godot 4.7.2 표준판** — .NET 에디터 불필요
-
-저장소 최상위에서 실행합니다.
-
-```powershell
-git clone https://github.com/kimdonghwandeveloper-cmd/self-driving_sim.git
-cd self-driving_sim
-cargo.exe fetch --locked
-cargo.exe build --locked -p sim-godot
-```
-
-Godot에서 `godot/project.godot`을 열고 `F5`로 실행합니다. 기본 교육 코스는 전국 자료 없이도 사용할 수 있습니다.
-지도 기능에는 Git에 포함되지 않는 `data/korea/`가 필요합니다. [자료 생성·재사용 방법](docs/developer-guide.md#전국-지도-자료-만들기-plan-4-11)을 따라 준비하세요.
-
-> DLL은 **Godot을 여는 워크트리의** `target/debug/sim_godot.dll`을 사용합니다. 다른 워크트리에서 빌드한 것만으로는 연결되지 않습니다.
-
-## 검증과 배포
-
-```powershell
-cargo.exe fmt --all -- --check
-cargo.exe clippy --locked --all-targets --all-features -- -D warnings
-cargo.exe test --locked --all-features
-```
-
-화면·주행 연결은 Rust 시험과 별도로 Godot 헤드리스 시험을 실행합니다.
-명령과 첫 import 우회 방법은 [Godot 시험과 첫 import 검사](docs/developer-guide.md#godot-시험과-첫-import-검사)에 있습니다.
-
-독립 번들을 만들 때는 전국 자료와 Godot import를 준비한 뒤 실행합니다.
-
-```powershell
-& ./scripts/package_release.ps1 -OutputDir dist/demo-reviewed -GodotPath '<Godot exe 절대 경로>'
-& ./scripts/test-package-release.ps1
-```
-
-출력은 저장소 `dist/` 하위 전용 폴더로 제한하며, 필수 파일이 없으면 실패합니다.
-게시·운영 서명은 [업데이트 안내](docs/windows-updates.md)를 따릅니다.
-
-## 프로젝트 구조
-
-| 경로 | 역할 |
-| --- | --- |
-| `crates/sim-core/` | 차량·충돌·도로망·경로·저장/재생 로직 |
-| `crates/sim-godot/` | Rust와 Godot을 연결하는 GDExtension |
-| `crates/sim-tools/` | 전국 자료 생성·지도 검사·기록 재현 CLI |
-| `godot/` | 메뉴·지도·주행 화면과 화면 시험 |
-| `config/` | 차량·입력·카메라·도로 설정 |
-| `assets/`, `testdata/` | 교육 시나리오·지도 코스·시험 자료 |
-| `scripts/` | 패키징·런처·업데이트·배포 검증 |
-| `docs/` | 개발·설계·검수 문서 |
-
-## 현재 한계와 다음 작업
-
-블록 선택·저장·재생·주행 및 짧은 블록/교차로 회귀 시험은 구현되어 있습니다.
-자동 시험 통과는 모든 실제 도로·속도에서의 주행 가능성이나 사용자 검수 완료를 뜻하지 않습니다.
-
-- 차량·시야·건물 높이는 미검증 또는 추정값을 포함합니다.
-- 도로 고도·경사·입체 교차와 땅 쓰임 색상, 건물 공간 분할 최적화는 후속 범위입니다.
-- 사용자 조작 편의·성능 측정·독립 PC 실행·교육 담당자 검수는 남아 있습니다.
-- Lanelet2 연동은 제거되었으며 현재 지도 경로 기능은 OSM 블록을 기준으로 합니다.
-
-상세 계획과 단계별 검수 기록은 [PLAN.md](PLAN.md), 실차 관련 가정은 [차량 가정 문서](docs/vehicle-assumptions.md)를 참고하세요.
-
-## 문서와 지도 출처
-
-- [개발·지도 자료·시험 안내](docs/developer-guide.md)
-- [지도 자료와 이용 조건](docs/map-data.md)
-- [지역 보정 조사표](docs/map-patches/survey-template.md)
-- [Rust ↔ Godot 인터페이스](docs/design/godot-interface.md)
-- [개발 환경과 검증 기록](docs/development.md)
-
-지도 자료는 **© OpenStreetMap contributors**입니다. [OSM 저작권·ODbL 안내](https://www.openstreetmap.org/copyright)를 확인하세요.
-코드·지도·외부 에셋의 이용 조건은 각각 확인해야 하며, OSM 라이선스가 프로젝트 코드 전체의 라이선스를 뜻하지 않습니다.
