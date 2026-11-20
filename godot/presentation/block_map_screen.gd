@@ -202,10 +202,14 @@ func _extent_changed(_index: int) -> void:
 		return
 	for item in picker.call("block_items"):
 		if str(item.id) == selected_road:
-			var view: Vector2 = item.line[item.line.size() / 2]
+			var i := maxi(0, (item.line.size() - 2) / 2)
+			var view: Vector2 = item.line[i].lerp(item.line[i+1], 0.5)
+			var way := int(item.way_id)
 			if _open_region_at(view):
 				var candidates: Array = picker.call("road_area_candidates", view, 10.0)
-				if not candidates.is_empty(): _select_area(str(candidates[0].id))
+				var same_road: Array = candidates.filter(func(b): return int(b.way_id) == way)
+				if not same_road.is_empty(): _select_area(str(same_road[0].id))
+				elif not candidates.is_empty(): _select_area(str(candidates[0].id))
 			return
 
 ## 선택 중에는 지도 이동만으로 원본을 바꾸지 않는다.
