@@ -46,12 +46,14 @@ func _run() -> void:
 		quit(1)
 
 
-## 메뉴 코스 목록에 시나리오 A·B·C가 있는지 본다.
+## 메뉴 코스 목록에 교육용 A·B·C만 있고 개발용 예시는 없는지 본다.
 func _check_menu() -> void:
 	var main: Node = load("res://main.tscn").instantiate()
 	root.add_child(main)
 	await process_frame
 	var names := Array(main.screen.course_names)
+	var scenario_names := names.filter(func(value): return str(value).begins_with("scenario:"))
+	_check(scenario_names.size() == SCENARIOS.size(), "메뉴 시나리오는 A·B·C 세 개여야 함: " + str(scenario_names))
 	for file in SCENARIOS:
 		_check(names.has("scenario:assets/scenarios/" + file), "메뉴에 %s가 없음: %s" % [file, str(names)])
 	main.free()

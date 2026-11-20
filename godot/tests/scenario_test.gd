@@ -1,4 +1,4 @@
-# 5-1 시나리오 틀 확인: 메뉴에서 예시 시나리오(assets/scenarios/sample-stop-line.toml)를 열면 시작 전 안내에서 차량이 멈춰 있고,
+# 5-1 시나리오 틀 확인: 시험 전용 예시(testdata/scenarios/sample-stop-line.toml)를 직접 열면 시작 전 안내에서 차량이 멈춰 있고,
 # F5로 시작해 단계(시동 → D → 정지선 앞 정지 → P)를 끝내 성공하며, 일시정지 동안 차량·시간이 멈추고, 재시작·종료가 동작하는지 본다.
 # 없는 시나리오 파일은 사유와 함께 실패 화면이 된다. 성공 0 / 실패 1.
 # 실행(워크트리 최상위): godot --headless --path godot --import 후
@@ -6,7 +6,7 @@
 extends SceneTree
 
 const Drive = preload("res://presentation/drive_screen.gd")
-const SCENARIO := "scenario:assets/scenarios/sample-stop-line.toml"
+const SCENARIO := "scenario:testdata/scenarios/sample-stop-line.toml"
 ## 정지선 앞 정지 구역(차체 중심 z = -17.9 ± 1.5)에 들도록 제동을 시작할 후륜축 z(m)와 목표 속도(m/s).
 const BRAKE_AT_Z := -15.5
 const CRUISE_MPS := 1.8
@@ -39,7 +39,7 @@ func _run() -> void:
 	main.free()
 	await _check_missing_file()
 	if failures.is_empty():
-		print("SCENARIO OK: 메뉴 목록 · 시작 전 정지 · F5 시작 · 단계 4개 · 메시지 2개 · 일시정지 · 성공 · 재시작 · 종료 · 없는 파일 실패")
+		print("SCENARIO OK: 시험 예시 메뉴 제외 · 시작 전 정지 · F5 시작 · 단계 4개 · 메시지 2개 · 일시정지 · 성공 · 재시작 · 종료 · 없는 파일 실패")
 		quit(0)
 	else:
 		for message in failures:
@@ -47,15 +47,11 @@ func _run() -> void:
 		quit(1)
 
 
-## 메뉴에서 예시 시나리오를 열어 시작 전 → 진행 → 일시정지 → 계속 → 성공 → 재시작 → 종료를 확인한다.
+## 시험 전용 예시를 직접 열어 시작 전 → 진행 → 일시정지 → 계속 → 성공 → 재시작 → 종료를 확인한다.
 func _check_scenario_flow() -> void:
 	var menu: Node = main.screen
-	var index: int = Array(menu.course_names).find(SCENARIO)
-	_check(index >= 0, "메뉴에 예시 시나리오가 없음: " + str(menu.course_names))
-	if index < 0:
-		return
-	menu.courses.select(index)
-	menu.call("_open_course")
+	_check(not Array(menu.course_names).has(SCENARIO), "시험 전용 예시가 사용자 메뉴에 노출됨")
+	main.call("_show_drive", SCENARIO)
 	var drive: Node = main.screen
 	_check(drive.failure.is_empty(), "시나리오 화면 실패: " + drive.failure)
 	if not drive.failure.is_empty():
