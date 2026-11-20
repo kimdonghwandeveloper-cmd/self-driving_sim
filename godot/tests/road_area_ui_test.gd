@@ -21,9 +21,18 @@ func _run() -> void:
 		screen._load_snapshot("testdata/block-real/expo-internal.osm.json")
 		var items: Array = screen.picker.call("block_items")
 		_check(not items.is_empty(), "real OSM roads required")
-		screen._select_area(str(items[0].id))
+		var line: PackedVector2Array = items[0].line
+		var click := line[0].lerp(line[1], 0.5)
+		screen._select_map_position(screen.get_canvas_transform() * click, false)
 		_check(not screen.drive_button.disabled, "one road enables driving without endpoints")
 		_check(not screen.area_lines.is_empty(), "generated roads highlighted")
+		var selected: String = screen.selected_road
+		var had_data: bool = screen.data_ok
+		screen.data_ok = false
+		screen.extent.select(1)
+		screen._extent_changed(1)
+		screen.data_ok = had_data
+		_check(screen.preview_ok and screen.selected_road == selected, "extent change retains selected road")
 		for arg in OS.get_cmdline_user_args():
 			if arg.begins_with("--capture=") and DisplayServer.get_name() != "headless":
 				for frame in 8: await process_frame
