@@ -708,7 +708,7 @@ assets/                      # maps/, scenarios/
 맵의 어느 도로로든 달릴 수 있게 한다(사용자 결정: 가장자리는 연석). 경로 지정 코스(4-3~4-6)와 기존 여수 코스는 그대로 둔다.
 
 - [x]  1차(커밋 8d71608): 맵 도로 바닥면을 그대로 노면으로 쓰고 합집합 바깥 경계에 연석. 사람 확인 결과 "폭이 좁고 각지며, 막다른 끝이 벽 같다".
-- [x]  `tools/blender/yeosu_background.py`가 도로(`Ways`) 띠마다 중심선(가로 변 가운데)과 폭(가로 변 길이 중앙값)을 `road-lines-v1` JSON으로 내보낸다.
+- [x]  Rust `blender-map`(기존 Python 도구 대체)이 도로(`Ways`) 띠마다 중심선(가로 변 가운데)과 폭(가로 변 길이 중앙값)을 `road-lines-v1` JSON으로 내보낸다.
   맵 폭은 거의 모두 약 4.9 m다.
 - [x]  `sim-core` `world::road_polygons`(2차, 사용자 결정 2026-11-13):
   - 폭을 맵 폭 x1.5, 최소 3.5 m로 넓힌다(코스 TOML `width_scale`·`min_width_m`, 임시값).

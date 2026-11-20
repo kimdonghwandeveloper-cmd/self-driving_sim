@@ -65,7 +65,7 @@ $dllPath = Join-Path $repoRoot "target/release/sim_godot.dll"
 $toolsPath = Join-Path $repoRoot "target/release/sim-tools.exe"
 if (-not (Test-Path -LiteralPath $dllPath)) { throw "sim_godot.dll not found at: $dllPath" }
 if (-not (Test-Path -LiteralPath $toolsPath)) { throw "sim-tools.exe not found at: $toolsPath" }
-Assert-ReleaseFiles $repoRoot @('target/release/sim_godot.dll', 'target/release/sim-tools.exe')
+Assert-ReleaseFiles $repoRoot @('target/release/sim_godot.dll', 'target/release/sim-tools.exe', 'target/release/blender-map.exe', 'target/release/convention-map.exe')
 
 # 2. Prepare output directory safely
 Write-Host "`n[2/5] Preparing distribution directory structure safely..." -ForegroundColor Yellow
@@ -91,6 +91,10 @@ Copy-Item -LiteralPath $dllPath -Destination (Join-Path $outFull "bin/sim_godot.
 Copy-Item -LiteralPath $dllPath -Destination (Join-Path $outFull "target/release/sim_godot.dll")
 Copy-Item -LiteralPath $dllPath -Destination (Join-Path $outFull "target/debug/sim_godot.dll")
 Copy-Item -LiteralPath $toolsPath -Destination (Join-Path $outFull "bin/sim-tools.exe")
+# Python 없이 실행할 지도 제작 도구도 배포한다.
+foreach ($name in @('blender-map.exe', 'convention-map.exe')) {
+    Copy-Item -LiteralPath (Join-Path $repoRoot ('target/release/' + $name)) -Destination (Join-Path $outFull ('bin/' + $name))
+}
 
 # Copy config, assets, testdata, data (including nationwide OSM data/korea)
 foreach ($folder in @("config", "assets", "testdata", "data")) {
