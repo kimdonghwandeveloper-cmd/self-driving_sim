@@ -134,6 +134,23 @@ pub struct SimRoutePicker {
 
 #[godot_api]
 impl SimRoutePicker {
+    /// 경로 통행 방향과 접근 제한으로 물리 도로 후보를 제외하지 않는다.
+    #[func]
+    fn road_area_candidates(&self, view: Vector2, radius: f32) -> Array<VarDictionary> {
+        let Some(selection) = &self.block_selection else {
+            return Array::new();
+        };
+        let latlon = tiles::from_view(glam::Vec2::new(view.x, view.y));
+        sim_core::world::road_area::road_area_candidates(
+            &selection.model,
+            latlon,
+            radius * latlon.lat.to_radians().cos() as f32,
+        )
+        .iter()
+        .filter_map(|id| selection.model.blocks.iter().find(|b| &b.id == id))
+        .map(|b| block_item(b, sim_core::world::road_blocks::BlockDirection::Forward))
+        .collect()
+    }
     /// 방향·출발·도착을 요구하지 않고 선택 도로 주변의 전체 도로망을 검증한다.
     #[func]
     fn preview_road_area(&mut self, id: GString, span_m: f32) -> VarDictionary {

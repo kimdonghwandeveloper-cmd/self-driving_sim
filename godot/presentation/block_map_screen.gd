@@ -162,7 +162,7 @@ func _layout_toolbar() -> void:
 func _select_map_position(screen_position: Vector2, _remove: bool) -> void:
 	var at: Vector2 = get_canvas_transform().affine_inverse() * screen_position
 	if not _ensure_region(at): return
-	var candidates: Array = picker.call("block_candidates", at, clampf(12.0 / camera.zoom.x, 2.0, 300.0))
+	var candidates: Array = picker.call("road_area_candidates", at, clampf(12.0 / camera.zoom.x, 2.0, 300.0))
 	if candidates.is_empty():
 		_clear_points()
 		feedback = "이 위치에는 도로가 없습니다. 도로 선을 눌러 주세요."
@@ -204,7 +204,7 @@ func _extent_changed(_index: int) -> void:
 		if str(item.id) == selected_road:
 			var view: Vector2 = item.line[item.line.size() / 2]
 			if _open_region_at(view):
-				var candidates: Array = picker.call("block_candidates", view, 10.0)
+				var candidates: Array = picker.call("road_area_candidates", view, 10.0)
 				if not candidates.is_empty(): _select_area(str(candidates[0].id))
 			return
 

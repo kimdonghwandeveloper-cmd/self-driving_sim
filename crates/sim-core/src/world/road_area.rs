@@ -25,6 +25,33 @@ pub struct RoadAreaFile {
 /// 자유 주행 저장 형식.
 pub const ROAD_AREA_FORMAT: &str = "road-area-v1";
 
+/// 통행 방향과 접근 제한에 관계없이 클릭 주변의 물리 도로를 거리순으로 찾는다.
+pub fn road_area_candidates(model: &RoadBlockModel, at: LatLon, radius_m: f32) -> Vec<BlockId> {
+    if !radius_m.is_finite() || radius_m <= 0. || !at.lat.is_finite() || !at.lon.is_finite() {
+        return Vec::new();
+    }
+    let mut found: Vec<_> = model
+        .blocks
+        .iter()
+        .filter_map(|b| {
+            let distance = b
+                .nodes
+                .windows(2)
+                .map(|p| {
+                    super::building::distance_point_to_segment(
+                        glam::Vec2::ZERO,
+                        super::map::project(at, p[0].pos),
+                        super::map::project(at, p[1].pos),
+                    )
+                })
+                .fold(f32::INFINITY, f32::min);
+            (distance <= radius_m).then_some((distance, b.id.clone()))
+        })
+        .collect();
+    found.sort_by(|a, b| a.0.total_cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+    found.into_iter().map(|(_, id)| id).collect()
+}
+
 /// 원본·부가 자료와 생성 결과를 묶어 주행 직전 변경 여부를 확인한다.
 pub fn prepare_road_area(
     base: &Path,
@@ -396,6 +423,19 @@ mod tests {
             assert!(build_road_area(&model, &b.id, span, b.nodes[0].pos).is_err());
         }
         assert!(build_road_area(&model, &BlockId("missing".into()), 500., b.nodes[0].pos).is_err());
+    }
+
+    /// 경로 탐색상 허용 방향이 없어도 도로 영역의 선택 후보에서 사라지지 않는다.
+    #[test]
+    fn road_selection_ignores_route_direction_and_access() {
+        let mut model = fixture();
+        let id = model.blocks[0].id.clone();
+        let at = model.blocks[0].nodes[0].pos;
+        for block in &mut model.blocks {
+            block.directions.clear();
+        }
+        assert!(road_area_candidates(&model, at, 5.).contains(&id));
+        assert!(road_area_candidates(&model, at, f32::NAN).is_empty());
     }
 
     /// 저장·공통 로더 재생이 동일하며 원본 변경·덮어쓰기·규칙 변경을 거부한다.
