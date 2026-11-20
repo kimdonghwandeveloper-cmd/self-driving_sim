@@ -247,8 +247,8 @@ func _draw() -> void:
 	for x in range(int(ceilf(span.x / cell)) + 2):
 		for y in range(int(ceilf(span.y / cell)) + 2):
 			var rect := Rect2(grid_origin + Vector2(x, y) * cell, Vector2.ONE * cell)
-			draw_rect(rect, Color("343e48"))
-			draw_rect(rect, Color("46515c"), false, 1.0 / scale_m)
+			draw_rect(rect, Color("eef2f6"))
+			draw_rect(rect, Color("dce3eb"), false, 1.0 / scale_m)
 	for tile in tile_layers:
 		if tile.get("texture") is Texture2D:
 			draw_texture_rect(tile.texture, tile.rect, false)

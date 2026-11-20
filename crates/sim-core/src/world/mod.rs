@@ -37,4 +37,5 @@ pub mod block_route;
 
 pub mod block_route_file;
 
+pub mod road_area;
 pub mod route_evaluation;
