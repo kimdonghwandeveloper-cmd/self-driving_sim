@@ -151,9 +151,14 @@ impl SimRoutePicker {
         .map(|b| block_item(b, sim_core::world::road_blocks::BlockDirection::Forward))
         .collect()
     }
-    /// 방향·출발·도착을 요구하지 않고 선택 도로 주변의 전체 도로망을 검증한다.
+    /// 도착 지정 없이 선택 도로 주변을 생성하고 화살표에서 고른 출발 방향을 반영한다.
     #[func]
-    fn preview_road_area(&mut self, id: GString, span_m: f32) -> VarDictionary {
+    fn preview_road_area(
+        &mut self,
+        id: GString,
+        span_m: f32,
+        #[opt(default = false)] reversed: bool,
+    ) -> VarDictionary {
         self.area_preview = None;
         let prepared = (|| {
             let m = self.model.as_ref().ok_or("지역을 먼저 여세요")?;
@@ -164,13 +169,14 @@ impl SimRoutePicker {
             let dir = repo_path(ROUTE_DIR);
             std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
             let relative = sim_core::picker::model::relative_path(&dir, &m.snapshot_path)?;
-            sim_core::world::road_area::prepare_road_area(
+            sim_core::world::road_area::prepare_road_area_with_direction(
                 &dir,
                 &relative,
                 &m.config,
                 &sim_core::world::road_blocks::BlockId(id.to_string()),
                 span_m,
                 m.origin,
+                reversed,
             )
         })();
         match prepared {
@@ -205,8 +211,15 @@ impl SimRoutePicker {
                     })
                     .collect();
                 let count = selected.blocks.len() as i64;
+                let start = tiles::to_view(sim_core::world::map::LatLon {
+                    lat: origin.lat - (course.start.z_m as f64 / 6_371_008.8_f64).to_degrees(),
+                    lon: origin.lon
+                        + (course.start.x_m as f64
+                            / (6_371_008.8_f64 * origin.lat.to_radians().cos()))
+                        .to_degrees(),
+                });
                 self.area_preview = Some(file);
-                vdict! {"ok"=>true,"error"=>"","lines"=>&lines,"road_count"=>count,"building_count"=>course.buildings.len() as i64}
+                vdict! {"ok"=>true,"error"=>"","lines"=>&lines,"road_count"=>count,"building_count"=>course.buildings.len() as i64,"start_view"=>Vector2::new(start.x,start.y),"start_heading"=>course.start.heading_rad,"reversed"=>reversed}
             }
             Err(e) => {
                 vdict! {"ok"=>false,"error"=>e.as_str(),"lines"=>&Array::<PackedVector2Array>::new(),"road_count"=>0_i64}

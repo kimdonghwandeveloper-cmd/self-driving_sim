@@ -130,6 +130,8 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/prepare-korea-da
 ### 블록 경로 회귀 시험
 
 새 지도 UI는 `road-area-v1` 자유 주행 영역을 저장합니다. 기존 블록 경로 API는 저장 파일 재생 호환성을 위해 유지합니다.
+`reversed`는 원본 블록 순서와 반대 방향으로 출발할지 저장합니다. 필드가 없는 옛 영역 파일은 기존 정방향으로 재생합니다.
+방향 변경은 차량 자세와 결과 해시에 반영하며, 생성 도로망·범위는 변경하지 않습니다.
 헤드리스에서는 지도 캔버스·타일 렌더링을 생략하고 실제 렌더링은 OpenGL 실행으로 별도 확인합니다.
 
 ```powershell
@@ -137,6 +139,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/prepare-korea-da
 & '<Godot 콘솔 실행 파일>' --headless --fixed-fps 64 --path godot --script res://tests/block_picker_test.gd
 & '<Godot 콘솔 실행 파일>' --headless --fixed-fps 64 --path godot --script res://tests/block_real_test.gd
 & '<Godot 콘솔 실행 파일>' --headless --fixed-fps 64 --path godot --script res://tests/road_area_ui_test.gd
+& '<Godot 콘솔 실행 파일>' --headless --fixed-fps 64 --path godot --script res://tests/road_direction_popup_test.gd
 & '<Godot 콘솔 실행 파일>' --rendering-method gl_compatibility --fixed-fps 64 --path godot --script res://tests/road_area_ui_test.gd
 ```
 

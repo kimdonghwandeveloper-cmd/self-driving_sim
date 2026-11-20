@@ -9,6 +9,16 @@ var sidebar_scroll := ScrollContainer.new()
 var technical_feedback := ""
 var preview_ok := false
 var draw_origin := Vector2.ZERO
+const DirectionButton = preload("res://presentation/road_direction_button.gd")
+var direction_popup := PanelContainer.new()
+var direction_buttons: Array[Button] = []
+var direction_vectors: Array[Vector2] = []
+var pending_road: Dictionary = {}
+var popup_anchor := Vector2.ZERO
+var hovered_direction := -1
+var selected_reversed := false
+var start_view := Vector2.ZERO
+var start_direction := Vector2.UP
 
 ## 화면 없는 검증에서는 지도 캔버스를 숨기고 컨트롤·서비스만 실행한다.
 ## Godot dummy 렌더러의 큰 지도 캔버스 종료 충돌을 피하며 실제 화면은 OpenGL 시험으로 확인한다.
@@ -69,7 +79,7 @@ func _services(canvas: CanvasLayer) -> void:
 	toolbar.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	toolbar.add_theme_constant_override("separation", 8)
 	_add_label(toolbar, "어디를 달려볼까요?", 24)
-	_add_label(toolbar, "지도에서 원하는 도로를 눌러 주세요.\n주변 도로를 생성해 자유롭게 주행합니다.", 14)
+	_add_label(toolbar, "도로를 누르고 화살표로 출발 방향을 고르세요.\n주변 도로에서 자유롭게 주행합니다.", 14)
 	_move(place_search, toolbar)
 	place_search.custom_minimum_size.x = 0
 	place_search.placeholder_text = "장소 또는 도로 검색"
@@ -124,6 +134,123 @@ func _services(canvas: CanvasLayer) -> void:
 		drive_button.add_theme_color_override(state, Color.WHITE)
 	_layout_toolbar()
 	_refresh_route()
+	_build_direction_popup(canvas)
+
+## 외부 창 없이 지도 위에서 사용할 둥근 흰색 방향 팝업을 만든다.
+func _build_direction_popup(canvas: CanvasLayer) -> void:
+	direction_popup.custom_minimum_size = Vector2(340, 166)
+	direction_popup.z_index = 20
+	var box := StyleBoxFlat.new()
+	box.bg_color = Color.WHITE
+	box.border_color = Color("dce3ec")
+	box.set_border_width_all(1)
+	box.set_corner_radius_all(16)
+	box.set_content_margin_all(14)
+	box.shadow_size = 10
+	box.shadow_color = Color(0.08, 0.15, 0.25, 0.16)
+	direction_popup.add_theme_stylebox_override("panel", box)
+	canvas.add_child(direction_popup)
+	var body := VBoxContainer.new()
+	body.add_theme_constant_override("separation", 12)
+	direction_popup.add_child(body)
+	var heading := HBoxContainer.new()
+	body.add_child(heading)
+	var title := Label.new()
+	title.text = "어느 쪽으로 출발할까요?"
+	title.add_theme_font_size_override("font_size", 16)
+	title.add_theme_color_override("font_color", Color("27364b"))
+	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	heading.add_child(title)
+	var cancel := Button.new()
+	cancel.text = "취소"
+	cancel.flat = true
+	cancel.add_theme_color_override("font_color", Color("687c91"))
+	cancel.pressed.connect(_cancel_direction_popup)
+	heading.add_child(cancel)
+	var choices := HBoxContainer.new()
+	choices.add_theme_constant_override("separation", 12)
+	body.add_child(choices)
+	for i in 2:
+		var button := DirectionButton.new()
+		button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		button.pressed.connect(_choose_start_direction.bind(i))
+		button.mouse_entered.connect(_hover_start_direction.bind(i))
+		button.focus_entered.connect(_hover_start_direction.bind(i))
+		button.mouse_exited.connect(_hover_start_direction.bind(-1))
+		button.focus_exited.connect(_hover_start_direction.bind(-1))
+		choices.add_child(button)
+		direction_buttons.append(button)
+	direction_popup.hide()
+
+## 팝업은 도로 클릭 위치에 붙이고 화면과 사이드바 밖으로 나가지 않게 한다.
+func _position_direction_popup() -> void:
+	if not direction_popup.is_inside_tree() or not direction_popup.visible: return
+	direction_popup.size = direction_popup.get_combined_minimum_size()
+	var view := get_viewport_rect().size
+	var at: Vector2 = get_canvas_transform() * popup_anchor
+	var desired := at + Vector2(18, -direction_popup.size.y - 18)
+	if desired.y < 12: desired.y = at.y + 18
+	var left := minf(toolbar_panel.get_global_rect().end.x + 12, view.x - direction_popup.size.x - 12)
+	direction_popup.position = Vector2(clampf(desired.x, maxf(12, left), maxf(12, view.x - direction_popup.size.x - 12)), clampf(desired.y, 12, maxf(12, view.y - direction_popup.size.y - 12)))
+
+## 도로의 클릭 지점 접선을 찾고 양방향 화살표를 제시하며 이전 저장 상태를 폐기한다.
+func _open_direction_popup(item: Dictionary, at: Vector2) -> void:
+	_clear_points()
+	selected_road = str(item.id)
+	pending_road = item
+	popup_anchor = at
+	var tangent := Vector2.RIGHT
+	var closest := INF
+	var line: PackedVector2Array = item.line
+	for i in range(line.size() - 1):
+		var segment := line[i+1] - line[i]
+		if segment.length_squared() < 0.01: continue
+		var distance := at.distance_squared_to(Geometry2D.get_closest_point_to_segment(at, line[i], line[i+1]))
+		if distance < closest:
+			closest = distance
+			tangent = segment.normalized()
+	direction_vectors.assign([tangent, -tangent])
+	for i in 2:
+		direction_buttons[i].set("direction", direction_vectors[i])
+		direction_buttons[i].queue_redraw()
+	selection_label.text = "출발 방향 선택"
+	feedback = "지도 위 화살표 중 출발할 방향을 눌러 주세요."
+	direction_popup.show()
+	_position_direction_popup()
+	overlay_layer.queue_redraw()
+
+## hover와 키보드 포커스는 지도 방향만 강조하고 주행을 확정하지 않는다.
+func _hover_start_direction(index: int) -> void:
+	hovered_direction = index
+	overlay_layer.queue_redraw()
+
+## 방향 버튼을 누른 경우에만 차량 방향을 포함한 도로 영역을 검증한다.
+func _choose_start_direction(index: int) -> void:
+	if pending_road.is_empty() or index < 0 or index >= 2: return
+	var id := str(pending_road.id)
+	direction_popup.hide()
+	pending_road = {}
+	hovered_direction = -1
+	_select_area(id, index == 1)
+
+## 취소한 방향을 이전 미리보기로 대신 주행하지 못하게 초기화한다.
+func _cancel_direction_popup() -> void:
+	_clear_points()
+
+## Esc는 먼저 팝업만 닫고 메뉴로 빠지는 이벤트 전파를 막는다.
+func _input(event: InputEvent) -> void:
+	if direction_popup.visible and event is InputEventKey and event.pressed and event.physical_keycode == KEY_ESCAPE:
+		_cancel_direction_popup()
+		get_viewport().set_input_as_handled()
+
+## 지도 확대·이동을 시작하면 클릭 위치에 남은 방향 팝업을 닫는다.
+func _unhandled_input(event: InputEvent) -> void:
+	if direction_popup.visible:
+		if event is InputEventMouseButton and event.pressed and event.button_index in [MOUSE_BUTTON_RIGHT, MOUSE_BUTTON_WHEEL_UP, MOUSE_BUTTON_WHEEL_DOWN]:
+			_cancel_direction_popup()
+		elif event is InputEventMouseMotion and (dragging or (left_down and event.position.distance_to(left_origin) >= 6.0)):
+			_cancel_direction_popup()
+	super._unhandled_input(event)
 
 ## 결과가 없는 검색 상자는 숨겨 기본 선택 화면의 높이를 줄인다.
 func _fill_place_results(found: Array) -> void:
@@ -157,6 +284,7 @@ func _layout_toolbar() -> void:
 	var view := get_viewport_rect().size
 	toolbar_panel.position = Vector2(16, 64)
 	toolbar_panel.size = Vector2(minf(350.0, view.x * 0.42), maxf(260.0, view.y - 88.0))
+	_position_direction_popup()
 
 ## 클릭한 위치의 가장 가까운 도로를 방향 구분 없이 선택한다.
 func _select_map_position(screen_position: Vector2, _remove: bool) -> void:
@@ -167,19 +295,24 @@ func _select_map_position(screen_position: Vector2, _remove: bool) -> void:
 		_clear_points()
 		feedback = "이 위치에는 도로가 없습니다. 도로 선을 눌러 주세요."
 		return
-	_select_area(str(candidates[0].id))
+	_open_direction_popup(candidates[0], at)
 
-## 도로와 범위만 전달하고 목표·방향·경로는 지정하지 않는다.
-func _select_area(id: String) -> void:
+## 도로·범위·출발 방향을 전달하며 목표 지점과 안내 경로는 지정하지 않는다.
+func _select_area(id: String, reversed: bool = false) -> void:
+	direction_popup.hide()
+	pending_road = {}
 	selected_road = id
+	selected_reversed = reversed
 	preview_ok = false
 	area_lines.clear()
 	drive_button.disabled = true
-	var result: Dictionary = picker.call("preview_road_area", id, float(extent.get_selected_id()))
+	var result: Dictionary = picker.call("preview_road_area", id, float(extent.get_selected_id()), reversed)
 	technical_feedback = str(result.error)
 	if result.ok:
 		area_lines = result.lines
 		preview_ok = true
+		start_view = result.start_view
+		start_direction = Vector2(-sin(float(result.start_heading)), -cos(float(result.start_heading)))
 		var title := "선택한 도로"
 		for item in picker.call("block_items"):
 			if str(item.id) == id:
@@ -197,8 +330,10 @@ func _select_area(id: String) -> void:
 ## 범위 변경 시 같은 도로로 다시 검증한다.
 func _extent_changed(_index: int) -> void:
 	if selected_road.is_empty(): return
+	if direction_popup.visible: return
+	var reversed := selected_reversed
 	if not data_ok:
-		_select_area(selected_road)
+		_select_area(selected_road, reversed)
 		return
 	for item in picker.call("block_items"):
 		if str(item.id) == selected_road:
@@ -208,8 +343,8 @@ func _extent_changed(_index: int) -> void:
 			if _open_region_at(view):
 				var candidates: Array = picker.call("road_area_candidates", view, 10.0)
 				var same_road: Array = candidates.filter(func(b): return int(b.way_id) == way)
-				if not same_road.is_empty(): _select_area(str(same_road[0].id))
-				elif not candidates.is_empty(): _select_area(str(candidates[0].id))
+				if not same_road.is_empty(): _select_area(str(same_road[0].id), reversed)
+				elif not candidates.is_empty(): _select_area(str(candidates[0].id), reversed)
 			return
 
 ## 선택 중에는 지도 이동만으로 원본을 바꾸지 않는다.
@@ -262,6 +397,10 @@ func _add_place(index: int) -> void:
 
 ## 선택과 이전 미리보기를 함께 폐기한다.
 func _clear_points() -> void:
+	direction_popup.hide()
+	pending_road = {}
+	hovered_direction = -1
+	selected_reversed = false
 	selected_road = ""
 	area_lines.clear()
 	preview_ok = false
@@ -317,6 +456,7 @@ func _process(delta: float) -> void:
 	status.text = feedback
 	status.tooltip_text = technical_feedback
 	if tiles != null: _update_tiles()
+	_position_direction_popup()
 	if camera.zoom.x != overlay_zoom: overlay_layer.queue_redraw()
 	queue_redraw()
 
@@ -337,7 +477,24 @@ func _draw_overlay() -> void:
 			var local := _local_line(visible_line)
 			for i in range(local.size() - 1):
 				overlay_layer.draw_line(local[i], local[i+1], Color("1262ef"), 5.0 / scale_m)
+	if not pending_road.is_empty():
+		var line := _local_line(pending_road.line)
+		if line.size() > 1: overlay_layer.draw_polyline(line, Color("1262ef"), 6.0 / scale_m)
+		for i in direction_vectors.size():
+			_draw_direction_arrow(popup_anchor - draw_origin, direction_vectors[i], scale_m, hovered_direction == i)
+	elif preview_ok:
+		_draw_direction_arrow(start_view - draw_origin, start_direction, scale_m, true)
 	overlay_layer.draw_set_transform(Vector2.ZERO)
+
+## 지도 위에서도 도로 접선과 일치하는 화살표를 그려 팝업 선택과 연결한다.
+func _draw_direction_arrow(at: Vector2, direction: Vector2, scale_m: float, active: bool) -> void:
+	var color := Color("1262ef") if active else Color("7498d0")
+	var tip := at + direction * 38.0 / scale_m
+	var tail := at + direction * 12.0 / scale_m
+	var base := tip - direction * 13.0 / scale_m
+	var side := direction.orthogonal() * 8.0 / scale_m
+	overlay_layer.draw_line(tail, base, color, (6.0 if active else 4.0) / scale_m)
+	overlay_layer.draw_colored_polygon(PackedVector2Array([tip, base + side, base - side]), color)
 
 ## 큰 메르카토르 좌표를 지역 좌표로 옮겨 굵은 선 메시의 부동소수점 손상을 막는다.
 func _local_line(line: PackedVector2Array) -> PackedVector2Array:
