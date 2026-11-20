@@ -895,12 +895,20 @@ size_m = [1.0, 1.0]
         assert!(parse_scenario(&text).unwrap().needs_goal());
     }
 
-    /// 저장소의 시나리오 파일이 모두 읽히고 목록에 제목으로 나오는지 확인한다.
+    /// 배포 목록에 교육용 A·B·C만 있고 모든 파일이 제목과 함께 읽히는지 확인한다.
     #[test]
     fn bundled_scenarios_load() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let files = list_scenario_files(&root);
-        assert!(!files.is_empty(), "{SCENARIO_DIR}에 시나리오가 없음");
+        assert_eq!(
+            files.iter().map(|file| file.path.as_str()).collect::<Vec<_>>(),
+            vec![
+                "assets/scenarios/scenario-a-basic.toml",
+                "assets/scenarios/scenario-b-space.toml",
+                "assets/scenarios/scenario-c-hazard.toml",
+            ],
+            "배포 메뉴에는 교육용 A·B·C만 포함해야 함"
+        );
         for file in files {
             let def = load_scenario(&root.join(&file.path))
                 .unwrap_or_else(|error| panic!("{}: {error}", file.path));
