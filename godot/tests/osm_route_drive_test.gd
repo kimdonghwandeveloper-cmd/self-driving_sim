@@ -20,7 +20,7 @@ func _run() -> void:
 	for frame in 4:
 		await process_frame
 	await _click(main.screen.map_button.get_global_rect().get_center())
-	_check(main.screen.has_method("_preview_blocks"), "기본 지도는 블록 UI여야 함")
+	_check(main.screen.has_method("_select_area"), "기본 지도는 도로 영역 UI여야 함")
 	_show_legacy_map()
 	var map: Node2D = main.screen
 	_check(map.has_method("_drive_route"), "OSM 지도 진입 실패")

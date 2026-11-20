@@ -7,7 +7,7 @@ var failures: Array[String] = []
 func _init() -> void:
 	call_deferred("_run")
 
-## 실패 도로를 빼지 않은 전체 지역에서 지정 원본 way 순서를 경유로 고정한다.
+## 기존 저장 파일 API의 호환성은 방향·경유 순서를 고정해 별도로 검사한다.
 func _run() -> void:
 	for sample in [["expo", [[1286142779, false]], 350, 1016.3], ["gangnam", [[129731721, true], [504227065, false]], 973, 252.9]]:
 		var screen := Screen.new()
@@ -24,7 +24,7 @@ func _run() -> void:
 		_check(selected.size() >= 2, "source route not mapped")
 		for i in selected.size():
 			_choose(screen, selected[i], "start" if i == 0 else ("goal" if i == selected.size()-1 else "via"))
-		screen._preview_blocks()
+		screen.picker.call("preview_blocks")
 		var route: Dictionary = screen.picker.call("block_route")
 		_check(route.ok, "%s preview: %s" % [sample[0], route.error])
 		if route.ok:
@@ -90,16 +90,13 @@ func _source_blocks(blocks: Array, source: Dictionary, way: int, reversed: bool)
 	if reversed: selected.reverse()
 	return selected
 
-## 실제 후보 상자에서 고정한 블록과 방향을 찾아 역할 확정 처리 경로를 호출한다.
+## 기존 블록 API에서 고정한 원본 후보와 방향을 찾아 저장 호환성을 검증한다.
 func _choose(screen: Node, item: Dictionary, role: String) -> void:
 	var line: PackedVector2Array = item.line
-	screen._show_candidates(line[0].lerp(line[1], 0.5))
-	for i in screen.candidate_items.size():
-		var c: Dictionary = screen.candidate_items[i]
+	for c in screen.picker.call("block_candidates", line[0].lerp(line[1], 0.5), 20.0):
 		if c.id == item.id and c.direction == item.direction:
-			screen.candidate_list.select(i)
-			screen._focus_candidate(i)
-			screen._confirm_block(role)
+			var result: Dictionary = screen.picker.call("choose_block", item.id, item.direction, role)
+			_check(result.ok, str(result.error))
 			return
 	_check(false, "exact source candidate missing")
 
