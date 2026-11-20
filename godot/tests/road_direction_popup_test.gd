@@ -29,13 +29,15 @@ func _run() -> void:
 		_check(absf(segment.normalized().dot(screen.direction_vectors[0])) > 0.99, "arrows follow road angle")
 		screen.direction_buttons[1].mouse_entered.emit()
 		_check(screen.drive_button.disabled and not screen.preview_ok, "hover does not confirm")
-		screen.direction_buttons[0].pressed.emit()
+		await process_frame
+		await _click(screen.direction_buttons[0].get_global_rect().get_center())
 		_check(not screen.direction_popup.visible and screen.preview_ok, "arrow click confirms direction")
 		var forward := _saved_course(screen, "forward")
 		screen._select_map_position(click, false)
 		_check(screen.drive_button.disabled, "reopening invalidates previous preview")
 		_check(not screen.picker.call("save_road_area", "stale-direction").ok, "stale backend preview cleared")
-		screen.direction_buttons[1].pressed.emit()
+		await process_frame
+		await _click(screen.direction_buttons[1].get_global_rect().get_center())
 		var reverse := _saved_course(screen, "reverse")
 		if not forward.is_empty() and not reverse.is_empty():
 			_check(cos(float(forward.start.heading_rad) - float(reverse.start.heading_rad)) < -0.99, "saved vehicle actually reverses")
@@ -48,10 +50,22 @@ func _run() -> void:
 			screen._cancel_direction_popup()
 			_check(not screen.direction_popup.visible and screen.drive_button.disabled, "cancel keeps driving disabled")
 		screen._select_map_position(screen.get_canvas_transform() * at, false)
+		var escape := InputEventKey.new()
+		escape.physical_keycode = KEY_ESCAPE
+		escape.pressed = true
+		screen._input(escape)
+		_check(not screen.direction_popup.visible, "Esc closes popup")
+		screen._select_map_position(screen.get_canvas_transform() * at, false)
+		var had_data: bool = screen.data_ok
+		screen.data_ok = false
+		screen._select_map_position(screen.get_canvas_transform() * (at + Vector2(10000, 10000)), false)
+		screen.data_ok = had_data
+		_check(not screen.direction_popup.visible and screen.drive_button.disabled, "blank map cancels popup")
+		screen._select_map_position(screen.get_canvas_transform() * at, false)
 		for arg in OS.get_cmdline_user_args():
 			if arg.begins_with("--capture=") and DisplayServer.get_name() != "headless":
 				root.size = Vector2i(1280,720)
-				for frame in 10: await process_frame
+				for frame in 120: await process_frame
 				await RenderingServer.frame_post_draw
 				_check(root.get_texture().get_image().save_png(arg.trim_prefix("--capture=")) == OK, "capture failed")
 	screen.free()
@@ -70,8 +84,29 @@ func _saved_course(screen: Node, suffix: String) -> Dictionary:
 	if not saved.ok: return {}
 	var data: Dictionary = ClassDB.class_call_static("SimCourse", "build", "map:" + str(saved.path))
 	_check(data.ok, "replay direction")
+	var vehicle: Node3D = ClassDB.instantiate("SimVehicle")
+	vehicle.set("read_input", false)
+	vehicle.set("course", "map:" + str(saved.path))
+	root.add_child(vehicle)
+	_check(vehicle.call("is_ready"), "vehicle initializes with saved direction")
+	if data.ok: _check(vehicle.call("course_data").start == data.start, "vehicle uses saved start pose")
+	vehicle.free()
 	DirAccess.remove_absolute(saved.path)
 	return data if data.ok else {}
+
+## 실제 포인터 입력으로 화살표 버튼의 입력 처리와 팝업 차단 영역을 함께 검사한다.
+func _click(at: Vector2) -> void:
+	var move := InputEventMouseMotion.new()
+	move.position = at
+	Input.parse_input_event(move)
+	await process_frame
+	for pressed in [true, false]:
+		var event := InputEventMouseButton.new()
+		event.position = at
+		event.button_index = MOUSE_BUTTON_LEFT
+		event.pressed = pressed
+		Input.parse_input_event(event)
+		await process_frame
 
 ## 실패를 모아 테스트 프로세스의 종료 코드에 반영한다.
 func _check(ok: bool, message: String) -> void:
