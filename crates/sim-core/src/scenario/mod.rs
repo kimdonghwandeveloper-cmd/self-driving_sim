@@ -901,7 +901,10 @@ size_m = [1.0, 1.0]
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let files = list_scenario_files(&root);
         assert_eq!(
-            files.iter().map(|file| file.path.as_str()).collect::<Vec<_>>(),
+            files
+                .iter()
+                .map(|file| file.path.as_str())
+                .collect::<Vec<_>>(),
             vec![
                 "assets/scenarios/scenario-a-basic.toml",
                 "assets/scenarios/scenario-b-space.toml",
