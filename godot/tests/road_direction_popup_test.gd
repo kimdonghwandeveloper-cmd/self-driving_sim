@@ -16,10 +16,10 @@ func _run() -> void:
 		_check(false, "direction popup selection missing")
 	else:
 		screen._load_snapshot("testdata/block-real/expo-internal.osm.json")
+		await process_frame
 		var first: Dictionary = screen.picker.call("road_area_candidates", screen.picker.call("block_items")[0].line[0], 10.0)[0]
 		var at: Vector2 = first.line[0].lerp(first.line[1], 0.5)
-		var click: Vector2 = screen.get_canvas_transform() * at
-		screen._select_map_position(click, false)
+		screen._select_map_position(screen.get_canvas_transform() * at, false)
 		_check(screen.direction_popup.visible, "road click opens direction popup")
 		_check(screen.drive_button.disabled and not screen.preview_ok, "direction confirmation required")
 		_check(screen.direction_popup.get_theme_stylebox("panel").corner_radius_top_left >= 10, "rounded popup")
@@ -33,7 +33,7 @@ func _run() -> void:
 		await _press_direction(screen.direction_buttons[0])
 		_check(not screen.direction_popup.visible and screen.preview_ok, "arrow click confirms direction")
 		var forward := _saved_course(screen, "forward")
-		screen._select_map_position(click, false)
+		screen._select_map_position(screen.get_canvas_transform() * at, false)
 		_check(screen.drive_button.disabled, "reopening invalidates previous preview")
 		_check(not screen.picker.call("save_road_area", "stale-direction").ok, "stale backend preview cleared")
 		await process_frame
