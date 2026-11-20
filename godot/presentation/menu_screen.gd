@@ -21,7 +21,7 @@ var _brand := VBoxContainer.new()
 func _ready() -> void:
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	var background := ColorRect.new()
-	background.color = Color("0b1420")
+	background.color = Color("f5f7fb")
 	background.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(background)
 	background.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -42,17 +42,17 @@ func _ready() -> void:
 	_brand.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	_brand.add_theme_constant_override("separation", 18)
 	_columns.add_child(_brand)
-	_label(_brand, "DRIVE / TRAINING", 16, Color("65e4ce"))
+	_label(_brand, "DRIVE / TRAINING", 16, Color("1262ef"))
 	_label(_brand, "주행 교육\n시뮬레이터", 40)
 	_label(_brand, "차량을 직접 조작하며 주행과 안전 정지를 연습합니다.", 18)
-	_label(_brand, "01  코스 또는 시나리오 선택\n02  시동 · 기어 선택\n03  주행 · 정지 · 결과 확인", 16, Color("adc1d0"))
-	_label(_brand, "지도 출처와 실측 여부는 각 코스 안내를 확인하세요.\n차량 거동과 평가 기준은 교육용 임시값입니다.", 14, Color("90a6b8"))
+	_label(_brand, "01  코스 또는 시나리오 선택\n02  시동 · 기어 선택\n03  주행 · 정지 · 결과 확인", 16, Color("586b80"))
+	_label(_brand, "지도 출처와 실측 여부는 각 코스 안내를 확인하세요.\n차량 거동과 평가 기준은 교육용 임시값입니다.", 14, Color("697c90"))
 	var panel := PanelContainer.new()
 	panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_columns.add_child(panel)
 	var style := StyleBoxFlat.new()
-	style.bg_color = Color("162536")
-	style.border_color = Color("385a6d")
+	style.bg_color = Color.WHITE
+	style.border_color = Color("dce3ec")
 	style.set_border_width_all(1)
 	style.set_corner_radius_all(16)
 	style.set_content_margin_all(24)
@@ -61,7 +61,7 @@ func _ready() -> void:
 	actions.add_theme_constant_override("separation", 14)
 	panel.add_child(actions)
 	_label(actions, "주행 준비", 26)
-	_label(actions, "코스 선택", 14, Color("adc1d0"))
+	_label(actions, "코스 선택", 14, Color("586b80"))
 	courses.custom_minimum_size.y = 46
 	courses.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	courses.fit_to_longest_item = false
@@ -69,7 +69,7 @@ func _ready() -> void:
 	courses.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 	actions.add_child(courses)
 	_button(actions, start_button, "선택한 코스 시작", _open_course, true)
-	_button(actions, map_button, "경로 선택 · 지도", _open_map)
+	_button(actions, map_button, "도로 선택 · 자유 주행", _open_map)
 	_button(actions, controls_button, "조작법 안내", _toggle_controls)
 	_button(actions, settings_button, "실행 환경 안내", _toggle_settings)
 	_button(actions, Button.new(), "프로그램 종료", _request_quit)
@@ -88,7 +88,7 @@ func _layout() -> void:
 
 
 ## 자동 줄바꿈되는 설명 라벨을 부모 컨테이너에 추가한다.
-func _label(parent: Control, text: String, font_size: int, color: Color = Color.WHITE) -> Label:
+func _label(parent: Control, text: String, font_size: int, color: Color = Color("27364b")) -> Label:
 	var label := Label.new()
 	label.text = text
 	label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -104,14 +104,16 @@ func _button(parent: Control, button: Button, text: String, action: Callable, pr
 	button.custom_minimum_size.y = 46
 	button.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 	var style := StyleBoxFlat.new()
-	style.bg_color = Color("237e73") if primary else Color("22394d")
+	style.bg_color = Color("1262ef") if primary else Color.WHITE
 	style.set_corner_radius_all(8)
 	style.set_content_margin_all(12)
 	button.add_theme_stylebox_override("normal", style)
+	for state in ["font_color", "font_hover_color", "font_pressed_color", "font_focus_color"]:
+		button.add_theme_color_override(state, Color.WHITE if primary else Color("27364b"))
 	var hover := style.duplicate() as StyleBoxFlat
-	hover.bg_color = Color("31958a") if primary else Color("34546b")
+	hover.bg_color = Color("084bd3") if primary else Color("eef4ff")
 	hover.set_border_width_all(2)
-	hover.border_color = Color("65e4ce")
+	hover.border_color = Color("1262ef")
 	for state in ["hover", "focus", "pressed"]:
 		button.add_theme_stylebox_override(state, hover)
 	button.pressed.connect(action)

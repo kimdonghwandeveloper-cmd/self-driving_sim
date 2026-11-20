@@ -502,6 +502,11 @@ pub fn load_map_course_with_patch_dir(
     let invalid = |error: toml::de::Error| format!("invalid {}: {error}", path.display());
     let table: toml::Table = toml::from_str(&text).map_err(invalid)?;
     let base_dir = path.parent().unwrap_or(Path::new("."));
+    if table.get("format").and_then(toml::Value::as_str) == Some(super::road_area::ROAD_AREA_FORMAT)
+    {
+        let file: super::road_area::RoadAreaFile = toml::from_str(&text).map_err(invalid)?;
+        return super::road_area::replay_road_area(&file, base_dir);
+    }
     if table.get("format").and_then(toml::Value::as_str)
         == Some(super::road_polygons::ROAD_LINES_FORMAT)
     {
