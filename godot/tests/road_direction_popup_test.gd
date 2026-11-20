@@ -30,14 +30,14 @@ func _run() -> void:
 		screen.direction_buttons[1].mouse_entered.emit()
 		_check(screen.drive_button.disabled and not screen.preview_ok, "hover does not confirm")
 		await process_frame
-		await _click(screen.direction_buttons[0].get_global_rect().get_center())
+		await _press_direction(screen.direction_buttons[0])
 		_check(not screen.direction_popup.visible and screen.preview_ok, "arrow click confirms direction")
 		var forward := _saved_course(screen, "forward")
 		screen._select_map_position(click, false)
 		_check(screen.drive_button.disabled, "reopening invalidates previous preview")
 		_check(not screen.picker.call("save_road_area", "stale-direction").ok, "stale backend preview cleared")
 		await process_frame
-		await _click(screen.direction_buttons[1].get_global_rect().get_center())
+		await _press_direction(screen.direction_buttons[1])
 		var reverse := _saved_course(screen, "reverse")
 		if not forward.is_empty() and not reverse.is_empty():
 			_check(cos(float(forward.start.heading_rad) - float(reverse.start.heading_rad)) < -0.99, "saved vehicle actually reverses")
@@ -93,6 +93,14 @@ func _saved_course(screen: Node, suffix: String) -> Dictionary:
 	vehicle.free()
 	DirAccess.remove_absolute(saved.path)
 	return data if data.ok else {}
+
+## 헤드리스는 숨긴 지도 컨트롤의 신호를 검사하고 실제 렌더러에서는 포인터 입력을 검사한다.
+func _press_direction(button: Button) -> void:
+	if DisplayServer.get_name() == "headless":
+		button.pressed.emit()
+		return
+	_check(button.is_visible_in_tree(), "arrow button visible for pointer input")
+	await _click(button.get_global_rect().get_center())
 
 ## 실제 포인터 입력으로 화살표 버튼의 입력 처리와 팝업 차단 영역을 함께 검사한다.
 func _click(at: Vector2) -> void:
