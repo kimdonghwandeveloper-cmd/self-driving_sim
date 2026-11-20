@@ -98,9 +98,12 @@ fn main() -> ExitCode {
         if args.len() != 3 {
             return Err("usage: convention-map <trace.json> <new-output-directory>".into());
         }
-        let trace: Value =
-            serde_json::from_str(&fs::read_to_string(&args[1]).map_err(|e| e.to_string())?)
-                .map_err(|e| e.to_string())?;
+        let trace: Value = serde_json::from_str(
+            fs::read_to_string(&args[1])
+                .map_err(|e| e.to_string())?
+                .trim_start_matches('\u{feff}'),
+        )
+        .map_err(|e| e.to_string())?;
         let files = generate(&trace)?;
         let output = Path::new(&args[2]);
         fs::create_dir(output).map_err(|e| e.to_string())?;
