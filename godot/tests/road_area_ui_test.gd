@@ -24,7 +24,9 @@ func _run() -> void:
 		var line: PackedVector2Array = items[0].line
 		var click := line[0].lerp(line[1], 0.5)
 		screen._select_map_position(screen.get_canvas_transform() * click, false)
-		_check(not screen.drive_button.disabled, "one road enables driving without endpoints")
+		_check(screen.direction_popup.visible and screen.drive_button.disabled, "road click requires direction popup confirmation")
+		screen.direction_buttons[0].pressed.emit()
+		_check(not screen.drive_button.disabled, "one road and direction enable driving without endpoints")
 		_check(not screen.area_lines.is_empty(), "generated roads highlighted")
 		var selected: String = screen.selected_road
 		var had_data: bool = screen.data_ok

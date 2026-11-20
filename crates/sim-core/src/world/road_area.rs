@@ -1,4 +1,4 @@
-//! 출발·도착·방향 선택 없는 도로 영역 생성과 자유 주행 코스.
+//! 도착 지점 없는 도로 영역 생성과 출발 방향을 보존하는 자유 주행 코스.
 use super::{
     course::CourseDef,
     map::LatLon,
@@ -20,6 +20,9 @@ pub struct RoadAreaFile {
     pub origin: [f64; 2],
     pub anchor: BlockId,
     pub span_m: f32,
+    /// 원본 블록의 정규화한 노드 순서와 반대 방향으로 출발한다. 옛 파일은 정방향이다.
+    #[serde(default)]
+    pub reversed: bool,
     pub result_sha256: String,
 }
 /// 자유 주행 저장 형식.
@@ -61,6 +64,19 @@ pub fn prepare_road_area(
     span_m: f32,
     origin: LatLon,
 ) -> Result<(RoadAreaFile, CourseDef), String> {
+    prepare_road_area_with_direction(base, snapshot, config, anchor, span_m, origin, false)
+}
+
+/// 명시한 출발 방향을 자료 해시·생성 결과와 함께 고정한다.
+pub fn prepare_road_area_with_direction(
+    base: &Path,
+    snapshot: &str,
+    config: &super::route_plan::RoadGraphConfig,
+    anchor: &BlockId,
+    span_m: f32,
+    origin: LatLon,
+    reversed: bool,
+) -> Result<(RoadAreaFile, CourseDef), String> {
     let lock = |path: &Path| -> Result<super::block_route_file::LockedFile, String> {
         let relative = crate::picker::model::relative_path(base, path)?;
         Ok(super::block_route_file::LockedFile {
@@ -96,6 +112,7 @@ pub fn prepare_road_area(
         origin: [origin.lat, origin.lon],
         anchor: anchor.clone(),
         span_m,
+        reversed,
         result_sha256: String::new(),
     };
     let course = rebuild(&file, base)?;
@@ -164,7 +181,8 @@ fn rebuild(file: &RoadAreaFile, base: &Path) -> Result<CourseDef, String> {
         lat: file.origin[0],
         lon: file.origin[1],
     };
-    let mut course = build_road_area(&model, &file.anchor, file.span_m, origin)?;
+    let mut course =
+        build_road_area_with_direction(&model, &file.anchor, file.span_m, origin, file.reversed)?;
     let places_path = super::places::snapshot_places_path(&path);
     if file
         .dependencies
@@ -233,6 +251,17 @@ pub fn build_road_area(
     span_m: f32,
     origin: LatLon,
 ) -> Result<CourseDef, String> {
+    build_road_area_with_direction(model, anchor, span_m, origin, false)
+}
+
+/// 도로망은 유지하고 차체 중심을 기준으로 선택한 출발 방향을 적용한다.
+pub fn build_road_area_with_direction(
+    model: &RoadBlockModel,
+    anchor: &BlockId,
+    span_m: f32,
+    origin: LatLon,
+    reversed: bool,
+) -> Result<CourseDef, String> {
     use super::{
         map, road_geom,
         road_network::{NetworkSettings, build_road_network},
@@ -263,7 +292,7 @@ pub fn build_road_area(
         if pair[0].distance(pair[1]) < VEHICLE_FOOTPRINT.length_m + 1.0 {
             continue;
         }
-        let direction = (pair[1] - pair[0]).normalize();
+        let direction = (pair[1] - pair[0]).normalize() * if reversed { -1.0 } else { 1.0 };
         let center = pair[0].lerp(pair[1], 0.5);
         let rear = center - direction * VEHICLE_FOOTPRINT.rear_axle_to_center_m;
         let pose = Motion {
@@ -399,6 +428,46 @@ mod tests {
         ));
     }
 
+    /// 반대 화살표를 선택하면 차체 중심은 같고 실제 차량 방향만 반대로 배치된다.
+    #[test]
+    fn opposite_start_directions_keep_road_geometry_and_reverse_vehicle() {
+        let model = fixture();
+        let b = &model.blocks[0];
+        let forward =
+            build_road_area_with_direction(&model, &b.id, 500., b.nodes[0].pos, false).unwrap();
+        let reverse =
+            build_road_area_with_direction(&model, &b.id, 500., b.nodes[0].pos, true).unwrap();
+        assert_eq!(forward.strips, reverse.strips);
+        assert_eq!(forward.areas, reverse.areas);
+        assert_eq!(forward.colliders, reverse.colliders);
+        assert!(forward.goal.is_none() && reverse.goal.is_none());
+        let a = glam::Vec2::new(
+            forward.start.heading_rad.sin(),
+            forward.start.heading_rad.cos(),
+        );
+        let z = glam::Vec2::new(
+            reverse.start.heading_rad.sin(),
+            reverse.start.heading_rad.cos(),
+        );
+        assert!(
+            a.dot(z) < -0.999,
+            "chosen opposite direction must reverse the vehicle"
+        );
+        let footprint = crate::vehicle::VEHICLE_FOOTPRINT;
+        assert!(
+            footprint
+                .rect_at(&forward.start)
+                .center
+                .distance(footprint.rect_at(&reverse.start).center)
+                < 0.001
+        );
+        assert!(!crate::vehicle::collision::in_contact(
+            &footprint,
+            &reverse.start,
+            &reverse.collision_rects()
+        ));
+    }
+
     /// 일방통행과 경로 연결 없이 입력 순서에 상관없이 같은 영역을 생성한다.
     #[test]
     fn area_is_deterministic_and_does_not_require_route_connections() {
@@ -469,6 +538,36 @@ mod tests {
         let target = dir.join("area.toml");
         save_road_area(&target, &file).unwrap();
         assert_eq!(course, crate::world::map::load_map_course(&target).unwrap());
+        let legacy_text = std::fs::read_to_string(&target)
+            .unwrap()
+            .replace("reversed = false\n", "");
+        let legacy: RoadAreaFile = toml::from_str(&legacy_text).unwrap();
+        assert!(!legacy.reversed);
+        assert_eq!(course, replay_road_area(&legacy, &dir).unwrap());
+        let (reverse_file, reverse) = prepare_road_area_with_direction(
+            &dir,
+            "roads.json",
+            &RoadGraphConfig::default(),
+            &anchor.id,
+            500.,
+            anchor.nodes[0].pos,
+            true,
+        )
+        .unwrap();
+        let reverse_path = dir.join("reverse.toml");
+        save_road_area(&reverse_path, &reverse_file).unwrap();
+        assert_eq!(
+            reverse,
+            crate::world::map::load_map_course(&reverse_path).unwrap()
+        );
+        assert!((course.start.heading_rad - reverse.start.heading_rad).cos() < -0.999);
+        let mut tampered = file.clone();
+        tampered.reversed = true;
+        assert!(
+            replay_road_area(&tampered, &dir)
+                .unwrap_err()
+                .contains("result SHA-256")
+        );
         assert!(save_road_area(&target, &file).is_err());
         let mut changed = file.clone();
         changed.network_version = "unknown".into();
