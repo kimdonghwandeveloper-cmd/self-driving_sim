@@ -1,3 +1,4 @@
+﻿$env:SIMULATOR_DISTRIBUTION_ROOT = ''
 # 임시 저장소에서 경로 거부와 필수 파일 누락을 시험한다. 정상 출력 교체·빌드·프로그램 실행은 하지 않는다.
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path $PSScriptRoot -Parent
@@ -78,3 +79,12 @@ New-Item -ItemType Junction -Path (Join-Path $linkRoot 'dist') -Target (Join-Pat
 Assert-Refused { Get-ReleaseOutputPath $linkRoot 'dist/new' } 'Safety Error:'
 if (Test-Path -LiteralPath (Join-Path $fixture 'dist/new')) { throw 'Negative tests created an output folder' }
 Write-Output "PACKAGE SAFETY OK: $script:cases cases; no output removed; fixtures: $fixture"
+# 외부 배포 루트에서도 전용 폴더와 링크 차단을 유지한다.
+$external=Join-Path $fixture 'external/dist'
+$safe=Get-ReleaseOutputPath $fixture 'dist/review' $external
+if($safe -ne (Join-Path $external 'review')) {throw 'External output mismatch'}
+Assert-Refused {Get-ReleaseOutputPath $fixture 'dist/../escape' $external} 'Safety Error:'
+Assert-Refused {Get-ReleaseOutputPath $fixture 'dist/review' 'relative/dist'} 'Safety Error:'
+Assert-Refused {Get-ReleaseOutputPath $fixture 'dist/review' 'D:/'} 'Safety Error:'
+Assert-Refused {Get-ReleaseOutputPath $fixture 'dist/review' (Join-Path $linkRoot 'dist')} 'Safety Error:'
+Write-Output 'EXTERNAL DISTRIBUTION ROOT OK'

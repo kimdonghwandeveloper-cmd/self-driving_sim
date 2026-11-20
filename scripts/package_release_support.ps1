@@ -1,14 +1,27 @@
-# 삭제 없는 경로·입력 검사를 분리해 패키징 전에 회귀 시험한다.
+﻿# 삭제 없는 경로·입력 검사를 분리해 패키징 전에 회귀 시험한다.
 
 # 저장소 dist 바로 아래의 전용 폴더 이름만 허용하고 junction/symlink 경유를 거부한다.
-function Get-ReleaseOutputPath([string]$RepoRoot, [string]$OutputDir) {
+function Get-ReleaseOutputPath([string]$RepoRoot, [string]$OutputDir, [string]$DistributionRoot = '') {
     $relative = $OutputDir.Replace('\', '/').TrimEnd('/')
     if ($relative -notmatch '^dist/[A-Za-z0-9][A-Za-z0-9_-]*$') {
         throw 'Safety Error: OutputDir must be dist/<dedicated-folder> (letters, digits, _ or -)'
     }
     $root = [IO.Path]::GetFullPath($RepoRoot)
     $dist = Join-Path $root 'dist'
-    $output = [IO.Path]::GetFullPath((Join-Path $root $relative))
+    if ($DistributionRoot) {
+        if (-not [IO.Path]::IsPathRooted($DistributionRoot)) { throw 'Safety Error: distribution root must be absolute' }
+        $dist = [IO.Path]::GetFullPath($DistributionRoot).TrimEnd('\')
+        if ([IO.Path]::GetFileName($dist) -ne 'dist' -or $dist -eq [IO.Path]::GetPathRoot($dist)) { throw 'Safety Error: distribution root must be a dedicated dist directory' }
+        $ancestor = $dist
+        while ($ancestor) {
+            if (Test-Path -LiteralPath $ancestor) {
+                $item = Get-Item -LiteralPath $ancestor -Force
+                if (-not $item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Safety Error: distribution root crosses a link' }
+            }
+            $ancestor = [IO.Path]::GetDirectoryName($ancestor)
+        }
+    }
+    $output = [IO.Path]::GetFullPath((Join-Path $dist ($relative.Substring(5))))
     if ([IO.Path]::GetDirectoryName($output) -ne $dist) { throw 'Safety Error: output escaped dist' }
     foreach ($path in @($dist, $output)) {
         if (Test-Path -LiteralPath $path) {

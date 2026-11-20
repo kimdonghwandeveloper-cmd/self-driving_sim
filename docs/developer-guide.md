@@ -215,3 +215,7 @@ powershell.exe -NoProfile -File tools/test-godot-cold-import.ps1 -Godot '<Godot 
 검사 복사본과 로그는 출력된 경로에 남습니다. 실제 에디터 조작 및 일반 GUI 첫 실행은 별도 확인이 필요합니다.
 
 `Cargo.lock`은 커밋하여 의존성 해석을 고정합니다. `logs/`와 `target/`은 버전 관리에서 제외합니다.
+
+## Rust 지도 제작 도구
+
+Blender 수동 GLB를 입력으로 사용하는 좌표 변환·도로 추출·이미지 지면·캐노피 생성은 [Rust 지도 제작 안내](rust-map-tools.md)를 참고하세요. Python 설치는 필요하지 않습니다.
