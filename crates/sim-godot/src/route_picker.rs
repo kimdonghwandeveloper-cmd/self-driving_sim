@@ -169,14 +169,17 @@ impl SimRoutePicker {
             let dir = repo_path(ROUTE_DIR);
             std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
             let relative = sim_core::picker::model::relative_path(&dir, &m.snapshot_path)?;
-            sim_core::world::road_area::prepare_road_area_with_direction(
+            sim_core::world::road_area::prepare_directional_road_area(
                 &dir,
                 &relative,
                 &m.config,
-                &sim_core::world::road_blocks::BlockId(id.to_string()),
-                span_m,
-                m.origin,
-                reversed,
+                &sim_core::world::road_area::DirectionalAreaRequest {
+                    anchor: &sim_core::world::road_blocks::BlockId(id.to_string()),
+                    distance_m: span_m,
+                    origin: m.origin,
+                    reversed,
+                    source_bounds: self.loaded.map(|b| [b.south, b.west, b.north, b.east]),
+                },
             )
         })();
         match prepared {
@@ -190,15 +193,14 @@ impl SimRoutePicker {
                     .as_ref()
                     .expect("loaded block model")
                     .model;
-                let selected = sim_core::world::road_area::select_road_area(
-                    model,
-                    &file.anchor,
-                    file.span_m,
-                    origin,
-                )
-                .expect("validated area");
-                let lines: Array<PackedVector2Array> = selected
+                let ids: std::collections::BTreeSet<_> =
+                    file.selected_blocks.iter().cloned().collect();
+                let selected: Vec<_> = model
                     .blocks
+                    .iter()
+                    .filter(|b| ids.contains(&b.id))
+                    .collect();
+                let lines: Array<PackedVector2Array> = selected
                     .iter()
                     .map(|b| {
                         b.nodes
@@ -210,7 +212,7 @@ impl SimRoutePicker {
                             .collect()
                     })
                     .collect();
-                let count = selected.blocks.len() as i64;
+                let count = selected.len() as i64;
                 let start = tiles::to_view(sim_core::world::map::LatLon {
                     lat: origin.lat - (course.start.z_m as f64 / 6_371_008.8_f64).to_degrees(),
                     lon: origin.lon

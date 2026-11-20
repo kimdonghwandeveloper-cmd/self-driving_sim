@@ -96,12 +96,12 @@ func _services(canvas: CanvasLayer) -> void:
 	selection_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	selection_label.text = "선택한 도로 없음"
 	toolbar.add_child(selection_label)
-	_add_label(toolbar, "도로 생성 범위", 16)
-	for item in [["주변 500 m", 500], ["주변 1 km", 1000], ["주변 3 km", 3000], ["주변 5 km", 5000], ["주변 10 km", 10000]]:
+	_add_label(toolbar, "앞으로 생성할 거리", 16)
+	for item in [["앞으로 500 m", 500], ["앞으로 1 km", 1000], ["앞으로 3 km", 3000], ["앞으로 5 km", 5000], ["앞으로 10 km", 10000]]:
 		extent.add_item(item[0], item[1])
 	extent.item_selected.connect(_extent_changed)
 	toolbar.add_child(extent)
-	_add_label(toolbar, "경계에 걸친 도로는 교차로를 보존하기 위해\n끝까지 생성될 수 있습니다.", 12)
+	_add_label(toolbar, "선택 방향으로 연결된 완전한 도로만 생성합니다.\n거리 또는 자료 경계에 도달하면 멈춥니다.", 12)
 	_add_button(toolbar, "선택 초기화", _clear_points)
 	var details := CheckButton.new()
 	details.text = "자료 및 저장"
@@ -319,10 +319,10 @@ func _select_area(id: String, reversed: bool = false) -> void:
 				title = str(item.name)
 				if title in ["service", "pedestrian"]: title = "시설 내부 도로"
 		selection_label.text = title + " 주변"
-		feedback = "도로 %d개 · 건물 %d개\n목표 지점 없이 자유롭게 주행하세요." % [result.road_count, result.get("building_count", 0)]
+		feedback = "앞쪽 연결 도로 %d개 · 건물 %d개\n목표 지점 없이 자유롭게 주행하세요." % [result.road_count, result.get("building_count", 0)]
 	else:
 		selection_label.text = "도로 생성 실패"
-		feedback = "이 영역을 생성하지 못했습니다.\n다른 도로나 작은 범위를 선택해 주세요."
+		feedback = "출발 방향의 자료가 경계에서 끊겨 있습니다.\n지역을 더 넓게 열거나 도로를 다시 선택하세요." if technical_feedback.contains("자료 경계") else "이 방향의 도로를 생성하지 못했습니다.\n다른 도로나 작은 거리를 선택해 주세요."
 	drive_button.disabled = not preview_ok
 	save_button.disabled = not preview_ok
 	overlay_layer.queue_redraw()
@@ -361,7 +361,7 @@ func _ensure_region(at: Vector2) -> bool:
 func _open_region_at(view: Vector2) -> bool:
 	if picker == null: return false
 	_clear_points()
-	var result: Dictionary = picker.call("open_block_region", picker.call("view_to_latlon", view), minf(10000.0, maxf(1500.0, float(extent.get_selected_id()) + 1000.0)))
+	var result: Dictionary = picker.call("open_block_region", picker.call("view_to_latlon", view), minf(10000.0, maxf(1500.0, float(extent.get_selected_id()) * 2.0 + 1000.0)))
 	feedback = "도로를 눌러 영역을 선택하세요." if result.ok else "지역 자료를 열지 못했습니다."
 	technical_feedback = str(result.error)
 	_refresh_route()
