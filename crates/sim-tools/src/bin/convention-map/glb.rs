@@ -28,14 +28,35 @@ pub fn build(snapshot: &Value, origin: [f64; 2], widths: &[f64]) -> Result<Vec<u
         }
         let mut vertices = Vec::new();
         for i in 0..centers.len() {
-            let a = centers[i.saturating_sub(1)];
-            let b = centers[(i + 1).min(centers.len() - 1)];
-            let d = [b[0] - a[0], b[1] - a[1]];
-            let length = d[0].hypot(d[1]);
+            let point = centers[i];
+            let normalize = |a: [f64; 2], b: [f64; 2]| -> Result<[f64; 2], String> {
+                let d = [b[0] - a[0], b[1] - a[1]];
+                let length = d[0].hypot(d[1]);
+                if length < 1e-6 {
+                    return Err("퇴화 도로 방향".into());
+                }
+                Ok([d[0] / length, d[1] / length])
+            };
+            let incoming = if i == 0 {
+                normalize(point, centers[1])?
+            } else {
+                normalize(centers[i - 1], point)?
+            };
+            let outgoing = if i + 1 == centers.len() {
+                incoming
+            } else {
+                normalize(point, centers[i + 1])?
+            };
+            let n = [-incoming[1], incoming[0]];
+            let m = [-outgoing[1], outgoing[0]];
+            let sum = [n[0] + m[0], n[1] + m[1]];
+            let length = sum[0].hypot(sum[1]);
             if length < 1e-6 {
-                return Err("퇴화 도로 방향".into());
+                return Err("되돌림 도로".into());
             }
-            let offset = [-d[1] / length * width / 2.0, d[0] / length * width / 2.0];
+            let mid = [sum[0] / length, sum[1] / length];
+            let scale = width / 2.0 / (mid[0] * m[0] + mid[1] * m[1]).max(0.5);
+            let offset = [mid[0] * scale, mid[1] * scale];
             for sign in [-1.0, 1.0] {
                 vertices.push([
                     (centers[i][0] + sign * offset[0]) as f32,
@@ -75,11 +96,11 @@ pub fn build(snapshot: &Value, origin: [f64; 2], widths: &[f64]) -> Result<Vec<u
         let indices = accessors.len();
         accessors.push(json!({"bufferView":views.len()-1,"componentType":5125,"count":(centers.len()-1)*6,"type":"SCALAR"}));
         nodes.push(json!({"name":format!("RustRoad_{}",road["id"]),"mesh":meshes.len()}));
-        meshes.push(json!({"primitives":[{"attributes":{"POSITION":position},"indices":indices,"material":0}]}));
+        meshes.push(json!({"primitives":[{"attributes":{"POSITION":position},"indices":indices,"material":if road["tags"]["sim_surface"]=="gallery"{1}else{0}}]}));
     }
-    let document = json!({"asset":{"version":"2.0","generator":"sim-tools Rust road preview"},"scene":0,"scenes":[{"nodes":(0..nodes.len()).collect::<Vec<_>>()}],"nodes":nodes,"meshes":meshes,"materials":[{"pbrMetallicRoughness":{"baseColorFactor":[0.135,0.145,0.155,1.0],"metallicFactor":0.0,"roughnessFactor":0.82}}],"accessors":accessors,"bufferViews":views,"buffers":[{"byteLength":bin.len()}]});
+    let document = json!({"asset":{"version":"2.0","generator":"sim-tools Rust road preview"},"scene":0,"scenes":[{"nodes":(0..nodes.len()).collect::<Vec<_>>()}],"nodes":nodes,"meshes":meshes,"materials":[{"pbrMetallicRoughness":{"baseColorFactor":[0.135,0.145,0.155,1.0],"metallicFactor":0.0,"roughnessFactor":0.82}},{"pbrMetallicRoughness":{"baseColorFactor":[0.24,0.25,0.26,1.0],"metallicFactor":0.0,"roughnessFactor":0.82}}],"accessors":accessors,"bufferViews":views,"buffers":[{"byteLength":bin.len()}]});
     let mut text = serde_json::to_vec(&document).map_err(|e| e.to_string())?;
-    while text.len() % 4 != 0 {
+    while !text.len().is_multiple_of(4) {
         text.push(b' ');
     }
     let length = 12 + 8 + text.len() + 8 + bin.len();

@@ -1,3 +1,7 @@
+#[path = "convention-map/container.rs"]
+mod container;
+#[path = "convention-map/decor.rs"]
+mod decor;
 #[path = "convention-map/glb.rs"]
 mod glb;
 // 컨벤션 통로의 좌표 변환과 코스 생성.
@@ -84,7 +88,7 @@ fn generate(trace: &Value) -> Result<Vec<(String, String)>, String> {
                 origin[1] + (east / (6_371_008.8 * origin[0].to_radians().cos())).to_degrees();
             geometry.push(json!({"lat":(lat*1e8).round()/1e8,"lon":(lon*1e8).round()/1e8}));
         }
-        elements.push(json!({"type":"way","id":id,"tags":{"highway":"service","source":"manual aerial-image training approximation"},"geometry":geometry}));
+        elements.push(json!({"type":"way","id":id,"tags":{"highway":"service","source":"manual aerial-image training approximation","sim_surface":if name.contains("gallery"){"gallery"}else{"asphalt"}},"geometry":geometry}));
         files.push((format!("{name}.toml"),format!("# 가상 교육용 이미지 근사 통로. 로컬 ID이며 OSM ID가 아님.\nsource = \"traced-roads.json\"\norigin = [{}, {}]\nways = [{id}]\ntemporary_width_m = {width}\n",origin[0],origin[1])));
     }
     files.push((
@@ -97,8 +101,10 @@ fn generate(trace: &Value) -> Result<Vec<(String, String)>, String> {
 fn main() -> ExitCode {
     let args: Vec<_> = std::env::args().collect();
     let result = (|| -> Result<(), String> {
-        if args.len() != 3 {
-            return Err("usage: convention-map <trace.json> <new-output-directory>".into());
+        if !(3..=5).contains(&args.len()) {
+            return Err(
+                "usage: convention-map <trace.json> <new-output-directory> [reference.png] [aligned-background.glb]".into(),
+            );
         }
         let trace: Value = serde_json::from_str(
             fs::read_to_string(&args[1])
@@ -119,13 +125,27 @@ fn main() -> ExitCode {
             .iter()
             .map(|r| r["width_m"].as_f64().unwrap_or(0.0))
             .collect();
-        let mesh = glb::build(&snapshot, origin, &widths)?;
+        let mut mesh = glb::build(&snapshot, origin, &widths)?;
+        if let Some(path) = args.get(3) {
+            mesh = decor::decorate(&mesh, &trace, &fs::read(path).map_err(|e| e.to_string())?)?;
+        }
+        if let Some(path) = args.get(4) {
+            mesh = container::merge(&fs::read(path).map_err(|e| e.to_string())?, &mesh)?;
+        }
         let output = Path::new(&args[2]);
         fs::create_dir(output).map_err(|e| e.to_string())?;
         for (name, contents) in files {
             fs::write(output.join(name), contents).map_err(|e| e.to_string())?;
         }
-        fs::write(output.join("convention-roads.glb"), mesh).map_err(|e| e.to_string())?;
+        fs::write(
+            output.join(if args.len() >= 4 {
+                "convention-background.glb"
+            } else {
+                "convention-roads.glb"
+            }),
+            mesh,
+        )
+        .map_err(|e| e.to_string())?;
         Ok(())
     })();
     match result {

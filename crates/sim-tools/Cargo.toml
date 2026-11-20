@@ -12,3 +12,4 @@ publish = false
 [dependencies]
 sim-core = { path = "../sim-core" }
 serde_json = "=1.0.154"
+png = "=0.18.1"
