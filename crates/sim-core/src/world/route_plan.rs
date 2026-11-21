@@ -1714,6 +1714,7 @@ mod tests {
         // 이 파일은 4-8 이전 규칙(작은 도로만, 일방통행 제외)으로 만들었다.
         let legacy = RoadGraphConfig {
             allowed_highways: file.allowed_highways.clone(),
+            stub_length_m: file.stub_length_m,
             nav_rules: false,
             max_route_length_m: file.max_route_length_m,
             ..RoadGraphConfig::default()
