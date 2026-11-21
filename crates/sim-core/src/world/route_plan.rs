@@ -110,7 +110,7 @@ impl Default for RoadGraphConfig {
             snap_distance_m: 30.0,
             max_route_length_m: ROUTE_LENGTH_CAP_M,
             corner_radius_m: route::CORNER_RADIUS_M,
-            stub_length_m: route::STUB_LENGTH_M,
+            stub_length_m: 0.0,
             nav_rules: true,
             include_restricted: false,
         }

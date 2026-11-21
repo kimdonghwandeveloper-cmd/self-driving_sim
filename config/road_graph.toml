@@ -21,7 +21,7 @@ max_route_length_m = 10000.0
 include_restricted = false
 # 교차로 모서리 원호 반경(m)과 경로에 포함되지 않은 교차로 팔(곁가지)의 길이(m).
 corner_radius_m = 3.0
-stub_length_m = 10.0
+stub_length_m = 0.0
 
 # 도로 종류별 기본 폭(m, 2.5..=12). allowed_highways의 종류마다 있어야 합니다.
 [default_width_m]

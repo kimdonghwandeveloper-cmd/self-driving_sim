@@ -57,15 +57,19 @@ impl Default for JunctionSettings {
 }
 
 impl JunctionSettings {
-    /// 값이 유한한 양수인지 검사한다.
+    /// 회전 반경은 양수로 제한하며 곁가지 길이 0은 입구에서 닫는다.
     pub fn validate(&self) -> Result<(), String> {
-        for (name, value) in [
-            ("corner_radius_m", self.corner_radius_m),
-            ("stub_length_m", self.stub_length_m),
-        ] {
-            if !(value.is_finite() && value > 0.0) {
-                return Err(format!("{name} must be a positive number, got {value}"));
-            }
+        if !self.corner_radius_m.is_finite() || self.corner_radius_m <= 0.0 {
+            return Err(format!(
+                "corner_radius_m must be a positive number, got {}",
+                self.corner_radius_m
+            ));
+        }
+        if !self.stub_length_m.is_finite() || self.stub_length_m < 0.0 {
+            return Err(format!(
+                "stub_length_m must be non-negative, got {}",
+                self.stub_length_m
+            ));
         }
         Ok(())
     }
@@ -688,6 +692,7 @@ fn build_junction(
     )?;
     let mut cut = BTreeMap::new();
     let mut stubs = Vec::new();
+    let mut closed_arms = Vec::new();
     for (k, &(neighbor, _)) in neighbors.iter().enumerate() {
         let (points, arm, cut_m) = (&polylines[k], arms[k], shape.cut_m[k]);
         // 잘라 낼 거리까지는 팔이 곧아야 도로 조각이 교차로 면 입구와 정확히 맞는다.
@@ -711,6 +716,14 @@ fn build_junction(
         }
         cut.insert(neighbor, cut_m);
         if !route_neighbors.contains(&neighbor) {
+            if settings.stub_length_m == 0.0 {
+                closed_arms.push(map::end_wall(
+                    center + arm.direction * cut_m,
+                    arm.direction,
+                    2.0 * (arm.half_width_m + spec.curb_thickness_m),
+                ));
+                continue;
+            }
             let end = (cut_m + settings.stub_length_m).min(length);
             let stub_points = trim(points, cut_m, length - end)?;
             stubs.push(map::road_piece(&stub_points, spec, [false, true])?);
@@ -725,6 +738,7 @@ fn build_junction(
             height_m: 0.25,
             kind: ColliderKind::Curb,
         })
+        .chain(closed_arms)
         .collect();
     // 정당한 접합 범위: 입구(잘라 낸 곳의 연석 바깥 모서리)까지와, 이웃한 팔의 연석 바깥선이 서로 갈라지는 곳까지.
     let outer = half + spec.curb_thickness_m;
@@ -907,6 +921,33 @@ mod tests {
             assert_eq!(result.impacts, 0, "{name}: {result:?}");
             assert!(result.remaining_m < 12.5, "{name}: {result:?}");
             assert!(result.max_offset_m < 1.2, "{name}: {result:?}");
+            let without_stubs = build_route_course_with(
+                name,
+                &ways,
+                &allowed(),
+                &route,
+                4.0,
+                &JunctionSettings {
+                    stub_length_m: 0.0,
+                    ..Default::default()
+                },
+                Vec::new(),
+            )
+            .unwrap_or_else(|e| panic!("{name}: {e}"));
+            assert_eq!(without_stubs.course.strips.len(), 6, "{name}");
+            assert_eq!(without_stubs.course.areas, built.course.areas, "{name}");
+            let walls = |course: &RouteCourse| {
+                course
+                    .course
+                    .colliders
+                    .iter()
+                    .filter(|c| c.kind == ColliderKind::Wall)
+                    .count()
+            };
+            assert_eq!(walls(&without_stubs), walls(&built), "{name}");
+            let result = follow_path(&without_stubs.course, &without_stubs.guide, 3.0);
+            assert_eq!(result.impacts, 0, "{name}: {result:?}");
+            assert!(result.remaining_m < 12.5, "{name}: {result:?}");
         }
     }
 
