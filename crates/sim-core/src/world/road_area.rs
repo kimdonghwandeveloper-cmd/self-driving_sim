@@ -6,6 +6,8 @@ use super::{
 };
 use serde::{Deserialize, Serialize};
 use std::path::Path;
+#[path = "road_area_selection.rs"]
+pub mod selection;
 
 /// 자료와 생성 규칙을 고정해 경로 탐색 없이 재생하는 자유 주행 파일.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -23,10 +25,42 @@ pub struct RoadAreaFile {
     /// 원본 블록의 정규화한 노드 순서와 반대 방향으로 출발한다. 옛 파일은 정방향이다.
     #[serde(default)]
     pub reversed: bool,
+    /// 옛 사각형 선택과 새 방향·연결 선택을 구분해 저장 파일을 그대로 재생한다.
+    #[serde(default = "legacy_selection_version")]
+    pub selection_version: String,
+    #[serde(default)]
+    pub selected_blocks: Vec<BlockId>,
+    #[serde(default)]
+    pub source_bounds: Option<[f64; 4]>,
     pub result_sha256: String,
 }
 /// 자유 주행 저장 형식.
 pub const ROAD_AREA_FORMAT: &str = "road-area-v1";
+pub const FORWARD_SELECTION_VERSION: &str = "connected-forward-v1";
+
+/// 선택 규칙 기록이 없는 옛 파일은 기존 사각형 방식으로 재생한다.
+fn legacy_selection_version() -> String {
+    "square-v1".into()
+}
+
+/// 새 방향 선택을 구성하는 명시 입력. 범위는 도로망을 따라 이동할 수 있는 거리다.
+pub struct DirectionalAreaRequest<'a> {
+    pub anchor: &'a BlockId,
+    pub distance_m: f32,
+    pub origin: LatLon,
+    pub reversed: bool,
+    pub source_bounds: Option<[f64; 4]>,
+}
+
+/// 선택한 방향의 연결 도로만 생성하고 결과 블록 ID를 저장해 재생 때 확인한다.
+pub fn prepare_directional_road_area(
+    base: &Path,
+    snapshot: &str,
+    config: &super::route_plan::RoadGraphConfig,
+    request: &DirectionalAreaRequest<'_>,
+) -> Result<(RoadAreaFile, CourseDef), String> {
+    prepare_area(base, snapshot, config, request, true)
+}
 
 /// 통행 방향과 접근 제한에 관계없이 클릭 주변의 물리 도로를 거리순으로 찾는다.
 pub fn road_area_candidates(model: &RoadBlockModel, at: LatLon, radius_m: f32) -> Vec<BlockId> {
@@ -77,6 +111,29 @@ pub fn prepare_road_area_with_direction(
     origin: LatLon,
     reversed: bool,
 ) -> Result<(RoadAreaFile, CourseDef), String> {
+    prepare_area(
+        base,
+        snapshot,
+        config,
+        &DirectionalAreaRequest {
+            anchor,
+            distance_m: span_m,
+            origin,
+            reversed,
+            source_bounds: None,
+        },
+        false,
+    )
+}
+
+/// 선택 판본과 자료 범위를 고정한 뒤 같은 재생 경로로 코스 결과를 검증한다.
+fn prepare_area(
+    base: &Path,
+    snapshot: &str,
+    config: &super::route_plan::RoadGraphConfig,
+    request: &DirectionalAreaRequest<'_>,
+    directional: bool,
+) -> Result<(RoadAreaFile, CourseDef), String> {
     let lock = |path: &Path| -> Result<super::block_route_file::LockedFile, String> {
         let relative = crate::picker::model::relative_path(base, path)?;
         Ok(super::block_route_file::LockedFile {
@@ -109,12 +166,28 @@ pub fn prepare_road_area_with_direction(
             lane_width_m: config.lane_width_m,
             default_width_m: config.default_width_m.clone(),
         },
-        origin: [origin.lat, origin.lon],
-        anchor: anchor.clone(),
-        span_m,
-        reversed,
+        origin: [request.origin.lat, request.origin.lon],
+        anchor: request.anchor.clone(),
+        span_m: request.distance_m,
+        reversed: request.reversed,
+        selection_version: if directional {
+            FORWARD_SELECTION_VERSION.into()
+        } else {
+            legacy_selection_version()
+        },
+        selected_blocks: Vec::new(),
+        source_bounds: request.source_bounds,
         result_sha256: String::new(),
     };
+    if directional {
+        let model =
+            super::road_blocks::build_road_blocks(&source.ways, &source.restrictions, config)?;
+        file.selected_blocks = select_for_file(&model, &source, &file)?
+            .blocks
+            .into_iter()
+            .map(|b| b.id)
+            .collect();
+    }
     let course = rebuild(&file, base)?;
     file.result_sha256 = super::road_snapshot::sha256_hex(format!("{course:?}").as_bytes());
     Ok((file, course))
@@ -181,15 +254,24 @@ fn rebuild(file: &RoadAreaFile, base: &Path) -> Result<CourseDef, String> {
         lat: file.origin[0],
         lon: file.origin[1],
     };
-    let mut course =
-        build_road_area_with_direction(&model, &file.anchor, file.span_m, origin, file.reversed)?;
+    let selected = select_for_file(&model, &snapshot, file)?;
+    if file.selection_version == FORWARD_SELECTION_VERSION
+        && selected
+            .blocks
+            .iter()
+            .map(|b| b.id.clone())
+            .collect::<Vec<_>>()
+            != file.selected_blocks
+    {
+        return Err("stored forward selection differs from source and policy".into());
+    }
+    let mut course = build_selected_road_area(&selected, &file.anchor, origin, file.reversed)?;
     let places_path = super::places::snapshot_places_path(&path);
     if file
         .dependencies
         .iter()
         .any(|p| base.join(&p.path) == places_path)
     {
-        let selected = select_road_area(&model, &file.anchor, file.span_m, origin)?;
         let lines: Vec<_> = selected
             .blocks
             .iter()
@@ -217,6 +299,38 @@ fn rebuild(file: &RoadAreaFile, base: &Path) -> Result<CourseDef, String> {
     }
     course.validate().map_err(|e| e.to_string())?;
     Ok(course)
+}
+
+/// 저장한 판본에 따라 도로를 선택하며 새 규칙을 옛 코스에 소급 적용하지 않는다.
+fn select_for_file(
+    model: &RoadBlockModel,
+    source: &super::road_snapshot::RoadSnapshot,
+    file: &RoadAreaFile,
+) -> Result<RoadBlockModel, String> {
+    let origin = LatLon {
+        lat: file.origin[0],
+        lon: file.origin[1],
+    };
+    match file.selection_version.as_str() {
+        "square-v1" => select_road_area(model, &file.anchor, file.span_m, origin),
+        FORWARD_SELECTION_VERSION => {
+            let known = source
+                .connectivity
+                .as_ref()
+                .map(|c| c.incomplete_ids())
+                .unwrap_or_default();
+            let incomplete = selection::incomplete_nodes(model, file.source_bounds, &known)?;
+            selection::select_forward_roads(
+                model,
+                &file.anchor,
+                file.span_m,
+                origin,
+                file.reversed,
+                &incomplete,
+            )
+        }
+        _ => Err("unsupported road area selection version".into()),
+    }
 }
 
 /// 이미 있는 파일은 덮어쓰지 않고 검증한 자유 주행 파일을 새로 저장한다.
@@ -262,13 +376,23 @@ pub fn build_road_area_with_direction(
     origin: LatLon,
     reversed: bool,
 ) -> Result<CourseDef, String> {
+    let selected = select_road_area(model, anchor, span_m, origin)?;
+    build_selected_road_area(&selected, anchor, origin, reversed)
+}
+
+/// 선택을 마친 고정 도로 목록으로 노면·교차로·차량을 함께 생성한다.
+fn build_selected_road_area(
+    selected: &RoadBlockModel,
+    anchor: &BlockId,
+    origin: LatLon,
+    reversed: bool,
+) -> Result<CourseDef, String> {
     use super::{
         map, road_geom,
         road_network::{NetworkSettings, build_road_network},
     };
     use crate::vehicle::{Motion, VEHICLE_FOOTPRINT, collision};
-    let selected = select_road_area(model, anchor, span_m, origin)?;
-    let network = build_road_network(&selected, origin, NetworkSettings::default())
+    let network = build_road_network(selected, origin, NetworkSettings::default())
         .map_err(|e| format!("road area geometry: {e:?}"))?;
     let shape = network
         .blocks
@@ -569,6 +693,37 @@ mod tests {
                 .contains("result SHA-256")
         );
         assert!(save_road_area(&target, &file).is_err());
+        let (directional, directional_course) = prepare_directional_road_area(
+            &dir,
+            "roads.json",
+            &RoadGraphConfig::default(),
+            &DirectionalAreaRequest {
+                anchor: &anchor.id,
+                distance_m: 500.,
+                origin: anchor.nodes[0].pos,
+                reversed: false,
+                source_bounds: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(directional.selection_version, FORWARD_SELECTION_VERSION);
+        assert!(!directional.selected_blocks.is_empty());
+        let directional_path = dir.join("directional.toml");
+        save_road_area(&directional_path, &directional).unwrap();
+        assert_eq!(
+            directional_course,
+            crate::world::map::load_map_course(&directional_path).unwrap()
+        );
+        let mut altered = directional.clone();
+        altered.selected_blocks.clear();
+        assert!(
+            replay_road_area(&altered, &dir)
+                .unwrap_err()
+                .contains("stored forward selection")
+        );
+        altered = directional;
+        altered.selection_version = "unknown".into();
+        assert!(replay_road_area(&altered, &dir).is_err());
         let mut changed = file.clone();
         changed.network_version = "unknown".into();
         assert!(replay_road_area(&changed, &dir).is_err());
