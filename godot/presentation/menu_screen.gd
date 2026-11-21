@@ -69,7 +69,7 @@ func _ready() -> void:
 	courses.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 	actions.add_child(courses)
 	_button(actions, start_button, "선택한 코스 시작", _open_course, true)
-	_button(actions, map_button, "도로 선택 · 자유 주행", _open_map)
+	_button(actions, map_button, "지도에서 주행 경로 선택", _open_map)
 	_button(actions, controls_button, "조작법 안내", _toggle_controls)
 	_button(actions, settings_button, "실행 환경 안내", _toggle_settings)
 	_button(actions, Button.new(), "프로그램 종료", _request_quit)
