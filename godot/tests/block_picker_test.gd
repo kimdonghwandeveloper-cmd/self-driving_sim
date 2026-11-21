@@ -27,7 +27,7 @@ func _run() -> void:
  root.add_child(main)
  await process_frame
  main._show_map()
- _check(main.screen.has_method("_select_area"), "menu opens old route UI")
+ _check(main.screen.has_method("_set_pin"), "menu must open the pin route UI")
  main.free()
  await process_frame
  if failures.is_empty():
