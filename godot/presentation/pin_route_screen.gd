@@ -4,10 +4,15 @@ extends "res://presentation/map_screen.gd"
 var pins: Array = [null, null]
 var fields: Array[LineEdit] = []
 var results: Array[OptionButton] = []
-var choices: Array[Array] = [[], []]
+var choices: Array[Array] = [[], [], []]
 var query_slot := 0
 var query_text := ""
 var route_ready := false
+var alternatives: Array = []
+var hovered_route := -1
+var pin_mode := Label.new()
+var hover_position := Vector2.INF
+var hover_transform := Transform2D.IDENTITY
 
 ## 헤드리스 검증에서는 지도 렌더링과 타일 요청을 생략한다.
 func _ready() -> void:
@@ -39,8 +44,8 @@ func _services(canvas: CanvasLayer) -> void:
 	title.text = "주행 경로 선택"
 	title.add_theme_font_size_override("font_size", 23)
 	toolbar.add_child(title)
-	for slot in 2:
-		var role := "출발" if slot == 0 else "도착"
+	for slot in [2, 0, 1]:
+		var role := ["출발", "도착", "지역"][slot] as String
 		var row := HBoxContainer.new()
 		toolbar.add_child(row)
 		var field := LineEdit.new()
@@ -48,7 +53,8 @@ func _services(canvas: CanvasLayer) -> void:
 		field.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		field.add_theme_color_override("font_placeholder_color", Color("596a80"))
 		row.add_child(field)
-		fields.append(field)
+		fields.resize(3)
+		fields[slot] = field
 		_button(row, "검색", _submit_search.bind(slot))
 		field.text_submitted.connect(func(_value: String): _submit_search(slot))
 		field.text_changed.connect(func(_value: String): _clear_results(slot))
@@ -57,9 +63,12 @@ func _services(canvas: CanvasLayer) -> void:
 		list.clip_text = true
 		list.hide()
 		toolbar.add_child(list)
-		results.append(list)
+		results.resize(3)
+		results[slot] = list
 		list.item_selected.connect(_choose_result.bind(slot))
-		_button(toolbar, role + " 핀 지도에 찍기", _select_endpoint.bind(slot == 1))
+		if slot < 2:
+			_button(toolbar, role + " 핀 지도에 찍기 (" + ("F" if slot == 0 else "G") + ")", _select_endpoint.bind(slot == 1))
+	toolbar.add_child(pin_mode)
 	for control in [cities, status, drive_button]:
 		control.reparent(toolbar)
 		control.show()
@@ -131,6 +140,13 @@ func _choose_result(index: int, slot: int) -> void:
 
 ## 검색한 장소 또는 진입로를 해당 핀으로 적용한다.
 func _apply_search_result(slot: int, item: Dictionary) -> void:
+	if slot == 2:
+		if item.has("view"):
+			_go_to_search_region(item.view)
+		elif int(item.index) < place_outlines.size():
+			var outline: PackedVector2Array = place_outlines[int(item.index)]
+			if not outline.is_empty(): _go_to_search_region(outline[0])
+		return
 	var at: Vector2
 	if item.has("view"):
 		at = item.view
@@ -148,6 +164,13 @@ func _apply_search_result(slot: int, item: Dictionary) -> void:
 
 ## 지도 클릭은 활성 핀만 교체하며 다른 핀은 보존한다.
 func _select_map_position(screen_position: Vector2, _remove: bool) -> void:
+	var candidate := _alternative_at(screen_position)
+	if candidate >= 0 and picker.call("choose_route_alternative", candidate):
+		_refresh_route()
+		alternatives = picker.call("route_alternatives")
+		hovered_route = -1
+		overlay_layer.queue_redraw()
+		return
 	var at := get_canvas_transform().affine_inverse() * screen_position
 	var slot := int(selecting_destination)
 	if _set_pin(slot, at) and slot == 0 and pins[1] == null: _select_endpoint(true)
@@ -180,6 +203,10 @@ func _recalculate() -> void:
 	_refresh_route()
 	var route: Dictionary = picker.call("route")
 	route_ready = route.ok and pins[0] != null and pins[1] != null
+	picker.call("prepare_route_alternatives")
+	alternatives = picker.call("route_alternatives")
+	hovered_route = -1
+	hover_position = Vector2.INF
 	drive_button.disabled = not route_ready
 	feedback = ""
 
@@ -214,9 +241,13 @@ func _process(delta: float) -> void:
 				_show_results(query_slot, found)
 				feedback = str(event.message)
 	if pins[0] == null and pins[1] == null: _auto_open(delta)
+	pin_mode.text = "도착 핀 모드 · G" if selecting_destination else "출발 핀 모드 · F"
+	_update_route_hover()
 	var route: Dictionary = picker.call("route")
 	var hint := "지도에서 %s 핀을 찍거나 검색하세요." % ("도착" if selecting_destination else "출발")
-	if route_ready: hint = "주행 경로 %.0f m" % float(route.length_m)
+	if route_ready:
+		hint = "주행 경로 %.0f m" % float(route.length_m)
+		if not alternatives.is_empty(): hint += "\n점선 경로를 클릭해 변경"
 	elif pins[0] != null and pins[1] != null: hint = "연결 가능한 경로가 없습니다. 핀 위치를 조정하세요.\n" + str(route.error)
 	var message := hint + ("\n" + feedback if not feedback.is_empty() else "")
 	if status.text != message: status.text = message
@@ -229,6 +260,10 @@ func _draw_overlay() -> void:
 	overlay_zoom = camera.zoom.x
 	var scale_m := maxf(camera.zoom.x, 0.0005)
 	if not road_open.is_empty(): overlay_layer.draw_multiline(road_open, Color("aebdcb"), 1.0 / scale_m)
+	for i in alternatives.size():
+		var line: PackedVector2Array = alternatives[i].line
+		for j in range(1, line.size()):
+			overlay_layer.draw_dashed_line(line[j-1], line[j], Color("1262ef") if i == hovered_route else Color("5977a9"), (5.0 if i == hovered_route else 3.0) / scale_m, 8.0 / scale_m, false, true)
 	if route_line.size() > 1: overlay_layer.draw_polyline(route_line, Color("1262ef"), 5.0 / scale_m, true)
 	for slot in 2:
 		if pins[slot] == null: continue
@@ -243,6 +278,55 @@ func _draw_overlay() -> void:
 		overlay_layer.draw_circle(center, 11.0 / scale_m, Color.WHITE)
 		overlay_layer.draw_circle(center, 9.0 / scale_m, color)
 		overlay_layer.draw_string(ThemeDB.fallback_font, center + Vector2(-4, 4) / scale_m, "A" if slot == 0 else "B", HORIZONTAL_ALIGNMENT_LEFT, -1, maxi(1, roundi(13.0 / scale_m)), Color.WHITE)
+
+## 지도 화면에서 입력할 때 F·G로 핀 모드를 전환한다.
+func _unhandled_key_input(event: InputEvent) -> void:
+	if not event is InputEventKey or not event.pressed or event.echo or event.ctrl_pressed or event.alt_pressed or event.meta_pressed: return
+	if get_viewport().gui_get_focus_owner() is LineEdit: return
+	if event.physical_keycode in [KEY_F, KEY_G] or event.keycode in [KEY_F, KEY_G]:
+		_select_endpoint(event.physical_keycode == KEY_G or event.keycode == KEY_G)
+		get_viewport().set_input_as_handled()
+
+## 지역 검색은 카메라만 옮기며 핀을 추가하거나 바꾸지 않는다.
+func _go_to_search_region(at: Vector2) -> void:
+	if pins[0] == null and pins[1] == null: _open_region_at(at)
+	_fit_rect(Rect2(at - Vector2.ONE * 750.0, Vector2.ONE * 1500.0))
+	results[2].hide()
+
+## 현재 실선과 겹치는 곳에서는 대안 전환을 막고 점선 구간만 클릭 대상으로 잡는다.
+func _alternative_at(at: Vector2) -> int:
+	if alternatives.is_empty() or _screen_line_distance(route_line, at) <= 5.0: return -1
+	var best := 9.0
+	var selected := -1
+	for i in alternatives.size():
+		var distance := _screen_line_distance(alternatives[i].line, at)
+		if distance < best:
+			best = distance
+			selected = i
+	return selected
+
+## 포인터 또는 지도 변환이 바뀔 때 대안 강조를 갱신한다.
+func _update_route_hover() -> void:
+	var at := get_viewport().get_mouse_position()
+	var transform := get_canvas_transform()
+	if dragging or left_down or toolbar_panel.get_global_rect().has_point(at):
+		at = Vector2.INF
+	if at == hover_position and transform == hover_transform: return
+	hover_position = at
+	hover_transform = transform
+	var candidate := _alternative_at(at) if at.is_finite() else -1
+	if candidate != hovered_route:
+		hovered_route = candidate
+		overlay_layer.queue_redraw()
+
+## 화면 픽셀 기준으로 포인터와 각 선분 사이의 최단 거리를 구한다.
+func _screen_line_distance(line: PackedVector2Array, at: Vector2) -> float:
+	var transform := get_canvas_transform()
+	var best := INF
+	for i in range(1, line.size()):
+		var closest := Geometry2D.get_closest_point_to_segment(at, transform * line[i-1], transform * line[i])
+		best = minf(best, at.distance_to(closest))
+	return best
 
 ## 경로가 사이드바 뒤에 가려지지 않도록 오른쪽 지도 공간에 맞춘다.
 func _fit_rect(bounds: Rect2) -> void:

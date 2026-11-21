@@ -17,7 +17,7 @@ func _run() -> void:
 	screen._check_data()
 	var start: Vector2 = screen.picker.call("latlon_to_view", PackedFloat64Array([34.75264, 127.74712]))
 	var goal: Vector2 = screen.picker.call("latlon_to_view", PackedFloat64Array([34.74972, 127.74816]))
-	if screen.fields.size() != 2 or screen.has_method("_choose_start_direction"):
+	if screen.fields.size() != 3 or screen.has_method("_choose_start_direction"):
 		quit(1)
 		return
 	screen._show_results(1, [{"view": goal, "name": "여수 도착"}])
@@ -54,7 +54,40 @@ func _run() -> void:
 		printerr("PIN ROUTE FAIL: both endpoints must support search")
 		quit(1)
 		return
+	var before: Array = screen.pins.duplicate()
+	screen._apply_search_result(2, {"view": start, "name": "여수"})
+	var key := InputEventKey.new()
+	key.pressed = true
+	key.physical_keycode = KEY_G
+	screen._unhandled_key_input(key)
+	if screen.pins != before or not screen.selecting_destination:
+		printerr("PIN ROUTE FAIL: region search or G changed existing pins")
+		quit(1)
+		return
+	key.physical_keycode = KEY_F
+	screen._unhandled_key_input(key)
+	if screen.selecting_destination:
+		printerr("PIN ROUTE FAIL: F did not select departure")
+		quit(1)
+		return
+	await process_frame
+	if not _check_alternative_click(screen):
+		quit(1)
+		return
 	print("PIN ROUTE: ", route.length_m, " m")
 	screen.free()
 	await process_frame
 	quit(0 if course.ok and not course.goal.is_empty() else 1)
+
+## 지도 대안의 독립 구간을 클릭해 현재 경로가 실제로 바뀌는지 검사한다.
+func _check_alternative_click(screen: Node2D) -> bool:
+	for alternative in screen.alternatives:
+		var line: PackedVector2Array = alternative.line
+		for i in range(1, line.size()):
+			var at := screen.get_canvas_transform() * line[i-1].lerp(line[i], 0.5)
+			if screen._alternative_at(at) < 0: continue
+			var selected: PackedVector2Array = screen.alternatives[screen._alternative_at(at)].line
+			screen._select_map_position(at, false)
+			return screen.route_line == selected
+	print("PIN ROUTE: fixture has no distinct clickable alternative")
+	return screen.alternatives.is_empty()

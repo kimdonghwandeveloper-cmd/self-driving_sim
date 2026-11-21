@@ -1010,6 +1010,37 @@ impl SimRoutePicker {
         }
     }
 
+    /// 현재 핀으로 주행 가능한 대안을 계산한다.
+    #[func]
+    fn prepare_route_alternatives(&mut self) {
+        if let Some(model) = &mut self.model {
+            model.prepare_alternatives();
+        }
+    }
+
+    /// 대안의 지도 선과 길이를 전달한다.
+    #[func]
+    fn route_alternatives(&self) -> Array<VarDictionary> {
+        self.model
+            .iter()
+            .flat_map(PickerModel::alternative_views)
+            .map(|(line, length_m)| {
+                let line: PackedVector2Array =
+                    line.into_iter().map(|p| Vector2::new(p.x, p.y)).collect();
+                vdict! { "line" => &line, "length_m" => length_m }
+            })
+            .collect()
+    }
+
+    /// 선택한 대안을 현재 저장·주행 경로로 적용한다.
+    #[func]
+    fn choose_route_alternative(&mut self, index: i64) -> bool {
+        usize::try_from(index)
+            .ok()
+            .zip(self.model.as_mut())
+            .is_some_and(|(i, model)| model.choose_alternative(i))
+    }
+
     /// Bevy 판 상태 문구와 받기 진행·오류 안내.
     #[func]
     fn status_lines(&self) -> PackedStringArray {
