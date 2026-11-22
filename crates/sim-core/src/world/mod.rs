@@ -26,6 +26,7 @@ pub mod road_polygons;
 pub mod road_snapshot;
 pub mod route;
 pub mod route_plan;
+pub mod scenery;
 #[cfg(test)]
 pub mod test_drive;
 

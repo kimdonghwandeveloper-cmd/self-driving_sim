@@ -46,6 +46,8 @@ impl RouteEvaluationMetrics {
 /// 매 물리 틱마다 차량 위치를 안내선과 비교하여 실시간 경로 이탈 오차(CTE)를 누적하고 목표 도달을 판정하는 평가기.
 #[derive(Debug, Clone)]
 pub struct RouteDriveEvaluator {
+    /// 주행 화면에 전달할 지도 지면. 차량 물리와 평가에는 사용하지 않는다.
+    pub scenery: super::scenery::Scenery,
     /// 코스 가이드 중심선.
     guide: Vec<Vec2>,
     /// 목표 지점 좌표(x, z).
@@ -80,6 +82,7 @@ impl RouteDriveEvaluator {
         }
 
         Ok(Self {
+            scenery: Default::default(),
             guide: guide.to_vec(),
             goal_position,
             goal_threshold_m: goal_threshold_m.max(1.0),
@@ -122,7 +125,13 @@ impl RouteDriveEvaluator {
                     std::path::Path::new(super::map_patch::PATCH_DIR),
                     super::map_patch::PatchAudience::Distribution,
                 )?;
-                Self::from_course(&result.course, &result.guide)
+                let mut evaluator = Self::from_course(&result.course, &result.guide)?;
+                let places_path = super::places::snapshot_places_path(&base.join(&file.snapshot));
+                if let Ok(places) = super::places::load_places(&places_path) {
+                    evaluator.scenery =
+                        super::scenery::build(&places, result.origin, &result.guide);
+                }
+                Ok(evaluator)
             }
             _ => Err("course format has no supported route guide".into()),
         }

@@ -110,7 +110,7 @@ impl Default for RoadGraphConfig {
             snap_distance_m: 30.0,
             max_route_length_m: ROUTE_LENGTH_CAP_M,
             corner_radius_m: route::CORNER_RADIUS_M,
-            stub_length_m: route::STUB_LENGTH_M,
+            stub_length_m: 0.0,
             nav_rules: true,
             include_restricted: false,
         }
@@ -1714,6 +1714,7 @@ mod tests {
         // 이 파일은 4-8 이전 규칙(작은 도로만, 일방통행 제외)으로 만들었다.
         let legacy = RoadGraphConfig {
             allowed_highways: file.allowed_highways.clone(),
+            stub_length_m: file.stub_length_m,
             nav_rules: false,
             max_route_length_m: file.max_route_length_m,
             ..RoadGraphConfig::default()

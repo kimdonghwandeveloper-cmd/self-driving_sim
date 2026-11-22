@@ -538,7 +538,19 @@ impl SimVehicle {
     #[func]
     fn course_data(&self) -> VarDictionary {
         match &self.session {
-            Some(session) => course_dict(session.course()),
+            Some(session) => {
+                let mut data = course_dict(session.course());
+                if let Some(evaluator) = &self.evaluator {
+                    let mut layers = VarDictionary::new();
+                    for (&kind, points) in &evaluator.scenery {
+                        let vertices: PackedVector3Array =
+                            points.iter().map(|p| Vector3::new(p.x, 0.0, p.y)).collect();
+                        layers.set(kind, &vertices);
+                    }
+                    data.set("scenery", &layers);
+                }
+                data
+            }
             None => failure_dict(&self.last_error),
         }
     }

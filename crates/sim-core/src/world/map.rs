@@ -310,7 +310,6 @@ pub fn road_piece(points: &[Vec2], spec: &RoadSpec, walls: [bool; 2]) -> Result<
         })
         .collect();
     // 끝 벽: 끝점 바깥쪽으로 벽 두께 절반만큼 물려 둔다.
-    let wall_width = width_m + 2.0 * curb;
     let last = center.len() - 1;
     let ends = [(center[0], center[1]), (center[last], center[last - 1])];
     for (wanted, (end, inner)) in walls.into_iter().zip(ends) {
@@ -318,15 +317,7 @@ pub fn road_piece(points: &[Vec2], spec: &RoadSpec, walls: [bool; 2]) -> Result<
             continue;
         }
         let outward = (end - inner).normalize();
-        colliders.push(Collider {
-            rect: GroundRect {
-                center: end + outward * (END_WALL_THICKNESS_M / 2.0),
-                half_size: Vec2::new(wall_width / 2.0, END_WALL_THICKNESS_M / 2.0),
-                heading_rad: road_geom::heading_of(outward),
-            },
-            height_m: END_WALL_HEIGHT_M,
-            kind: ColliderKind::Wall,
-        });
+        colliders.push(end_wall(end, outward, width_m + 2.0 * curb));
     }
     let reach = half + curb;
     let mut outline = road_geom::offset_line(&center, -reach);
@@ -337,6 +328,19 @@ pub fn road_piece(points: &[Vec2], spec: &RoadSpec, walls: [bool; 2]) -> Result<
         colliders,
         outline,
     })
+}
+
+/// 노면 밖에 끝 벽을 놓아 입구 단면에서 주행 영역을 닫는다.
+pub(super) fn end_wall(end: Vec2, outward: Vec2, width: f32) -> Collider {
+    Collider {
+        rect: GroundRect {
+            center: end + outward * (END_WALL_THICKNESS_M / 2.0),
+            half_size: Vec2::new(width / 2.0, END_WALL_THICKNESS_M / 2.0),
+            heading_rad: road_geom::heading_of(outward),
+        },
+        height_m: END_WALL_HEIGHT_M,
+        kind: ColliderKind::Wall,
+    }
 }
 
 /// 중심선 시작 쪽 끝 벽에서 차체 뒤끝까지 [`START_REAR_CLEARANCE_M`]인 곳의 시작 자세를 만든다. 짧으면 오류.
