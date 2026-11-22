@@ -49,6 +49,7 @@ func build(data: Dictionary) -> void:
 	for marking in data.get("markings", []):
 		_box(marking.rect, 0.004, 0.016, COLORS.stop_line, paint.get(marking.kind, paint.stop_line))
 	_colliders(data.get("colliders", []), concrete)
+	_build_scenery(data.get("scenery", {}))
 	_buildings(data.get("buildings", []))
 	var goal: Dictionary = data.get("goal", {})
 	if not goal.is_empty():
@@ -220,6 +221,15 @@ func _box(rect: Dictionary, height: float, center_y: float, color: Color, surfac
 	node.position = rect.center + Vector3(0, center_y, 0)
 	node.rotation.y = rect.heading_rad
 	add_child(node)
+
+## 평면 바닥 위와 도로 아래에 지도 재질을 종류별 메시로 그린다.
+func _build_scenery(layers: Dictionary) -> void:
+	for layer in [["green", "73a462", -0.0015], ["parking", "777d84", -0.0010], ["water", "579bad", -0.0005]]:
+		var vertices: PackedVector3Array = layers.get(layer[0], PackedVector3Array())
+		if vertices.is_empty(): continue
+		var index := get_child_count()
+		_triangles(vertices, layer[2], material(Color(layer[1])))
+		if get_child_count() > index: get_child(index).name = "Scenery_" + layer[0]
 
 ## 지면 삼각형을 위쪽 법선의 양면 메시로 표시한다.
 func _triangles(vertices: PackedVector3Array, y: float, surface_material: Material) -> void:

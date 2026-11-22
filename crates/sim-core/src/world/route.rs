@@ -125,6 +125,8 @@ impl BuildFailure {
 /// 경로 코스 생성 결과.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RouteCourse {
+    /// 위경도 자료를 이 코스에 겹쳐 그릴 때 사용할 좌표 원점.
+    pub origin: LatLon,
     /// 코스 정의.
     pub course: CourseDef,
     /// 경로를 따라가는 안내선(도로 조각 중심선 + 교차로를 건너는 곡선). 시험용 자동 주행과 이후 목표 표시에 쓴다.
@@ -615,6 +617,7 @@ pub fn build_route_course_detailed(
         });
     }
     Ok(RouteCourse {
+        origin,
         course,
         guide,
         junctions: junction_ids,

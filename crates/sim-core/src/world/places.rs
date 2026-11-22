@@ -174,7 +174,10 @@ pub fn parse_places(json: &str) -> Result<Vec<Place>, String> {
                 }
             }
             "way" => {
-                if name.is_empty() && !element.tags.contains_key("building") {
+                if name.is_empty()
+                    && !element.tags.contains_key("building")
+                    && super::scenery::surface_kind(&element.tags).is_none()
+                {
                     continue;
                 }
                 let ids = &element.nodes;

@@ -91,7 +91,7 @@ pub const ROAD_KEYS: [&str; 15] = [
 /// 회전 제한 관계에 남기는 태그. 순서가 형식의 일부다.
 pub const RESTRICTION_KEYS: [&str; 4] = ["type", "restriction", "restriction:motorcar", "except"];
 /// 건물·장소에 남기는 태그. 순서가 형식의 일부다(번호로 저장).
-pub const PLACE_KEYS: [&str; 12] = [
+pub const PLACE_KEYS: [&str; 15] = [
     "building",
     "height",
     "building:levels",
@@ -104,6 +104,9 @@ pub const PLACE_KEYS: [&str; 12] = [
     "historic",
     "place",
     "man_made",
+    "natural",
+    "landuse",
+    "parking",
 ];
 
 /// 원본 PBF 기록.
@@ -1058,11 +1061,15 @@ where
                 let name = lookup("name").unwrap_or_default();
                 let building = lookup("building").is_some();
                 let closed = refs.len() >= 4 && refs.first() == refs.last();
-                if closed && lookup("highway").is_none() && (building || !name.is_empty()) {
+                if closed && lookup("highway").is_none() {
                     let tags: BTreeMap<String, String> = way
                         .tags()
                         .map(|(k, v)| (k.to_owned(), v.to_owned()))
                         .collect();
+                    if !building && name.is_empty() && super::scenery::surface_kind(&tags).is_none()
+                    {
+                        return Ok(());
+                    }
                     place_ways.push(PlaceWay {
                         id,
                         name: name.to_owned(),
