@@ -102,7 +102,9 @@ mod tests {
         let vertices = &layers["parking"];
         assert_eq!(vertices.len(), 6);
         let area: f32 = vertices
-            .chunks_exact(3)
+            .as_chunks::<3>()
+            .0
+            .iter()
             .map(|t| (t[1] - t[0]).perp_dot(t[2] - t[0]).abs() * 0.5)
             .sum();
         assert!((area - 200.).abs() < 0.01);
