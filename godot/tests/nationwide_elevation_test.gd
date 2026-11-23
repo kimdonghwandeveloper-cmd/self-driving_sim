@@ -66,6 +66,7 @@ func _run() -> void:
 			aligned = aligned and is_equal_approx(vehicle.position.y, here)
 			moved_height = maxf(moved_height, absf(here - initial))
 		var ok := aligned and start.distance_to(vehicle.position) > 3.0 and moved_height > 0.02
+		ok = _check_terrain(drive) and ok
 		drive.free()
 		var replay: Node3D = ClassDB.instantiate("SimVehicle")
 		replay.set("course", course_name)
@@ -81,6 +82,38 @@ func _run() -> void:
 			return
 	printerr("NATIONWIDE ELEVATION FAIL: no verified non-Yeosu route")
 	quit(1)
+
+## 실제 생성된 도로·지붕 삼각형과 지면 표면의 간격을 검사한다.
+func _check_terrain(drive: Node) -> bool:
+	var course_mesh: Node = drive.scene_content.get_child(0)
+	var terrain = course_mesh._terrain
+	var roofs := course_mesh.get_node_or_null("Buildings_Roofs") as MeshInstance3D
+	if terrain == null or roofs == null or course_mesh.get_node_or_null("Terrain") == null:
+		return false
+	var road_min := INF
+	var road_count := 0
+	var roof_min := INF
+	for node in course_mesh.get_children():
+		if str(node.name).begins_with("Scenery_"):
+			return false
+		if node.has_meta("road_surface"):
+			road_min = minf(road_min, _clearance(node, terrain))
+			road_count += 1
+	roof_min = _clearance(roofs, terrain)
+	print("TERRAIN CLEARANCE: minimum sampled road ", road_min, " m, roof ", roof_min, " m")
+	return road_count > 0 and road_min >= 0.09 and roof_min > 0.0
+
+## 각 메시 삼각형의 꼭짓점과 내부 중심에서 지면으로부터 높이를 잰다.
+func _clearance(mesh_instance: MeshInstance3D, terrain: RefCounted) -> float:
+	var vertices: PackedVector3Array = mesh_instance.mesh.surface_get_arrays(0)[Mesh.ARRAY_VERTEX]
+	var result := INF
+	for i in range(0, vertices.size(), 3):
+		var a := vertices[i]
+		var b := vertices[i + 1]
+		var c := vertices[i + 2]
+		for p: Vector3 in [a, b, c, (a + b + c) / 3.0]:
+			result = minf(result, p.y - terrain.height_at(p.x, p.z))
+	return result
 
 ## 지도에서 요청한 저장 코스를 수신한다.
 func _capture_course(path: String) -> void:

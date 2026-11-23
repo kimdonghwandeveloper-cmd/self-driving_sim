@@ -306,6 +306,8 @@ func _triangles(vertices: PackedVector3Array, y: float, surface_material: Materi
 		return
 	var node := MeshInstance3D.new()
 	node.mesh = surface.commit()
+	if clear_terrain:
+		node.set_meta("road_surface", true)
 	node.material_override = surface_material
 	add_child(node)
 
