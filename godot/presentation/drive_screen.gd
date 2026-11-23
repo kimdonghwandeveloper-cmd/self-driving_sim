@@ -151,7 +151,9 @@ func start(course_name: String, force_preview: bool = false) -> void:
 	dismiss.visible = not warnings_label.text.is_empty()
 	notice.text = "\n".join(vehicle.call("course_notices"))
 	if data.get("has_elevation", false):
-		notice.text += "\n지형 고도: Mapzen Terrain Tiles (NASA SRTM, 약 30 m)"
+		notice.text += "\n지형 고도: Mapzen Terrain Tiles (약 30 m)"
+	elif data.has("elevation_notice"):
+		notice.text += "\n" + str(data.elevation_notice)
 	calibration_box.visible = not is_preview and str(vehicle.get("course")) == CALIBRATION_COURSE
 	scenario_box.visible = _has_scenario()
 	if is_preview:

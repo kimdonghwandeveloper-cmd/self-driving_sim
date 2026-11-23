@@ -24,7 +24,7 @@ use crate::course::{
     build_course, build_course_with_patch_dir, course_dict, failure_dict, panic_message,
 };
 use crate::devices::{Devices, load_bindings};
-use crate::paths::resolve_user_path;
+use crate::paths::{repo_path, resolve_user_path};
 
 /// 기본 설정 폴더(`res://` 기준). 저장소 루트의 `config/`다.
 const DEFAULT_CONFIG_DIR: &str = "res://../config";
@@ -187,6 +187,7 @@ pub struct SimVehicle {
     warnings: Vec<String>,
     /// 경로 코스의 안내선 기반 주행 성과 및 CTE 평가기.
     evaluator: Option<sim_core::world::route_evaluation::RouteDriveEvaluator>,
+    elevation_notice: Option<&'static str>,
     /// 목표 도달 시그널을 이미 발행했는지 여부.
     goal_notified: bool,
     /// 키보드·게임패드 상태. `_ready`에서 만든다.
@@ -255,6 +256,24 @@ impl INode3D for SimVehicle {
                             &resolved,
                         )
                         .ok();
+                    if session.elevation().is_none()
+                        && let Some(evaluator) = &self.evaluator
+                        && evaluator.elevation_requested()
+                    {
+                        match evaluator.route_elevation(&repo_path(
+                            sim_core::world::elevation_tiles::CACHE_DIR,
+                        )) {
+                            Ok(Some(profile)) => session.set_elevation(Some(profile)),
+                            Ok(None) => {
+                                self.elevation_notice =
+                                    Some("교량·터널 또는 입체 도로 포함 · 평면 주행")
+                            }
+                            Err(error) => {
+                                godot_warn!("route elevation: {error}");
+                                self.elevation_notice = Some("고도 자료 없음 · 평면 주행");
+                            }
+                        }
+                    }
                 }
                 self.session = Some(session);
                 self.sync_transform();
@@ -548,6 +567,9 @@ impl SimVehicle {
             Some(session) => {
                 let mut data = course_dict(session.course());
                 data.set("has_elevation", session.elevation().is_some());
+                if let Some(notice) = self.elevation_notice {
+                    data.set("elevation_notice", notice);
+                }
                 if let Some(evaluator) = &self.evaluator {
                     let mut layers = VarDictionary::new();
                     for (&kind, points) in &evaluator.scenery {

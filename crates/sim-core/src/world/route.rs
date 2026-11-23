@@ -127,6 +127,8 @@ impl BuildFailure {
 pub struct RouteCourse {
     /// 위경도 자료를 이 코스에 겹쳐 그릴 때 사용할 좌표 원점.
     pub origin: LatLon,
+    /// 경로의 모든 도로가 지상 구간인지 나타낸다.
+    pub ground_only: bool,
     /// 코스 정의.
     pub course: CourseDef,
     /// 경로를 따라가는 안내선(도로 조각 중심선 + 교차로를 건너는 곡선). 시험용 자동 주행과 이후 목표 표시에 쓴다.
@@ -618,11 +620,24 @@ pub fn build_route_course_detailed(
     }
     Ok(RouteCourse {
         origin,
+        ground_only: route.windows(2).all(|pair| {
+            graph
+                .way_between(pair[0], pair[1])
+                .is_some_and(is_ground_way)
+        }),
         course,
         guide,
         junctions: junction_ids,
         simplified: simplified.into_iter().map(|i| route[i]).collect(),
     })
+}
+
+/// 교량, 터널, 지붕 있는 도로와 높이 층이 분리된 도로는 지형 고도 적용 대상에서 제외한다.
+fn is_ground_way(way: &OsmGraphWay) -> bool {
+    ["bridge", "tunnel", "covered"]
+        .iter()
+        .all(|key| way.tags.get(*key).is_none_or(|value| value == "no"))
+        && way.tags.get("layer").is_none_or(|layer| layer == "0")
 }
 
 /// 교차로 노드 `id`의 면·모서리 연석·곁가지를 만든다. `route_neighbors`는 경로가 지나는 이웃 노드다.

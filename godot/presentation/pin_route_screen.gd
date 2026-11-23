@@ -16,6 +16,7 @@ var hover_transform := Transform2D.IDENTITY
 
 ## 헤드리스 검증에서는 지도 렌더링과 타일 요청을 생략한다.
 func _ready() -> void:
+	use_route_elevation = true
 	super._ready()
 	if DisplayServer.get_name() == "headless":
 		hide()
