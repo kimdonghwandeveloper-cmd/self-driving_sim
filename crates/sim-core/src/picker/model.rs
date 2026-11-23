@@ -542,6 +542,16 @@ impl PickerModel {
 
     /// 계산된 경로를 `dir/name`에 경로 파일로 저장하고 경로를 돌려준다. 스냅샷 경로는 저장 폴더 기준 상대 경로다.
     pub fn save(&self, dir: &Path, name: &str) -> Result<PathBuf, String> {
+        self.save_with_elevation(dir, name, false)
+    }
+
+    /// 핀 경로의 고도 적용 요청을 저장 파일에 기록한다.
+    pub fn save_with_elevation(
+        &self,
+        dir: &Path,
+        name: &str,
+        use_elevation: bool,
+    ) -> Result<PathBuf, String> {
         let Some(Ok(planned)) = &self.planned else {
             return Err("no valid route to save".to_owned());
         };
@@ -549,6 +559,7 @@ impl PickerModel {
             .map_err(|error| format!("cannot create {}: {error}", dir.display()))?;
         let mut file = planned.file.clone();
         file.snapshot = relative_path(dir, &self.snapshot_path)?;
+        file.use_elevation = use_elevation;
         let text = route_plan::route_file_toml(&file)?;
         let path = dir.join(name);
         std::fs::write(&path, text)

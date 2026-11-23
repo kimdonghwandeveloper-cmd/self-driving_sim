@@ -206,6 +206,9 @@ pub struct RouteFile {
     /// 계획 시 사용한 접근 제한 도로 포함 정책. 생략한 기존 파일은 제한 도로를 제외한다.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub include_restricted: bool,
+    /// 경로가 지상 도로이면 DEM을 적용한다. 기존 저장 경로는 평면으로 재생한다.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub use_elevation: bool,
     /// 경로가 실제로 지난 지역 보정. 없는 기존 `route-v1`은 OSM만 사용한 경로로 읽는다.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub map_patches: Vec<RoutePatchRef>,
@@ -906,6 +909,7 @@ fn plan_route_full_inner(
             max_route_length_m: config.max_route_length_m,
             nav_rules: config.nav_rules,
             include_restricted: config.include_restricted,
+            use_elevation: false,
             map_patches,
             point_labels: Vec::new(),
         };

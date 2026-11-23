@@ -2,16 +2,16 @@
 use std::path::Path;
 
 use glam::Vec2;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use super::map::{LatLon, project};
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-struct ElevationFile {
-    origin: [f64; 2],
-    north_west: [f64; 2],
-    samples_m: Vec<Vec<f32>>,
+pub(crate) struct ElevationFile {
+    pub origin: [f64; 2],
+    pub north_west: [f64; 2],
+    pub samples_m: Vec<Vec<f32>>,
 }
 
 /// 1초 간격 지형 고도 격자. 높이는 격자의 최저점 기준으로 반환한다.
@@ -39,7 +39,12 @@ impl RoadElevation {
 
     /// 격자 원점과 유효한 고도 표본만 받아 지역 좌표로 변환한다.
     pub fn parse(text: &str) -> Result<Self, String> {
-        let file: ElevationFile = toml::from_str(text).map_err(|error| error.to_string())?;
+        let file = toml::from_str(text).map_err(|error| error.to_string())?;
+        Self::from_grid(file)
+    }
+
+    /// 원본 표고 표본을 검증하고 주행용 격자를 구성한다.
+    pub(crate) fn from_grid(file: ElevationFile) -> Result<Self, String> {
         let [lat, lon] = file.origin;
         let [north, west] = file.north_west;
         let width = file.samples_m.first().map_or(0, Vec::len);

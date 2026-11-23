@@ -1065,7 +1065,12 @@ impl SimRoutePicker {
 
     /// 경로 파일을 `cache/routes/<name>.toml`로 저장한다. 이름은 `[A-Za-z0-9_-]{1,64}`만 허용한다.
     #[func]
-    fn save(&self, name: GString, #[opt(default = false)] overwrite: bool) -> VarDictionary {
+    fn save(
+        &self,
+        name: GString,
+        #[opt(default = false)] overwrite: bool,
+        #[opt(default = false)] use_elevation: bool,
+    ) -> VarDictionary {
         let failure = |error: &str| vdict! { "ok" => false, "error" => error, "path" => "" };
         let name = name.to_string();
         if !valid_route_name(&name) {
@@ -1079,7 +1084,7 @@ impl SimRoutePicker {
         if !overwrite && dir.join(&file).exists() {
             return failure(&format!("{file} already exists"));
         }
-        match model.save(&dir, &file) {
+        match model.save_with_elevation(&dir, &file, use_elevation) {
             Ok(path) => vdict! {
                 "ok" => true,
                 "error" => "",

@@ -48,6 +48,8 @@ impl RouteEvaluationMetrics {
 pub struct RouteDriveEvaluator {
     /// 주행 화면에 전달할 지도 지면. 차량 물리와 평가에는 사용하지 않는다.
     pub scenery: super::scenery::Scenery,
+    elevation_requested: bool,
+    elevation_origin: Option<super::map::LatLon>,
     /// 코스 가이드 중심선.
     guide: Vec<Vec2>,
     /// 목표 지점 좌표(x, z).
@@ -83,6 +85,8 @@ impl RouteDriveEvaluator {
 
         Ok(Self {
             scenery: Default::default(),
+            elevation_requested: false,
+            elevation_origin: None,
             guide: guide.to_vec(),
             goal_position,
             goal_threshold_m: goal_threshold_m.max(1.0),
@@ -126,6 +130,9 @@ impl RouteDriveEvaluator {
                     super::map_patch::PatchAudience::Distribution,
                 )?;
                 let mut evaluator = Self::from_course(&result.course, &result.guide)?;
+                evaluator.elevation_requested = file.use_elevation;
+                evaluator.elevation_origin =
+                    (file.use_elevation && result.ground_only).then_some(result.origin);
                 let places_path = super::places::snapshot_places_path(&base.join(&file.snapshot));
                 if let Ok(places) = super::places::load_places(&places_path) {
                     evaluator.scenery =
@@ -135,6 +142,21 @@ impl RouteDriveEvaluator {
             }
             _ => Err("course format has no supported route guide".into()),
         }
+    }
+
+    /// 요청한 지상 경로의 고도를 조회한다. 지상 이외의 경로는 자료를 요청하지 않는다.
+    pub fn route_elevation(
+        &self,
+        cache: &std::path::Path,
+    ) -> Result<Option<super::elevation::RoadElevation>, String> {
+        self.elevation_origin
+            .map(|origin| super::elevation_tiles::load_profile(cache, origin, &self.guide))
+            .transpose()
+    }
+
+    /// 저장 경로에서 고도 적용이 요청되었는지 보고한다.
+    pub fn elevation_requested(&self) -> bool {
+        self.elevation_requested
     }
 
     /// 틱 단위로 차량 위치와 충돌 여부를 반영하여 실시간 CTE를 갱신하고 반환한다.
