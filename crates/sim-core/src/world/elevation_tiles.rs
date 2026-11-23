@@ -18,7 +18,8 @@ const ARCSECONDS: i32 = 3600;
 const SIDE: usize = ARCSECONDS as usize + 1;
 const RAW_BYTES: usize = SIDE * SIDE * 2;
 const MAX_GZIP_BYTES: usize = RAW_BYTES;
-const MARGIN_M: f32 = 35.0;
+// 건물과 지면도 도로 주변 160 m까지 같은 표고를 쓴다.
+const MARGIN_M: f32 = 170.0;
 static CACHE_LOCK: Mutex<()> = Mutex::new(());
 
 /// 캐시에 없는 타일을 공개 HTTPS 저장소에서 받는다.

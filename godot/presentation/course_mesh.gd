@@ -16,16 +16,22 @@ const GOAL_CELLS := Vector2i(6, 2)
 const GOAL_CELL_M := 0.6
 const GOAL_LABEL_Y_M := 3.0
 const ELEVATION_STEP_M := 4.0
+const TERRAIN_MARGIN_M := 160.0
+const CourseTerrain = preload("res://presentation/course_terrain.gd")
 var _sample_height: Callable
+var _terrain: CourseTerrain
 
 ## 이전 메시를 제거하고 전달받은 코스 스냅샷만 그린다.
 func build(data: Dictionary, height_at: Callable = Callable()) -> void:
 	_sample_height = height_at
+	_terrain = null
 	for child in get_children():
 		remove_child(child)
 		child.queue_free()
 	if not data.get("ok", false):
 		return
+	if height_at.is_valid():
+		_terrain = CourseTerrain.new(ground_bounds(data).grow(TERRAIN_MARGIN_M), height_at)
 	var asphalt := textured("road", Color("5b6164"), Color("72787b"), ASPHALT_TILE_M)
 	var concrete := textured("curb", Color("b3b5ae"), Color("d2d3cc"), CONCRETE_TILE_M)
 	var paint := {}
@@ -50,18 +56,27 @@ func build(data: Dictionary, height_at: Callable = Callable()) -> void:
 				var d := right[i].lerp(right[i + 1], t1)
 				vertices.append_array(PackedVector3Array([a, b, c, b, d, c]))
 		var is_line: bool = strip.kind == "edge_line"
-		_triangles(vertices, 0.016 if is_line else 0.012, paint.edge_line if is_line else asphalt)
+		_triangles(vertices, 0.016 if is_line else 0.012, paint.edge_line if is_line else asphalt, not is_line)
 	# 면은 모두 메시 하나로 합친다(도로 면 코스는 면이 천 개가 넘는다).
 	var area_vertices := PackedVector3Array()
 	for area in data.get("areas", []):
 		var boundary: PackedVector3Array = area.boundary
 		for i in range(boundary.size()):
 			area_vertices.append_array(PackedVector3Array([area.center, boundary[i], boundary[(i + 1) % boundary.size()]]))
-	_triangles(area_vertices, 0.012, asphalt)
+	_triangles(area_vertices, 0.012, asphalt, true)
 	for marking in data.get("markings", []):
 		_box(marking.rect, 0.004, 0.016, COLORS.stop_line, paint.get(marking.kind, paint.stop_line))
 	_colliders(data.get("colliders", []), concrete)
-	_build_scenery(data.get("scenery", {}))
+	if _terrain != null:
+		var terrain_node := MeshInstance3D.new()
+		terrain_node.name = "Terrain"
+		terrain_node.mesh = _terrain.build_mesh(data.get("scenery", {}))
+		var terrain_material := material(Color.WHITE)
+		terrain_material.vertex_color_use_as_albedo = true
+		terrain_node.material_override = terrain_material
+		add_child(terrain_node)
+	else:
+		_build_scenery(data.get("scenery", {}))
 	_buildings(data.get("buildings", []))
 	var goal: Dictionary = data.get("goal", {})
 	if not goal.is_empty():
@@ -94,14 +109,20 @@ func _buildings(buildings: Array) -> void:
 		if n < 3:
 			continue
 
+		var roof_y := height
+		if _terrain != null:
+			roof_y += _terrain.foundation_top(footprint)
+
 		# 1. 벽면 (수직 쿼드 및 UV 좌표 매핑)
 		for i in range(n):
 			var a: Vector3 = footprint[i]
 			var b: Vector3 = footprint[(i + 1) % n]
-			var a_top := a + Vector3(0, height, 0)
-			var b_top := b + Vector3(0, height, 0)
-
+			var a_top := Vector3(a.x, roof_y, a.z)
+			var b_top := Vector3(b.x, roof_y, b.z)
 			var edge := b - a
+			if _terrain != null:
+				a.y = _terrain.height_at(a.x, a.z) - 0.10
+				b.y = _terrain.height_at(b.x, b.z) - 0.10
 			var wall_len := edge.length()
 			var normal := Vector3(edge.z, 0, -edge.x).normalized()
 
@@ -122,7 +143,7 @@ func _buildings(buildings: Array) -> void:
 				wall_count += 1
 
 		# 2. 지붕 (다각형 삼각분할)
-		var roof_tris := _triangulate_roof(footprint, height)
+		var roof_tris := _triangulate_roof(footprint, roof_y)
 		for v: Vector3 in roof_tris:
 			roof_tool.set_normal(Vector3.UP)
 			roof_tool.set_uv(Vector2(v.x / 10.0, v.z / 10.0))
@@ -260,7 +281,7 @@ func _build_scenery(layers: Dictionary) -> void:
 		if get_child_count() > index: get_child(index).name = "Scenery_" + layer[0]
 
 ## 지면 삼각형을 위쪽 법선의 양면 메시로 표시한다.
-func _triangles(vertices: PackedVector3Array, y: float, surface_material: Material) -> void:
+func _triangles(vertices: PackedVector3Array, y: float, surface_material: Material, clear_terrain := false) -> void:
 	if vertices.is_empty():
 		return
 	var surface := SurfaceTool.new()
@@ -273,6 +294,8 @@ func _triangles(vertices: PackedVector3Array, y: float, surface_material: Materi
 		var normal := (b - a).cross(c - a)
 		if normal.length_squared() == 0.0:
 			continue
+		if clear_terrain and _terrain != null:
+			_terrain.clear_road(a, b, c)
 		# Godot 앞면은 위에서 볼 때 시계 방향(법선 아래)이다. 앞면이 위를 보게 맞춰야 뒷면 조명(뒤집힌 법선)으로 어두워지지 않는다.
 		var ordered := [a, b, c] if normal.y < 0.0 else [a, c, b]
 		for point in ordered:
@@ -283,6 +306,8 @@ func _triangles(vertices: PackedVector3Array, y: float, surface_material: Materi
 		return
 	var node := MeshInstance3D.new()
 	node.mesh = surface.commit()
+	if clear_terrain:
+		node.set_meta("road_surface", true)
 	node.material_override = surface_material
 	add_child(node)
 
