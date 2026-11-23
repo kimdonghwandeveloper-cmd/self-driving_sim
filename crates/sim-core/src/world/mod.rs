@@ -7,6 +7,7 @@ pub mod anchor_probe;
 pub mod building;
 pub mod course;
 pub mod course_files;
+pub mod elevation;
 pub mod junction;
 pub mod korea_data;
 pub mod map;
