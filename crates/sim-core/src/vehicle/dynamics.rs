@@ -313,12 +313,23 @@ impl Motion {
 ///
 /// 속도가 잘못된 값(NaN/무한대)이면 적분하지 않고 그대로 둔다. 상태 머신이 이상 상태로 판정한다.
 pub fn step(state: &mut VehicleState, motion: &mut Motion, params: &DynamicsParams, dt: f32) {
+    step_on_grade(state, motion, params, dt, 0.0);
+}
+
+/// 차량 전방의 경사로부터 중력의 종방향 성분을 적용한다.
+pub fn step_on_grade(
+    state: &mut VehicleState,
+    motion: &mut Motion,
+    params: &DynamicsParams,
+    dt: f32,
+    grade: f32,
+) {
     if !(dt.is_finite() && dt > 0.0) || !state.speed_valid() {
         motion.accel_mps2 = 0.0;
         return;
     }
     let speed = state.speed_mps();
-    let next_speed = longitudinal_speed(state, params, speed, dt);
+    let next_speed = longitudinal_speed(state, params, speed, dt, grade);
     motion.accel_mps2 = (next_speed - speed) / dt;
     state.set_speed_mps(next_speed);
 
@@ -409,7 +420,13 @@ fn steer_target(steering: f32, current_rad: f32, params: &DynamicsParams) -> Opt
 ///   0을 넘지 않는다. 저항 때문에 차가 반대로 움직이지 않는다.
 /// - 최고 속도 상한은 감속을 적용한 뒤에 자르므로, 구동이 저항보다 크면 정확히 상한을 유지한다.
 ///   충돌로 튕겨 이미 상한보다 빠른 속도는 자르지 않는다(감속으로만 줄어든다, 2-7).
-fn longitudinal_speed(state: &VehicleState, params: &DynamicsParams, speed: f32, dt: f32) -> f32 {
+fn longitudinal_speed(
+    state: &VehicleState,
+    params: &DynamicsParams,
+    speed: f32,
+    dt: f32,
+    grade: f32,
+) -> f32 {
     if state.gear() == Gear::Park {
         return 0.0;
     }
@@ -419,7 +436,12 @@ fn longitudinal_speed(state: &VehicleState, params: &DynamicsParams, speed: f32,
         }
         None => 0.0,
     };
-    let mut next = speed + drive_accel * dt;
+    let gravity_accel = if grade.is_finite() {
+        -9.81 * grade.atan().sin()
+    } else {
+        0.0
+    };
+    let mut next = speed + (drive_accel + gravity_accel) * dt;
 
     let mut decel =
         state.input().brake * params.max_brake_decel_mps2 + params.resistance_decel_mps2(speed);
@@ -435,7 +457,7 @@ fn longitudinal_speed(state: &VehicleState, params: &DynamicsParams, speed: f32,
         (-params.max_reverse_speed_mps).min(speed),
         params.max_forward_speed_mps.max(speed),
     );
-    if drive_accel == 0.0 && next.abs() < REST_SPEED_MPS {
+    if drive_accel == 0.0 && gravity_accel.abs() <= decel && next.abs() < REST_SPEED_MPS {
         next = 0.0;
     }
     next

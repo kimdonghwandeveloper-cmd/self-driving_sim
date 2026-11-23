@@ -688,7 +688,7 @@ pub fn step_with_obstacles(
     contact: &mut ContactState,
 ) -> Option<Impact> {
     step_filtered(
-        state, motion, params, dt, footprint, obstacles, None, contact,
+        state, motion, params, dt, footprint, obstacles, None, contact, 0.0,
     )
 }
 
@@ -706,6 +706,21 @@ pub fn step_with_grid(
     grid: &ObstacleGrid,
     contact: &mut ContactState,
 ) -> Option<Impact> {
+    step_with_grid_on_grade(state, motion, params, dt, footprint, grid, contact, 0.0)
+}
+
+/// 경사에 따른 가감속을 적용하고 기존 평면 충돌 판정을 수행한다.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn step_with_grid_on_grade(
+    state: &mut VehicleState,
+    motion: &mut Motion,
+    params: &DynamicsParams,
+    dt: f32,
+    footprint: &Footprint,
+    grid: &ObstacleGrid,
+    contact: &mut ContactState,
+    grade: f32,
+) -> Option<Impact> {
     let obstacles = grid.rects();
     step_filtered(
         state,
@@ -716,6 +731,7 @@ pub fn step_with_grid(
         obstacles,
         Some(grid),
         contact,
+        grade,
     )
 }
 
@@ -762,10 +778,11 @@ fn step_filtered(
     obstacles: &[GroundRect],
     grid: Option<&ObstacleGrid>,
     contact: &mut ContactState,
+    grade: f32,
 ) -> Option<Impact> {
     let speed_before = state.speed_mps();
     let mut from = *motion;
-    dynamics::step(state, motion, params, dt);
+    dynamics::step_on_grade(state, motion, params, dt, grade);
     let mut to = *motion;
     let mut remaining = dt;
     // 이번 단계에서 막은 장애물마다 (번호, 닿기 직전 충돌 정보).

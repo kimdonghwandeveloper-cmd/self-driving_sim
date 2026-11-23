@@ -1,0 +1,4 @@
+source = "course-way-532526349.osm.json"
+origin = [34.7509700, 127.7493575]
+ways = [532526349]
+temporary_width_m = 4.0

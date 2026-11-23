@@ -148,6 +148,7 @@ func _populate_courses() -> void:
 	_add_course("차량 보정 코스 · Calibration", "calibration")
 	if ClassDB.class_exists("SimVehicle"):
 		_add_course("여수 엑스포 · OSM 배경", DriveScreen.YEOSU_COURSE)
+		_add_course("여수 엑스포 · 오르막·내리막", DriveScreen.YEOSU_ELEVATION_COURSE)
 		_add_course("여수 엑스포 · 내 맵 도로", DriveScreen.YEOSU_CUSTOM_ROADS_COURSE)
 		for key: String in DriveScreen.CONVENTION_COURSES:
 			_add_course("여수 컨벤션 · " + DriveScreen.CONVENTION_COURSES[key], DriveScreen.CONVENTION_PREFIX + key + ".toml")

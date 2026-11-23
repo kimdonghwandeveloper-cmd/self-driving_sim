@@ -1,0 +1,72 @@
+extends SceneTree
+const Drive = preload("res://presentation/drive_screen.gd")
+
+## 실제 여수 고도 자료를 주행 화면에서 검증한다.
+func _initialize() -> void:
+	call_deferred("_run")
+
+## 평지 코스와 같은 입력을 적용하여 높이와 속도가 달라지는지 확인한다.
+func _run() -> void:
+	var drive := Drive.new()
+	root.add_child(drive)
+	drive.start(Drive.YEOSU_ELEVATION_COURSE)
+	if not drive.failure.is_empty() or not drive.fallback_notice.is_empty():
+		printerr("YEOSU ELEVATION FAIL: ", drive.failure, " ", drive.fallback_notice)
+		drive.free()
+		quit(1)
+		return
+	var elevated: Node3D = drive.vehicle
+	var flat: Node3D = ClassDB.instantiate("SimVehicle")
+	flat.set("course", Drive.YEOSU_COURSE)
+	root.add_child(flat)
+	var data: Dictionary = elevated.call("course_data")
+	var ok := bool(data.get("has_elevation", false)) and bool(flat.call("is_ready"))
+	ok = ok and elevated.position.y > 0.1 and is_zero_approx(flat.position.y)
+	var curbs := drive.scene_content.find_child("Colliders_curb", true, false) as MeshInstance3D
+	ok = ok and curbs != null and curbs.get_aabb().size.y > 1.0
+	var road: MeshInstance3D
+	for node in drive.scene_content.find_children("*", "MeshInstance3D", true, false):
+		if node.get_aabb().size.y > 1.0 and node.name != "Colliders_curb":
+			road = node
+			break
+	ok = ok and road != null
+	var start := elevated.position
+	var max_speed_delta := 0.0
+	var min_height := start.y
+	var max_height := start.y
+	for vehicle in [elevated, flat]:
+		vehicle.set("read_input", false)
+	await physics_frame
+	await physics_frame
+	for vehicle in [elevated, flat]:
+		vehicle.call("send_command", "engine_toggle")
+		vehicle.call("send_command", "gear_drive")
+		vehicle.call("set_manual_input", 0.55, 0.0, 0.0)
+	for i in range(575):
+		await physics_frame
+		var height := float(elevated.call("road_height", elevated.position.x, elevated.position.z))
+		ok = ok and is_equal_approx(elevated.position.y, height)
+		min_height = minf(min_height, height)
+		max_height = maxf(max_height, height)
+		max_speed_delta = maxf(max_speed_delta, absf(elevated.call("speed_mps") - flat.call("speed_mps")))
+	var travel := start.distance_to(elevated.position)
+	ok = ok and travel > 5.0
+	ok = ok and max_height - min_height > 0.05 and max_speed_delta > 0.02
+	elevated.call("set_manual_input", 0.0, 1.0, 0.0)
+	for i in range(192):
+		await physics_frame
+	var top := elevated.position.y
+	elevated.call("send_command", "gear_reverse")
+	elevated.call("set_manual_input", 0.70, 0.0, 0.0)
+	for i in range(640):
+		await physics_frame
+		if elevated.position.distance_to(start) < 3.0:
+			break
+	var descent := top - elevated.position.y
+	ok = ok and float(elevated.call("speed_mps")) < 0.0 and descent > 0.02
+	print("YEOSU ELEVATION ", "OK" if ok else "FAIL", ": height range ", min_height,
+		"–", max_height, " m, max speed delta ", max_speed_delta, " m/s, ascent travel ",
+		travel, " m, descent ", descent, " m, reverse speed ", elevated.call("speed_mps"), " m/s")
+	drive.free()
+	flat.free()
+	quit(0 if ok else 1)
