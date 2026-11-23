@@ -174,7 +174,10 @@ pub fn parse_places(json: &str) -> Result<Vec<Place>, String> {
                 }
             }
             "way" => {
-                if name.is_empty() && !element.tags.contains_key("building") {
+                if name.is_empty()
+                    && !element.tags.contains_key("building")
+                    && super::scenery::surface_kind(&element.tags).is_none()
+                {
                     continue;
                 }
                 let ids = &element.nodes;
@@ -579,7 +582,11 @@ mod tests {
         ]);
         let places = parse_places(&json).unwrap();
         let ids: Vec<&str> = places.iter().map(|p| p.id.as_str()).collect();
-        assert_eq!(ids, ["node/600", "way/500"]);
+        assert_eq!(ids, ["node/600", "way/500", "way/501"]);
+        assert_eq!(
+            super::super::scenery::surface_kind(&places[2].tags),
+            Some("green")
+        );
         let library = &places[1];
         assert_eq!(library.kind, "building");
         assert_eq!(library.outline.len(), 5);

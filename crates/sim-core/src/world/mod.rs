@@ -7,6 +7,8 @@ pub mod anchor_probe;
 pub mod building;
 pub mod course;
 pub mod course_files;
+pub mod elevation;
+pub mod elevation_tiles;
 pub mod junction;
 pub mod korea_data;
 pub mod map;
@@ -26,6 +28,7 @@ pub mod road_polygons;
 pub mod road_snapshot;
 pub mod route;
 pub mod route_plan;
+pub mod scenery;
 #[cfg(test)]
 pub mod test_drive;
 
@@ -37,4 +40,5 @@ pub mod block_route;
 
 pub mod block_route_file;
 
+pub mod road_area;
 pub mod route_evaluation;

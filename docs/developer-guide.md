@@ -129,10 +129,20 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/prepare-korea-da
 
 ### 블록 경로 회귀 시험
 
+새 지도 UI는 `road-area-v1` 자유 주행 영역을 저장합니다. 기존 블록 경로 API는 저장 파일 재생 호환성을 위해 유지합니다.
+`reversed`는 원본 블록 순서와 반대 방향으로 출발할지 저장합니다. 필드가 없는 옛 영역 파일은 기존 정방향으로 재생합니다.
+새 UI의 `connected-forward-v1` 선택은 방향 앞쪽의 물리적 연결과 거리 예산을 사용하며, 선택한 블록 ID·원본 조회 범위를 함께 고정합니다.
+규칙이 없는 옛 파일은 `square-v1`로 재생합니다. 기존 코스에 새 선택 규칙을 소급하지 않습니다.
+헤드리스에서는 지도 캔버스·타일 렌더링을 생략하고 실제 렌더링은 OpenGL 실행으로 별도 확인합니다.
+
 ```powershell
 & '<Godot 콘솔 실행 파일>' --headless --fixed-fps 64 --path godot --script res://tests/block_map_ui_test.gd
 & '<Godot 콘솔 실행 파일>' --headless --fixed-fps 64 --path godot --script res://tests/block_picker_test.gd
 & '<Godot 콘솔 실행 파일>' --headless --fixed-fps 64 --path godot --script res://tests/block_real_test.gd
+& '<Godot 콘솔 실행 파일>' --headless --fixed-fps 64 --path godot --script res://tests/road_area_ui_test.gd
+& '<Godot 콘솔 실행 파일>' --headless --fixed-fps 64 --path godot --script res://tests/road_direction_popup_test.gd
+& '<Godot 콘솔 실행 파일>' --headless --fixed-fps 64 --path godot --script res://tests/directional_generation_test.gd
+& '<Godot 콘솔 실행 파일>' --rendering-method gl_compatibility --fixed-fps 64 --path godot --script res://tests/road_area_ui_test.gd
 ```
 
 실제 지역 고정 자료·시험 범위와 한계는 [짧은 블록·교차로 검토 기록](short-block-junctions-review.md)을 참고하세요.

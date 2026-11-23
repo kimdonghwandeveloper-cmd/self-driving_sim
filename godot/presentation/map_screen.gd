@@ -43,6 +43,7 @@ var textures: Dictionary = {}
 ## 타일 표시 프레임 번호. 텍스처마다 마지막으로 화면에 보인 번호를 기록해 오래된 것부터 버린다.
 var tile_frame := 0
 var save_button := Button.new()
+var use_route_elevation := false
 var route_name := LineEdit.new()
 var overwrite := CheckBox.new()
 var snapshot_dialog := FileDialog.new()
@@ -247,8 +248,8 @@ func _draw() -> void:
 	for x in range(int(ceilf(span.x / cell)) + 2):
 		for y in range(int(ceilf(span.y / cell)) + 2):
 			var rect := Rect2(grid_origin + Vector2(x, y) * cell, Vector2.ONE * cell)
-			draw_rect(rect, Color("343e48"))
-			draw_rect(rect, Color("46515c"), false, 1.0 / scale_m)
+			draw_rect(rect, Color("eef2f6"))
+			draw_rect(rect, Color("dce3eb"), false, 1.0 / scale_m)
 	for tile in tile_layers:
 		if tile.get("texture") is Texture2D:
 			draw_texture_rect(tile.texture, tile.rect, false)
@@ -639,7 +640,7 @@ func _clear_points() -> void:
 func _save_route() -> void:
 	if picker == null:
 		return
-	var result: Dictionary = picker.call("save", route_name.text, overwrite.button_pressed)
+	var result: Dictionary = picker.call("save", route_name.text, overwrite.button_pressed, use_route_elevation)
 	feedback = "저장: " + str(result.path) if result.get("ok", false) else str(result.error)
 
 ## 현재 경로를 다시 확인하고 새 이름으로 저장한 뒤 같은 경로를 주행 화면에 넘긴다.
@@ -651,7 +652,7 @@ func _drive_route() -> void:
 		feedback = "주행 가능한 출발·도착 경로를 먼저 선택하세요. " + str(route.get("error", ""))
 		return
 	var name := "osm-drive-%d-%d" % [OS.get_process_id(), Time.get_ticks_usec()]
-	var saved: Dictionary = picker.call("save", name, false)
+	var saved: Dictionary = picker.call("save", name, false, use_route_elevation)
 	if not saved.get("ok", false):
 		feedback = "주행 경로 저장 실패: " + str(saved.error)
 		return

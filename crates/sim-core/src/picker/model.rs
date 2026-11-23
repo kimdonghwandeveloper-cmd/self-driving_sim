@@ -60,6 +60,7 @@ pub struct PickerModel {
     pub places_loaded: bool,
     /// 마지막 계산 결과. 점이 2개 미만이면 `None`.
     pub planned: Option<Result<PlannedRoute, String>>,
+    alternatives: Vec<PlannedRoute>,
 }
 
 impl PickerModel {
@@ -114,6 +115,7 @@ impl PickerModel {
             places: Vec::new(),
             places_loaded: false,
             planned: None,
+            alternatives: Vec::new(),
         })
     }
 
@@ -352,10 +354,12 @@ impl PickerModel {
         self.points.clear();
         self.labels.clear();
         self.planned = None;
+        self.alternatives.clear();
     }
 
     /// 점이 2개 이상이면 경로를 다시 계산한다. 이름 있는 점이 있으면 경로 파일에 점 이름을 함께 둔다.
     fn recompute(&mut self) {
+        self.alternatives.clear();
         let labels = if self.labels.iter().any(|label| !label.is_empty()) {
             self.labels.clone()
         } else {
@@ -399,6 +403,42 @@ impl PickerModel {
             Some(Ok(planned)) => planned.path.iter().map(|p| self.to_view(*p)).collect(),
             _ => Vec::new(),
         }
+    }
+
+    /// 핀 변경 후 현재 경로의 검증된 대안을 한 번 계산한다.
+    pub fn prepare_alternatives(&mut self) {
+        self.alternatives = match &self.planned {
+            Some(Ok(primary)) => route_plan::route_alternatives(
+                primary,
+                &self.ways,
+                &self.restrictions,
+                self.connectivity.as_ref(),
+                &self.config,
+                self.patch_graph.as_ref(),
+            ),
+            _ => Vec::new(),
+        };
+    }
+
+    /// 선택되지 않은 경로의 지도 선과 거리를 반환한다.
+    pub fn alternative_views(&self) -> impl Iterator<Item = (Vec<Vec2>, f64)> + '_ {
+        self.alternatives.iter().map(|route| {
+            (
+                route.path.iter().map(|&p| self.to_view(p)).collect(),
+                route.length_m,
+            )
+        })
+    }
+
+    /// 클릭한 코스를 저장 대상으로 바꾸고 이전 코스를 대안 목록에 둔다.
+    pub fn choose_alternative(&mut self, index: usize) -> bool {
+        let (Some(Ok(primary)), Some(other)) =
+            (&mut self.planned, self.alternatives.get_mut(index))
+        else {
+            return false;
+        };
+        std::mem::swap(primary, other);
+        true
     }
 
     /// 화면 안내 문구: 점 개수, 경로 길이·폭·출처, 경고(좁은 폭·임시 폭), 오류(돌 수 없는 꺾임·거부된 교차로 등).
@@ -502,6 +542,16 @@ impl PickerModel {
 
     /// 계산된 경로를 `dir/name`에 경로 파일로 저장하고 경로를 돌려준다. 스냅샷 경로는 저장 폴더 기준 상대 경로다.
     pub fn save(&self, dir: &Path, name: &str) -> Result<PathBuf, String> {
+        self.save_with_elevation(dir, name, false)
+    }
+
+    /// 핀 경로의 고도 적용 요청을 저장 파일에 기록한다.
+    pub fn save_with_elevation(
+        &self,
+        dir: &Path,
+        name: &str,
+        use_elevation: bool,
+    ) -> Result<PathBuf, String> {
         let Some(Ok(planned)) = &self.planned else {
             return Err("no valid route to save".to_owned());
         };
@@ -509,6 +559,7 @@ impl PickerModel {
             .map_err(|error| format!("cannot create {}: {error}", dir.display()))?;
         let mut file = planned.file.clone();
         file.snapshot = relative_path(dir, &self.snapshot_path)?;
+        file.use_elevation = use_elevation;
         let text = route_plan::route_file_toml(&file)?;
         let path = dir.join(name);
         std::fs::write(&path, text)
@@ -702,6 +753,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         let empty = PickerModel {
             planned: None,
+            alternatives: Vec::new(),
             ..model
         };
         assert!(empty.save(&dir, "x.toml").is_err());

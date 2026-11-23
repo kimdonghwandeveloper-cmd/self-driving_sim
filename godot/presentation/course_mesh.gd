@@ -15,9 +15,12 @@ const COLORS = {
 const GOAL_CELLS := Vector2i(6, 2)
 const GOAL_CELL_M := 0.6
 const GOAL_LABEL_Y_M := 3.0
+const ELEVATION_STEP_M := 4.0
+var _sample_height: Callable
 
 ## 이전 메시를 제거하고 전달받은 코스 스냅샷만 그린다.
-func build(data: Dictionary) -> void:
+func build(data: Dictionary, height_at: Callable = Callable()) -> void:
+	_sample_height = height_at
 	for child in get_children():
 		remove_child(child)
 		child.queue_free()
@@ -36,7 +39,16 @@ func build(data: Dictionary) -> void:
 		var right: PackedVector3Array = strip.right
 		var vertices := PackedVector3Array()
 		for i in range(mini(left.size(), right.size()) - 1):
-			vertices.append_array(PackedVector3Array([left[i], right[i], left[i + 1], right[i], right[i + 1], left[i + 1]]))
+			var length := maxf(left[i].distance_to(left[i + 1]), right[i].distance_to(right[i + 1]))
+			var steps := maxi(1, ceili(length / ELEVATION_STEP_M)) if _sample_height.is_valid() else 1
+			for j in range(steps):
+				var t0 := float(j) / steps
+				var t1 := float(j + 1) / steps
+				var a := left[i].lerp(left[i + 1], t0)
+				var b := right[i].lerp(right[i + 1], t0)
+				var c := left[i].lerp(left[i + 1], t1)
+				var d := right[i].lerp(right[i + 1], t1)
+				vertices.append_array(PackedVector3Array([a, b, c, b, d, c]))
 		var is_line: bool = strip.kind == "edge_line"
 		_triangles(vertices, 0.016 if is_line else 0.012, paint.edge_line if is_line else asphalt)
 	# 면은 모두 메시 하나로 합친다(도로 면 코스는 면이 천 개가 넘는다).
@@ -49,6 +61,7 @@ func build(data: Dictionary) -> void:
 	for marking in data.get("markings", []):
 		_box(marking.rect, 0.004, 0.016, COLORS.stop_line, paint.get(marking.kind, paint.stop_line))
 	_colliders(data.get("colliders", []), concrete)
+	_build_scenery(data.get("scenery", {}))
 	_buildings(data.get("buildings", []))
 	var goal: Dictionary = data.get("goal", {})
 	if not goal.is_empty():
@@ -175,7 +188,23 @@ func _colliders(colliders: Array, concrete: Material) -> void:
 			tools[collider.kind] = SurfaceTool.new()
 			tools[collider.kind].begin(Mesh.PRIMITIVE_TRIANGLES)
 		var place := Transform3D(Basis(Vector3.UP, rect.heading_rad), rect.center + Vector3(0, height * 0.5, 0))
-		tools[collider.kind].append_from(box, 0, place)
+		if _sample_height.is_valid():
+			box.subdivide_depth = maxi(0, ceili(box.size.z / ELEVATION_STEP_M) - 1)
+			box.subdivide_width = maxi(0, ceili(box.size.x / ELEVATION_STEP_M) - 1)
+			var arrays := box.surface_get_arrays(0)
+			var vertices: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+			var normals: PackedVector3Array = arrays[Mesh.ARRAY_NORMAL]
+			for i in range(vertices.size()):
+				var point := place * vertices[i]
+				vertices[i] = _raised(point, point.y)
+				normals[i] = place.basis * normals[i]
+			arrays[Mesh.ARRAY_VERTEX] = vertices
+			arrays[Mesh.ARRAY_NORMAL] = normals
+			var raised := ArrayMesh.new()
+			raised.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+			tools[collider.kind].append_from(raised, 0, Transform3D.IDENTITY)
+		else:
+			tools[collider.kind].append_from(box, 0, place)
 	for kind in tools:
 		var node := MeshInstance3D.new()
 		node.name = "Colliders_" + kind
@@ -187,7 +216,7 @@ func _colliders(colliders: Array, concrete: Material) -> void:
 func _goal_marker(goal: Dictionary) -> void:
 	var marker := Node3D.new()
 	marker.name = "GoalMarker"
-	marker.position = goal.position
+	marker.position = _raised(goal.position, 0.0)
 	marker.rotation.y = goal.heading_rad
 	add_child(marker)
 	var cells := {true: material(Color("f5f4e8")), false: material(Color("2b2e30"))}
@@ -221,6 +250,15 @@ func _box(rect: Dictionary, height: float, center_y: float, color: Color, surfac
 	node.rotation.y = rect.heading_rad
 	add_child(node)
 
+## 평면 바닥 위와 도로 아래에 지도 재질을 종류별 메시로 그린다.
+func _build_scenery(layers: Dictionary) -> void:
+	for layer in [["green", "73a462", -0.0015], ["parking", "777d84", -0.0010], ["water", "579bad", -0.0005]]:
+		var vertices: PackedVector3Array = layers.get(layer[0], PackedVector3Array())
+		if vertices.is_empty(): continue
+		var index := get_child_count()
+		_triangles(vertices, layer[2], material(Color(layer[1])))
+		if get_child_count() > index: get_child(index).name = "Scenery_" + layer[0]
+
 ## 지면 삼각형을 위쪽 법선의 양면 메시로 표시한다.
 func _triangles(vertices: PackedVector3Array, y: float, surface_material: Material) -> void:
 	if vertices.is_empty():
@@ -229,16 +267,16 @@ func _triangles(vertices: PackedVector3Array, y: float, surface_material: Materi
 	surface.begin(Mesh.PRIMITIVE_TRIANGLES)
 	var count := 0
 	for i in range(0, vertices.size(), 3):
-		var a := Vector3(vertices[i].x, y, vertices[i].z)
-		var b := Vector3(vertices[i + 1].x, y, vertices[i + 1].z)
-		var c := Vector3(vertices[i + 2].x, y, vertices[i + 2].z)
+		var a := _raised(vertices[i], y)
+		var b := _raised(vertices[i + 1], y)
+		var c := _raised(vertices[i + 2], y)
 		var normal := (b - a).cross(c - a)
 		if normal.length_squared() == 0.0:
 			continue
 		# Godot 앞면은 위에서 볼 때 시계 방향(법선 아래)이다. 앞면이 위를 보게 맞춰야 뒷면 조명(뒤집힌 법선)으로 어두워지지 않는다.
 		var ordered := [a, b, c] if normal.y < 0.0 else [a, c, b]
 		for point in ordered:
-			surface.set_normal(Vector3.UP)
+			surface.set_normal(normal.normalized() * signf(normal.y) if _sample_height.is_valid() else Vector3.UP)
 			surface.add_vertex(point)
 			count += 1
 	if count == 0:
@@ -247,6 +285,11 @@ func _triangles(vertices: PackedVector3Array, y: float, surface_material: Materi
 	node.mesh = surface.commit()
 	node.material_override = surface_material
 	add_child(node)
+
+## 도로 지점의 높이에 표시용 오프셋을 더한다.
+func _raised(point: Vector3, offset: float) -> Vector3:
+	var height := float(_sample_height.call(point.x, point.z)) if _sample_height.is_valid() else 0.0
+	return Vector3(point.x, height + offset, point.z)
 
 ## 단순 무광 재질을 만든다. 지면은 위·아래 양쪽에서 보이게 한다.
 static func material(color: Color) -> StandardMaterial3D:

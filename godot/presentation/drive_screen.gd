@@ -8,6 +8,7 @@ const Rig = preload("res://presentation/camera_rig.gd")
 const Dashboard = preload("res://presentation/drive_dashboard.gd")
 ## GLB의 미터 원점을 공유하는 여수 고정 코스. 저장 경로는 시작점이 달라 이 배경을 쓰지 않는다.
 const YEOSU_COURSE := "map:testdata/yeosu-expo/course.toml"
+const YEOSU_ELEVATION_COURSE := "map:testdata/yeosu-expo/elevation-course.toml"
 ## 사용자 제작 맵의 도로 면을 그대로 노면·연석으로 쓰는 여수 코스. 배경 GLB와 같은 원점을 쓴다.
 const YEOSU_CUSTOM_ROADS_COURSE := "map:testdata/yeosu-expo/custom-roads.toml"
 ## 내 맵 도로 코스에서 차가 도로 면 밖(열린 막다른 끝 너머)에 있을 때 HUD에 보일 안내와 도로 면 격자 칸 크기(m).
@@ -116,7 +117,7 @@ func start(course_name: String, force_preview: bool = false) -> void:
 	add_child(scene_content)
 	var course_mesh := CourseMesh.new()
 	scene_content.add_child(course_mesh)
-	course_mesh.build(data)
+	course_mesh.build(data, Callable(vehicle, "road_height") if data.get("has_elevation", false) else Callable())
 	var bounds := CourseMesh.ground_bounds(data)
 	if not is_preview and fallback_notice.is_empty():
 		if course_name in [YEOSU_COURSE, YEOSU_CUSTOM_ROADS_COURSE]:
@@ -149,6 +150,10 @@ func start(course_name: String, force_preview: bool = false) -> void:
 	warnings_label.text = "\n".join(warnings)
 	dismiss.visible = not warnings_label.text.is_empty()
 	notice.text = "\n".join(vehicle.call("course_notices"))
+	if data.get("has_elevation", false):
+		notice.text += "\n지형 고도: Mapzen Terrain Tiles (약 30 m)"
+	elif data.has("elevation_notice"):
+		notice.text += "\n" + str(data.elevation_notice)
 	calibration_box.visible = not is_preview and str(vehicle.get("course")) == CALIBRATION_COURSE
 	scenario_box.visible = _has_scenario()
 	if is_preview:

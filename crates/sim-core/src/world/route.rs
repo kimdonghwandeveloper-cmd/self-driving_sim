@@ -57,15 +57,19 @@ impl Default for JunctionSettings {
 }
 
 impl JunctionSettings {
-    /// 값이 유한한 양수인지 검사한다.
+    /// 회전 반경은 양수로 제한하며 곁가지 길이 0은 입구에서 닫는다.
     pub fn validate(&self) -> Result<(), String> {
-        for (name, value) in [
-            ("corner_radius_m", self.corner_radius_m),
-            ("stub_length_m", self.stub_length_m),
-        ] {
-            if !(value.is_finite() && value > 0.0) {
-                return Err(format!("{name} must be a positive number, got {value}"));
-            }
+        if !self.corner_radius_m.is_finite() || self.corner_radius_m <= 0.0 {
+            return Err(format!(
+                "corner_radius_m must be a positive number, got {}",
+                self.corner_radius_m
+            ));
+        }
+        if !self.stub_length_m.is_finite() || self.stub_length_m < 0.0 {
+            return Err(format!(
+                "stub_length_m must be non-negative, got {}",
+                self.stub_length_m
+            ));
         }
         Ok(())
     }
@@ -121,6 +125,10 @@ impl BuildFailure {
 /// 경로 코스 생성 결과.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RouteCourse {
+    /// 위경도 자료를 이 코스에 겹쳐 그릴 때 사용할 좌표 원점.
+    pub origin: LatLon,
+    /// 경로의 모든 도로가 지상 구간인지 나타낸다.
+    pub ground_only: bool,
     /// 코스 정의.
     pub course: CourseDef,
     /// 경로를 따라가는 안내선(도로 조각 중심선 + 교차로를 건너는 곡선). 시험용 자동 주행과 이후 목표 표시에 쓴다.
@@ -611,11 +619,25 @@ pub fn build_route_course_detailed(
         });
     }
     Ok(RouteCourse {
+        origin,
+        ground_only: route.windows(2).all(|pair| {
+            graph
+                .way_between(pair[0], pair[1])
+                .is_some_and(is_ground_way)
+        }),
         course,
         guide,
         junctions: junction_ids,
         simplified: simplified.into_iter().map(|i| route[i]).collect(),
     })
+}
+
+/// 교량, 터널, 지붕 있는 도로와 높이 층이 분리된 도로는 지형 고도 적용 대상에서 제외한다.
+fn is_ground_way(way: &OsmGraphWay) -> bool {
+    ["bridge", "tunnel", "covered"]
+        .iter()
+        .all(|key| way.tags.get(*key).is_none_or(|value| value == "no"))
+        && way.tags.get("layer").is_none_or(|layer| layer == "0")
 }
 
 /// 교차로 노드 `id`의 면·모서리 연석·곁가지를 만든다. `route_neighbors`는 경로가 지나는 이웃 노드다.
@@ -688,6 +710,7 @@ fn build_junction(
     )?;
     let mut cut = BTreeMap::new();
     let mut stubs = Vec::new();
+    let mut closed_arms = Vec::new();
     for (k, &(neighbor, _)) in neighbors.iter().enumerate() {
         let (points, arm, cut_m) = (&polylines[k], arms[k], shape.cut_m[k]);
         // 잘라 낼 거리까지는 팔이 곧아야 도로 조각이 교차로 면 입구와 정확히 맞는다.
@@ -711,6 +734,14 @@ fn build_junction(
         }
         cut.insert(neighbor, cut_m);
         if !route_neighbors.contains(&neighbor) {
+            if settings.stub_length_m == 0.0 {
+                closed_arms.push(map::end_wall(
+                    center + arm.direction * cut_m,
+                    arm.direction,
+                    2.0 * (arm.half_width_m + spec.curb_thickness_m),
+                ));
+                continue;
+            }
             let end = (cut_m + settings.stub_length_m).min(length);
             let stub_points = trim(points, cut_m, length - end)?;
             stubs.push(map::road_piece(&stub_points, spec, [false, true])?);
@@ -725,6 +756,7 @@ fn build_junction(
             height_m: 0.25,
             kind: ColliderKind::Curb,
         })
+        .chain(closed_arms)
         .collect();
     // 정당한 접합 범위: 입구(잘라 낸 곳의 연석 바깥 모서리)까지와, 이웃한 팔의 연석 바깥선이 서로 갈라지는 곳까지.
     let outer = half + spec.curb_thickness_m;
@@ -907,6 +939,33 @@ mod tests {
             assert_eq!(result.impacts, 0, "{name}: {result:?}");
             assert!(result.remaining_m < 12.5, "{name}: {result:?}");
             assert!(result.max_offset_m < 1.2, "{name}: {result:?}");
+            let without_stubs = build_route_course_with(
+                name,
+                &ways,
+                &allowed(),
+                &route,
+                4.0,
+                &JunctionSettings {
+                    stub_length_m: 0.0,
+                    ..Default::default()
+                },
+                Vec::new(),
+            )
+            .unwrap_or_else(|e| panic!("{name}: {e}"));
+            assert_eq!(without_stubs.course.strips.len(), 6, "{name}");
+            assert_eq!(without_stubs.course.areas, built.course.areas, "{name}");
+            let walls = |course: &RouteCourse| {
+                course
+                    .course
+                    .colliders
+                    .iter()
+                    .filter(|c| c.kind == ColliderKind::Wall)
+                    .count()
+            };
+            assert_eq!(walls(&without_stubs), walls(&built), "{name}");
+            let result = follow_path(&without_stubs.course, &without_stubs.guide, 3.0);
+            assert_eq!(result.impacts, 0, "{name}: {result:?}");
+            assert!(result.remaining_m < 12.5, "{name}: {result:?}");
         }
     }
 

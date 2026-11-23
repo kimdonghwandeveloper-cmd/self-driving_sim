@@ -114,6 +114,8 @@ pub struct SimRoutePicker {
     )>,
     block_source_hash: String,
     block_error: String,
+    /// 자유 주행 영역의 검증된 저장 파일. 지역 또는 선택을 바꾸면 폐기한다.
+    area_preview: Option<sim_core::world::road_area::RoadAreaFile>,
     /// 접근 제한 도로를 포함하는 연습 모드. 실제 통행 허가와 무관하다.
     include_restricted: bool,
     /// 지금 열린 지역 범위(전국 자료에서 연 경우).
@@ -132,6 +134,123 @@ pub struct SimRoutePicker {
 
 #[godot_api]
 impl SimRoutePicker {
+    /// 경로 통행 방향과 접근 제한으로 물리 도로 후보를 제외하지 않는다.
+    #[func]
+    fn road_area_candidates(&self, view: Vector2, radius: f32) -> Array<VarDictionary> {
+        let Some(selection) = &self.block_selection else {
+            return Array::new();
+        };
+        let latlon = tiles::from_view(glam::Vec2::new(view.x, view.y));
+        sim_core::world::road_area::road_area_candidates(
+            &selection.model,
+            latlon,
+            radius * latlon.lat.to_radians().cos() as f32,
+        )
+        .iter()
+        .filter_map(|id| selection.model.blocks.iter().find(|b| &b.id == id))
+        .map(|b| block_item(b, sim_core::world::road_blocks::BlockDirection::Forward))
+        .collect()
+    }
+    /// 도착 지정 없이 선택 도로 주변을 생성하고 화살표에서 고른 출발 방향을 반영한다.
+    #[func]
+    fn preview_road_area(
+        &mut self,
+        id: GString,
+        span_m: f32,
+        #[opt(default = false)] reversed: bool,
+    ) -> VarDictionary {
+        self.area_preview = None;
+        let prepared = (|| {
+            let m = self.model.as_ref().ok_or("지역을 먼저 여세요")?;
+            let bytes = std::fs::read(&m.snapshot_path).map_err(|e| e.to_string())?;
+            if sim_core::world::road_snapshot::sha256_hex(&bytes) != self.block_source_hash {
+                return Err("원본 자료가 바뀌었습니다. 지역을 다시 여세요".into());
+            }
+            let dir = repo_path(ROUTE_DIR);
+            std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+            let relative = sim_core::picker::model::relative_path(&dir, &m.snapshot_path)?;
+            sim_core::world::road_area::prepare_directional_road_area(
+                &dir,
+                &relative,
+                &m.config,
+                &sim_core::world::road_area::DirectionalAreaRequest {
+                    anchor: &sim_core::world::road_blocks::BlockId(id.to_string()),
+                    distance_m: span_m,
+                    origin: m.origin,
+                    reversed,
+                    source_bounds: self.loaded.map(|b| [b.south, b.west, b.north, b.east]),
+                },
+            )
+        })();
+        match prepared {
+            Ok((file, course)) => {
+                let origin = sim_core::world::map::LatLon {
+                    lat: file.origin[0],
+                    lon: file.origin[1],
+                };
+                let model = &self
+                    .block_selection
+                    .as_ref()
+                    .expect("loaded block model")
+                    .model;
+                let ids: std::collections::BTreeSet<_> =
+                    file.selected_blocks.iter().cloned().collect();
+                let selected: Vec<_> = model
+                    .blocks
+                    .iter()
+                    .filter(|b| ids.contains(&b.id))
+                    .collect();
+                let lines: Array<PackedVector2Array> = selected
+                    .iter()
+                    .map(|b| {
+                        b.nodes
+                            .iter()
+                            .map(|n| {
+                                let p = tiles::to_view(n.pos);
+                                Vector2::new(p.x, p.y)
+                            })
+                            .collect()
+                    })
+                    .collect();
+                let count = selected.len() as i64;
+                let start = tiles::to_view(sim_core::world::map::LatLon {
+                    lat: origin.lat - (course.start.z_m as f64 / 6_371_008.8_f64).to_degrees(),
+                    lon: origin.lon
+                        + (course.start.x_m as f64
+                            / (6_371_008.8_f64 * origin.lat.to_radians().cos()))
+                        .to_degrees(),
+                });
+                self.area_preview = Some(file);
+                vdict! {"ok"=>true,"error"=>"","lines"=>&lines,"road_count"=>count,"building_count"=>course.buildings.len() as i64,"start_view"=>Vector2::new(start.x,start.y),"start_heading"=>course.start.heading_rad,"reversed"=>reversed}
+            }
+            Err(e) => {
+                vdict! {"ok"=>false,"error"=>e.as_str(),"lines"=>&Array::<PackedVector2Array>::new(),"road_count"=>0_i64}
+            }
+        }
+    }
+
+    /// 검증된 도로 영역을 새 파일로 저장해 공통 자유 주행 로더로 전달한다.
+    #[func]
+    fn save_road_area(&self, name: GString) -> VarDictionary {
+        let name = name.to_string();
+        if !valid_route_name(&name) {
+            return result(false, "잘못된 저장 이름입니다");
+        }
+        let Some(file) = &self.area_preview else {
+            return result(false, "먼저 도로를 선택하세요");
+        };
+        let path = repo_path(ROUTE_DIR).join(format!("{name}.toml"));
+        match sim_core::world::road_area::save_road_area(&path, file) {
+            Ok(()) => vdict! {"ok"=>true,"error"=>"","path"=>path.to_string_lossy().as_ref()},
+            Err(e) => result(false, &e),
+        }
+    }
+
+    /// 영역 선택을 초기화한다. 이전 미리보기로 주행을 시작하지 못하게 한다.
+    #[func]
+    fn clear_road_area(&mut self) {
+        self.area_preview = None;
+    }
     /// 스냅샷(폴더 또는 그 안의 `graph.osm.json`)을 연다. 실패하면 이전 상태를 그대로 둔다.
     #[func]
     fn load_snapshot(&mut self, path: GString) -> VarDictionary {
@@ -891,6 +1010,37 @@ impl SimRoutePicker {
         }
     }
 
+    /// 현재 핀으로 주행 가능한 대안을 계산한다.
+    #[func]
+    fn prepare_route_alternatives(&mut self) {
+        if let Some(model) = &mut self.model {
+            model.prepare_alternatives();
+        }
+    }
+
+    /// 대안의 지도 선과 길이를 전달한다.
+    #[func]
+    fn route_alternatives(&self) -> Array<VarDictionary> {
+        self.model
+            .iter()
+            .flat_map(PickerModel::alternative_views)
+            .map(|(line, length_m)| {
+                let line: PackedVector2Array =
+                    line.into_iter().map(|p| Vector2::new(p.x, p.y)).collect();
+                vdict! { "line" => &line, "length_m" => length_m }
+            })
+            .collect()
+    }
+
+    /// 선택한 대안을 현재 저장·주행 경로로 적용한다.
+    #[func]
+    fn choose_route_alternative(&mut self, index: i64) -> bool {
+        usize::try_from(index)
+            .ok()
+            .zip(self.model.as_mut())
+            .is_some_and(|(i, model)| model.choose_alternative(i))
+    }
+
     /// Bevy 판 상태 문구와 받기 진행·오류 안내.
     #[func]
     fn status_lines(&self) -> PackedStringArray {
@@ -915,7 +1065,12 @@ impl SimRoutePicker {
 
     /// 경로 파일을 `cache/routes/<name>.toml`로 저장한다. 이름은 `[A-Za-z0-9_-]{1,64}`만 허용한다.
     #[func]
-    fn save(&self, name: GString, #[opt(default = false)] overwrite: bool) -> VarDictionary {
+    fn save(
+        &self,
+        name: GString,
+        #[opt(default = false)] overwrite: bool,
+        #[opt(default = false)] use_elevation: bool,
+    ) -> VarDictionary {
         let failure = |error: &str| vdict! { "ok" => false, "error" => error, "path" => "" };
         let name = name.to_string();
         if !valid_route_name(&name) {
@@ -929,7 +1084,7 @@ impl SimRoutePicker {
         if !overwrite && dir.join(&file).exists() {
             return failure(&format!("{file} already exists"));
         }
-        match model.save(&dir, &file) {
+        match model.save_with_elevation(&dir, &file, use_elevation) {
             Ok(path) => vdict! {
                 "ok" => true,
                 "error" => "",
@@ -943,6 +1098,7 @@ impl SimRoutePicker {
 impl SimRoutePicker {
     /// 점 선택/지역 보정을 끼워 넣지 않고 원본 스냅샷과 블록 모델을 함께 교체한다.
     fn initialize_blocks(&mut self, path: &Path) -> Result<(), String> {
+        self.area_preview = None;
         let (model, _) = load_model(path, &repo_path(ROAD_GRAPH_CONFIG_PATH))?;
         let blocks = sim_core::world::road_blocks::build_road_blocks(
             &model.ways,

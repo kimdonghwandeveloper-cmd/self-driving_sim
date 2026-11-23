@@ -24,7 +24,7 @@ use crate::course::{
     build_course, build_course_with_patch_dir, course_dict, failure_dict, panic_message,
 };
 use crate::devices::{Devices, load_bindings};
-use crate::paths::resolve_user_path;
+use crate::paths::{repo_path, resolve_user_path};
 
 /// 기본 설정 폴더(`res://` 기준). 저장소 루트의 `config/`다.
 const DEFAULT_CONFIG_DIR: &str = "res://../config";
@@ -187,6 +187,7 @@ pub struct SimVehicle {
     warnings: Vec<String>,
     /// 경로 코스의 안내선 기반 주행 성과 및 CTE 평가기.
     evaluator: Option<sim_core::world::route_evaluation::RouteDriveEvaluator>,
+    elevation_notice: Option<&'static str>,
     /// 목표 도달 시그널을 이미 발행했는지 여부.
     goal_notified: bool,
     /// 키보드·게임패드 상태. `_ready`에서 만든다.
@@ -239,18 +240,43 @@ impl INode3D for SimVehicle {
         };
         match built {
             Ok(course) => {
-                self.session = Some(DriveSession::new(course, &config));
-                self.sync_transform();
-
+                let mut session = DriveSession::new(course, &config);
                 let course_str = self.course.to_string();
                 if let Some(path) = course_str.trim().strip_prefix("map:") {
                     let resolved = resolve_user_path(path.trim());
+                    match sim_core::world::elevation::RoadElevation::load_for_course(&resolved) {
+                        Ok(elevation) => session.set_elevation(elevation),
+                        Err(error) => {
+                            self.fail(error);
+                            return;
+                        }
+                    }
                     self.evaluator =
                         sim_core::world::route_evaluation::RouteDriveEvaluator::load_map_file(
                             &resolved,
                         )
                         .ok();
+                    if session.elevation().is_none()
+                        && let Some(evaluator) = &self.evaluator
+                        && evaluator.elevation_requested()
+                    {
+                        match evaluator.route_elevation(&repo_path(
+                            sim_core::world::elevation_tiles::CACHE_DIR,
+                        )) {
+                            Ok(Some(profile)) => session.set_elevation(Some(profile)),
+                            Ok(None) => {
+                                self.elevation_notice =
+                                    Some("교량·터널 또는 입체 도로 포함 · 평면 주행")
+                            }
+                            Err(error) => {
+                                godot_warn!("route elevation: {error}");
+                                self.elevation_notice = Some("고도 자료 없음 · 평면 주행");
+                            }
+                        }
+                    }
                 }
+                self.session = Some(session);
+                self.sync_transform();
             }
             Err(error) => self.fail(error),
         }
@@ -538,9 +564,34 @@ impl SimVehicle {
     #[func]
     fn course_data(&self) -> VarDictionary {
         match &self.session {
-            Some(session) => course_dict(session.course()),
+            Some(session) => {
+                let mut data = course_dict(session.course());
+                data.set("has_elevation", session.elevation().is_some());
+                if let Some(notice) = self.elevation_notice {
+                    data.set("elevation_notice", notice);
+                }
+                if let Some(evaluator) = &self.evaluator {
+                    let mut layers = VarDictionary::new();
+                    for (&kind, points) in &evaluator.scenery {
+                        let vertices: PackedVector3Array =
+                            points.iter().map(|p| Vector3::new(p.x, 0.0, p.y)).collect();
+                        layers.set(kind, &vertices);
+                    }
+                    data.set("scenery", &layers);
+                }
+                data
+            }
             None => failure_dict(&self.last_error),
         }
+    }
+
+    /// 도로 메시가 참조하는 지역 좌표의 고도(m)를 반환한다.
+    #[func]
+    fn road_height(&self, x: f32, z: f32) -> f32 {
+        self.session
+            .as_ref()
+            .and_then(DriveSession::elevation)
+            .map_or(0.0, |surface| surface.height(glam::Vec2::new(x, z)))
     }
 
     /// 처리를 마친 물리 틱 수.
@@ -792,9 +843,23 @@ impl SimVehicle {
         let Some(motion) = self.session.as_ref().map(|session| *session.motion()) else {
             return;
         };
+        let (height, pitch, roll) = self
+            .session
+            .as_ref()
+            .and_then(DriveSession::elevation)
+            .map_or((0.0, 0.0, 0.0), |surface| {
+                let point = glam::Vec2::new(motion.x_m, motion.z_m);
+                let (fx, fz) = motion.forward();
+                let (rx, rz) = motion.right();
+                (
+                    surface.height(point),
+                    surface.grade(point, glam::Vec2::new(fx, fz)).atan(),
+                    surface.grade(point, glam::Vec2::new(rx, rz)).atan(),
+                )
+            });
         let mut base = self.base_mut();
-        base.set_position(Vector3::new(motion.x_m, 0.0, motion.z_m));
-        base.set_rotation(Vector3::new(0.0, motion.heading_rad, 0.0));
+        base.set_position(Vector3::new(motion.x_m, height, motion.z_m));
+        base.set_rotation(Vector3::new(pitch, motion.heading_rad, roll));
     }
 
     /// 실패 상태로 바꾸고 `course_failed`를 한 번 보낸다. 위치는 원점으로 둔다.

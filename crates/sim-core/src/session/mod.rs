@@ -12,12 +12,13 @@ use crate::config::VehicleConfig;
 use crate::input::ControlRequest;
 use crate::vehicle::calibration::{CalibrationLog, CalibrationReadout};
 use crate::vehicle::collision::{ContactState, Impact, VEHICLE_FOOTPRINT};
-use crate::vehicle::collision::{ObstacleGrid, step_with_grid};
+use crate::vehicle::collision::{ObstacleGrid, step_with_grid_on_grade};
 use crate::vehicle::dynamics::{DynamicsParams, Motion};
 use crate::vehicle::state::{EngineState, Gear, VehicleCommand, VehicleInput, VehicleState};
 use crate::vehicle::suspension::{BodyMotion, SuspensionParams};
 use crate::world::CourseDef;
 use crate::world::course::ColliderKind;
+use crate::world::elevation::RoadElevation;
 
 /// 고정 시간 간격(s). Bevy `FixedUpdate` 64 Hz와 같다.
 pub const DT: f32 = 1.0 / 64.0;
@@ -143,6 +144,7 @@ pub struct DriveSession {
     params: DynamicsParams,
     state: VehicleState,
     motion: Motion,
+    elevation: Option<RoadElevation>,
     contact: ContactState,
     queue: VecDeque<DriveCommand>,
     manual: VehicleInput,
@@ -177,6 +179,7 @@ impl DriveSession {
             params: config.dynamics.clone(),
             state,
             motion,
+            elevation: None,
             contact: ContactState::default(),
             queue: VecDeque::new(),
             manual: VehicleInput::default(),
@@ -186,6 +189,16 @@ impl DriveSession {
             suspension: config.suspension.clone(),
             body: BodyMotion::default(),
         }
+    }
+
+    /// 주행과 화면이 함께 사용할 코스 고도를 설정한다.
+    pub fn set_elevation(&mut self, elevation: Option<RoadElevation>) {
+        self.elevation = elevation;
+    }
+
+    /// 코스 고도 자료를 반환한다.
+    pub fn elevation(&self) -> Option<&RoadElevation> {
+        self.elevation.as_ref()
     }
 
     /// 코스 정의를 반환한다.
@@ -320,7 +333,14 @@ impl DriveSession {
         }
 
         self.state.set_input(device.input.unwrap_or(self.manual));
-        report.collided = step_with_grid(
+        let grade = self.elevation.as_ref().map_or(0.0, |elevation| {
+            let (x, z) = self.motion.forward();
+            elevation.grade(
+                glam::Vec2::new(self.motion.x_m, self.motion.z_m),
+                glam::Vec2::new(x, z),
+            )
+        });
+        report.collided = step_with_grid_on_grade(
             &mut self.state,
             &mut self.motion,
             &self.params,
@@ -328,6 +348,7 @@ impl DriveSession {
             &VEHICLE_FOOTPRINT,
             &self.obstacles,
             &mut self.contact,
+            grade,
         );
         self.calibration.observe(
             &self.state,

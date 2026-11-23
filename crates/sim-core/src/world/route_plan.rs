@@ -110,7 +110,7 @@ impl Default for RoadGraphConfig {
             snap_distance_m: 30.0,
             max_route_length_m: ROUTE_LENGTH_CAP_M,
             corner_radius_m: route::CORNER_RADIUS_M,
-            stub_length_m: route::STUB_LENGTH_M,
+            stub_length_m: 0.0,
             nav_rules: true,
             include_restricted: false,
         }
@@ -206,6 +206,9 @@ pub struct RouteFile {
     /// 계획 시 사용한 접근 제한 도로 포함 정책. 생략한 기존 파일은 제한 도로를 제외한다.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub include_restricted: bool,
+    /// 경로가 지상 도로이면 DEM을 적용한다. 기존 저장 경로는 평면으로 재생한다.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub use_elevation: bool,
     /// 경로가 실제로 지난 지역 보정. 없는 기존 `route-v1`은 OSM만 사용한 경로로 읽는다.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub map_patches: Vec<RoutePatchRef>,
@@ -745,7 +748,7 @@ pub fn plan_route_full(
         snapshot,
         points,
         config,
-        None,
+        (None, BTreeSet::new()),
     )
 }
 
@@ -765,8 +768,76 @@ pub fn plan_route_full_with_patches(
         snapshot,
         points,
         config,
-        Some(graph),
+        (Some(graph), BTreeSet::new()),
     )
+}
+
+/// 기본 경로의 중간 노드를 피하는 제한된 후보를 검증하고 가장 짧은 두 개를 고른다.
+pub fn route_alternatives(
+    primary: &PlannedRoute,
+    ways: &[OsmGraphWay],
+    restrictions: &[TurnRestriction],
+    connectivity: Option<&Connectivity>,
+    config: &RoadGraphConfig,
+    patched: Option<&PatchedGraph>,
+) -> Vec<PlannedRoute> {
+    let Some(nodes) = primary
+        .file
+        .nodes
+        .get(1..primary.file.nodes.len().saturating_sub(1))
+    else {
+        return Vec::new();
+    };
+    let mut seen = BTreeSet::from([primary.file.nodes.clone()]);
+    let mut alternatives = Vec::new();
+    let count = nodes.len().min(8);
+    let mut probes: std::collections::VecDeque<_> = (0..count)
+        .map(|i| BTreeSet::from([nodes[i * nodes.len() / count]]))
+        .collect();
+    let primary_nodes: BTreeSet<_> = primary.file.nodes.iter().copied().collect();
+    for _ in 0..12 {
+        let Some(blocked) = probes.pop_front() else {
+            break;
+        };
+        if let Ok(mut route) = plan_route_full_inner(
+            patched.map_or(ways, |graph| graph.ways.as_slice()),
+            restrictions,
+            connectivity,
+            &primary.file.snapshot,
+            &primary.file.points,
+            config,
+            (patched, blocked.clone()),
+        ) && seen.insert(route.file.nodes.clone())
+        {
+            // 두 번째 우회로가 같은 갈림길을 쓰는 경우 첫 우회로의 일부도 피해서 확인한다.
+            let unique: Vec<_> = route
+                .file
+                .nodes
+                .iter()
+                .copied()
+                .filter(|n| !primary_nodes.contains(n))
+                .collect();
+            if blocked.len() == 1 && !unique.is_empty() && alternatives.is_empty() {
+                for i in 0..unique.len().min(4) {
+                    let mut next = blocked.clone();
+                    next.insert(unique[i * unique.len() / unique.len().min(4)]);
+                    probes.push_back(next);
+                }
+            }
+            route
+                .file
+                .point_labels
+                .clone_from(&primary.file.point_labels);
+            alternatives.push(route);
+        }
+    }
+    alternatives.sort_by(|a, b| {
+        a.length_m
+            .total_cmp(&b.length_m)
+            .then_with(|| a.file.nodes.cmp(&b.file.nodes))
+    });
+    alternatives.truncate(2);
+    alternatives
 }
 
 /// OSM 전용·지역 보정 경로 계획의 공통 본체.
@@ -777,7 +848,7 @@ fn plan_route_full_inner(
     snapshot: &str,
     points: &[[f64; 2]],
     config: &RoadGraphConfig,
-    patched: Option<&PatchedGraph>,
+    (patched, mut avoid): (Option<&PatchedGraph>, BTreeSet<u64>),
 ) -> Result<PlannedRoute, String> {
     config.validate()?;
     let allowed: BTreeSet<&str> = config.allowed_highways.iter().map(String::as_str).collect();
@@ -798,7 +869,7 @@ fn plan_route_full_inner(
         picked[0],
         config.include_restricted,
     );
-    let mut avoid: BTreeSet<u64> = BTreeSet::new();
+
     let mut avoided: Vec<u64> = Vec::new();
     // 처음 피한 교차로의 실패 이유. 돌아갈 길이 없으면 이 이유를 알린다.
     let mut first_failure = String::new();
@@ -838,6 +909,7 @@ fn plan_route_full_inner(
             max_route_length_m: config.max_route_length_m,
             nav_rules: config.nav_rules,
             include_restricted: config.include_restricted,
+            use_elevation: false,
             map_patches,
             point_labels: Vec::new(),
         };
@@ -1344,6 +1416,54 @@ mod tests {
         [point.lat, point.lon]
     }
 
+    /// 대안은 공통 출발·도착과 실제 생성 가능한 별도 도로를 유지한다.
+    #[test]
+    fn alternative_route_keeps_endpoints_and_replays() {
+        let ways = parse(vec![
+            (1, "service", &[], vec![(1, -80., 0.), (2, 0., 0.)]),
+            (
+                2,
+                "service",
+                &[],
+                vec![(2, 0., 0.), (3, 100., 0.), (4, 200., 0.)],
+            ),
+            (
+                3,
+                "service",
+                &[],
+                vec![(2, 0., 0.), (5, 50., 55.), (6, 150., 55.), (4, 200., 0.)],
+            ),
+            (4, "service", &[], vec![(4, 200., 0.), (7, 280., 0.)]),
+            (
+                5,
+                "service",
+                &[],
+                vec![(2, 0., 0.), (8, 50., -60.), (9, 150., -60.), (4, 200., 0.)],
+            ),
+        ]);
+        let config = RoadGraphConfig::default();
+        let primary = plan_route_full(
+            &ways,
+            &[],
+            None,
+            "fixture",
+            &[at(-65., 0.), at(265., 0.)],
+            &config,
+        )
+        .unwrap();
+        let alternatives = route_alternatives(&primary, &ways, &[], None, &config, None);
+        assert_eq!(alternatives.len(), 2);
+        assert_ne!(alternatives[0].file.nodes, alternatives[1].file.nodes);
+        for other in alternatives {
+            assert_ne!(primary.file.nodes, other.file.nodes);
+            assert_eq!(primary.file.points, other.file.points);
+            assert_eq!(
+                build_route_file_course(&other.file, &ways, None).unwrap(),
+                other.course
+            );
+        }
+    }
+
     /// 저장소의 실제 스냅샷을 읽는다.
     fn real_snapshot() -> Vec<OsmGraphWay> {
         let path = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."))
@@ -1598,6 +1718,7 @@ mod tests {
         // 이 파일은 4-8 이전 규칙(작은 도로만, 일방통행 제외)으로 만들었다.
         let legacy = RoadGraphConfig {
             allowed_highways: file.allowed_highways.clone(),
+            stub_length_m: file.stub_length_m,
             nav_rules: false,
             max_route_length_m: file.max_route_length_m,
             ..RoadGraphConfig::default()
