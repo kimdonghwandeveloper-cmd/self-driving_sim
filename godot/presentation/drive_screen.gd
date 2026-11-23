@@ -118,6 +118,7 @@ func start(course_name: String, force_preview: bool = false) -> void:
 	var course_mesh := CourseMesh.new()
 	scene_content.add_child(course_mesh)
 	course_mesh.build(data, Callable(vehicle, "road_height") if data.get("has_elevation", false) else Callable())
+	ground.visible = not data.get("has_elevation", false)
 	var bounds := CourseMesh.ground_bounds(data)
 	if not is_preview and fallback_notice.is_empty():
 		if course_name in [YEOSU_COURSE, YEOSU_CUSTOM_ROADS_COURSE]:
