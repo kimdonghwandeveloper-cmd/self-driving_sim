@@ -37,5 +37,11 @@ fn crosses_tile_boundary_and_reopens_from_cache() {
     assert!(profile.grade(Vec2::new(100.0, -20.0), Vec2::Y) < -0.01);
     let reopened = load_profile_with(&root, origin, &guide, |_| panic!("cache miss")).unwrap();
     assert_eq!(profile.height(guide[1]), reopened.height(guide[1]));
+    let different_guide = [Vec2::ZERO, Vec2::new(210.0, -110.0)];
+    let nearby = load_profile_with(&root, origin, &different_guide, |_| {
+        panic!("a different route in the same tiles must use the raw tile cache")
+    })
+    .unwrap();
+    assert!(nearby.grade(Vec2::new(100.0, -20.0), -Vec2::Y) > 0.01);
     std::fs::remove_dir_all(root).unwrap();
 }
