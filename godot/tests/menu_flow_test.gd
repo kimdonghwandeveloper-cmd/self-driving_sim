@@ -9,9 +9,9 @@ const DriveScreen = preload("res://presentation/drive_screen.gd")
 ## 메뉴에 저장 경로로 보일 시험 경로 파일(시험 중에만 두고 지운다). 여수 시험 자료는 메뉴에 바로 나오지 않으므로(PLAN 4-11)
 ## 시험 자료 경로를 저장 경로 자리(`cache/routes`)에 복사해 쓴다.
 const SAVED_NAME := "menu-flow-test.toml"
-## 승인된 여수 전용 8개 항목만 허용한다. 다른 시험 자료를 포괄적으로 노출하지 않는다.
+## 메뉴에 등록된 여수 전용 코스만 허용한다.
 const YEOSU_MENU_COURSES := [
-    DriveScreen.YEOSU_COURSE, DriveScreen.YEOSU_CUSTOM_ROADS_COURSE,
+    DriveScreen.YEOSU_COURSE, DriveScreen.YEOSU_ELEVATION_COURSE, DriveScreen.YEOSU_CUSTOM_ROADS_COURSE,
     DriveScreen.CONVENTION_PREFIX + "north-access.toml",
     DriveScreen.CONVENTION_PREFIX + "central-gallery.toml",
     DriveScreen.CONVENTION_PREFIX + "south-plaza.toml",

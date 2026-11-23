@@ -36,10 +36,13 @@ func _run() -> void:
 	var max_height := start.y
 	for vehicle in [elevated, flat]:
 		vehicle.set("read_input", false)
+	await physics_frame
+	await physics_frame
+	for vehicle in [elevated, flat]:
 		vehicle.call("send_command", "engine_toggle")
 		vehicle.call("send_command", "gear_drive")
-		vehicle.call("set_manual_input", 0.25, 0.0, 0.0)
-	for i in range(640):
+		vehicle.call("set_manual_input", 0.55, 0.0, 0.0)
+	for i in range(575):
 		await physics_frame
 		var height := float(elevated.call("road_height", elevated.position.x, elevated.position.z))
 		ok = ok and is_equal_approx(elevated.position.y, height)
@@ -49,7 +52,8 @@ func _run() -> void:
 	ok = ok and start.distance_to(elevated.position) > 5.0
 	ok = ok and max_height - min_height > 0.05 and max_speed_delta > 0.02
 	print("YEOSU ELEVATION ", "OK" if ok else "FAIL", ": height range ", min_height,
-		"–", max_height, " m, max speed delta ", max_speed_delta, " m/s")
+		"–", max_height, " m, max speed delta ", max_speed_delta, " m/s, travel ",
+		start.distance_to(elevated.position), " m")
 	drive.free()
 	flat.free()
 	quit(0 if ok else 1)
