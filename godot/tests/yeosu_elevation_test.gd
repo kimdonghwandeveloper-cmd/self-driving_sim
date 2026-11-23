@@ -49,11 +49,22 @@ func _run() -> void:
 		min_height = minf(min_height, height)
 		max_height = maxf(max_height, height)
 		max_speed_delta = maxf(max_speed_delta, absf(elevated.call("speed_mps") - flat.call("speed_mps")))
-	ok = ok and start.distance_to(elevated.position) > 5.0
+	var travel := start.distance_to(elevated.position)
+	ok = ok and travel > 5.0
 	ok = ok and max_height - min_height > 0.05 and max_speed_delta > 0.02
+	elevated.call("set_manual_input", 0.0, 1.0, 0.0)
+	for i in range(128):
+		await physics_frame
+	var top := elevated.position.y
+	elevated.call("send_command", "gear_reverse")
+	elevated.call("set_manual_input", 0.55, 0.0, 0.0)
+	for i in range(320):
+		await physics_frame
+	var descent := top - elevated.position.y
+	ok = ok and float(elevated.call("speed_mps")) < 0.0 and descent > 0.02
 	print("YEOSU ELEVATION ", "OK" if ok else "FAIL", ": height range ", min_height,
-		"–", max_height, " m, max speed delta ", max_speed_delta, " m/s, travel ",
-		start.distance_to(elevated.position), " m")
+		"–", max_height, " m, max speed delta ", max_speed_delta, " m/s, ascent travel ",
+		travel, " m, descent ", descent, " m")
 	drive.free()
 	flat.free()
 	quit(0 if ok else 1)
